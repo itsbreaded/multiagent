@@ -1,11 +1,11 @@
 import Database from 'better-sqlite3'
 import * as path from 'path'
-import * as os from 'os'
 import * as fs from 'fs'
+import { app } from 'electron'
 import type { Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
 
-const DB_PATH = path.join(os.homedir(), '.claude', 'multiagent-index.db')
+const DB_PATH = path.join(app.getPath('userData'), 'session-index.db')
 
 function scannedToSession(row: DbRow): Session {
   return {
