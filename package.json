@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "pack": "electron-builder --dir",
     "dist": "electron-vite build && electron-builder",
-    "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -o better-sqlite3"
   },
   "keywords": [],
   "author": "Chris Haniszewski",
