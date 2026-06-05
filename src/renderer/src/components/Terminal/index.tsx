@@ -1,0 +1,291 @@
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
+import type { PaneLeaf } from '../../../../shared/types'
+import { usePanesStore } from '../../store/panes'
+
+const XTERM_THEME = {
+  background: '#0e1011',
+  foreground: '#d4d4d4',
+  cursor: '#4ade80',
+  cursorAccent: '#0e1011',
+  selectionBackground: '#264f78',
+  black: '#1e1e1e',
+  red: '#f44747',
+  green: '#4ade80',
+  yellow: '#ffcc00',
+  blue: '#569cd6',
+  magenta: '#c586c0',
+  cyan: '#4ec9b0',
+  white: '#d4d4d4',
+  brightBlack: '#3a3a3a',
+  brightRed: '#f44747',
+  brightGreen: '#4ade80',
+  brightYellow: '#ffcc00',
+  brightBlue: '#569cd6',
+  brightMagenta: '#c586c0',
+  brightCyan: '#4ec9b0',
+  brightWhite: '#e2e4e6',
+}
+
+interface ContextMenu {
+  x: number
+  y: number
+  hasSelection: boolean
+}
+
+interface TerminalProps {
+  pane: PaneLeaf
+}
+
+export function Terminal({ pane }: TerminalProps): JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const xtermRef = useRef<XTerm | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+  const ptyIdRef = useRef<string | null>(pane.ptyId ?? null)
+  const setPtyId = usePanesStore((s) => s.setPtyId)
+  const [status, setStatus] = useState<'mounting' | 'connecting' | 'ready' | 'error'>('mounting')
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
+
+  // Keep ptyIdRef in sync so context menu paste can always find the current ptyId
+  useEffect(() => { ptyIdRef.current = pane.ptyId ?? null }, [pane.ptyId])
+
+  const handleCopy = useCallback(() => {
+    const xterm = xtermRef.current
+    if (!xterm) return
+    const selection = xterm.getSelection()
+    if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+    setContextMenu(null)
+  }, [])
+
+  const handlePaste = useCallback(() => {
+    const ptyId = ptyIdRef.current
+    if (!ptyId) return
+    navigator.clipboard.readText().then((text) => {
+      if (text) window.ipc.invoke('pty:write', ptyId, text).catch(() => {})
+    }).catch(() => {})
+    setContextMenu(null)
+  }, [])
+
+  // Effect 1: create the xterm instance once per pane
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const xterm = new XTerm({
+      theme: XTERM_THEME,
+      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontSize: 13,
+      lineHeight: 1.3,
+      cursorBlink: true,
+      scrollback: 5000,
+      allowTransparency: false,
+    })
+
+    const fitAddon = new FitAddon()
+    xterm.loadAddon(fitAddon)
+    xterm.open(containerRef.current)
+    fitAddon.fit()
+
+    // Intercept keyboard shortcuts before xterm sees them
+    xterm.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true
+
+      // Ctrl+Shift+C: copy selection
+      if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+        const selection = xterm.getSelection()
+        if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+        return false
+      }
+
+      // Ctrl+Shift+V: paste from clipboard
+      if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
+        const ptyId = ptyIdRef.current
+        if (ptyId) {
+          navigator.clipboard.readText().then((text) => {
+            if (text) window.ipc.invoke('pty:write', ptyId, text).catch(() => {})
+          }).catch(() => {})
+        }
+        return false
+      }
+
+      return true
+    })
+
+    xtermRef.current = xterm
+    fitAddonRef.current = fitAddon
+
+    const ro = new ResizeObserver(() => {
+      try { fitAddon.fit() } catch { /* ignore */ }
+    })
+    ro.observe(containerRef.current)
+
+    setStatus('connecting')
+
+    return () => {
+      ro.disconnect()
+      xterm.dispose()
+      xtermRef.current = null
+      fitAddonRef.current = null
+    }
+  }, [pane.id])
+
+  // Effect 2: connect to the PTY once a ptyId is available
+  useEffect(() => {
+    const xterm = xtermRef.current
+    if (!xterm || status === 'mounting') return
+
+    if (pane.paneType === 'claude' && !pane.ptyId) {
+      xterm.clear()
+      xterm.write('\x1b[2m[Starting Claude Code session...]\x1b[0m\r\n')
+      setStatus('connecting')
+      return
+    }
+
+    let cancelled = false
+    let unsubData: (() => void) | undefined
+    let dataDisposable: { dispose(): void } | undefined
+
+    async function connect(): Promise<void> {
+      let ptyId = pane.ptyId ?? null
+
+      if (!ptyId && pane.paneType === 'shell') {
+        try {
+          const result = await window.ipc.invoke('pty:create', pane.cwd) as { ptyId: string }
+          if (cancelled) return
+          ptyId = result.ptyId
+          ptyIdRef.current = ptyId
+          setPtyId(pane.id, ptyId)
+        } catch (err) {
+          if (!cancelled) {
+            setStatus('error')
+            setErrorMsg(String(err))
+          }
+          return
+        }
+      }
+
+      if (!ptyId || cancelled) return
+
+      ptyIdRef.current = ptyId
+      setStatus('ready')
+
+      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
+        if (receivedId === ptyId && typeof data === 'string') {
+          xterm.write(data)
+        }
+      })
+
+      dataDisposable = xterm.onData((data) => {
+        window.ipc.invoke('pty:write', ptyId, data).catch(() => {})
+      })
+
+      const originalFit = fitAddonRef.current?.fit.bind(fitAddonRef.current)
+      if (fitAddonRef.current) {
+        fitAddonRef.current.fit = () => {
+          originalFit?.()
+          const { cols, rows } = xterm
+          window.ipc.invoke('pty:resize', ptyId, cols, rows).catch(() => {})
+        }
+        fitAddonRef.current.fit()
+      }
+    }
+
+    connect()
+
+    return () => {
+      cancelled = true
+      unsubData?.()
+      dataDisposable?.dispose()
+      // Do NOT kill the PTY here. Terminal unmounts whenever the pane tree
+      // changes (e.g. a split), and killing here would destroy a live session.
+      // PTYs are killed explicitly by closePane() in the panes store.
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pane.id, pane.ptyId, pane.paneType, status === 'mounting' ? 'mounting' : 'ready'])
+
+  const onContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      hasSelection: !!(xtermRef.current?.getSelection()),
+    })
+  }, [])
+
+  return (
+    <div
+      style={{ flex: 1, overflow: 'hidden', backgroundColor: '#0e1011', position: 'relative' }}
+      onContextMenu={onContextMenu}
+      onClick={() => contextMenu && setContextMenu(null)}
+    >
+      {status === 'connecting' && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          backgroundColor: '#0e1011', zIndex: 1,
+          color: '#4a4b4e', fontSize: 12, pointerEvents: 'none',
+        }}>
+          {pane.paneType === 'claude' ? 'Starting session...' : 'Connecting...'}
+        </div>
+      )}
+      {status === 'error' && errorMsg && (
+        <div style={{
+          position: 'absolute', top: 8, left: 8, right: 8,
+          padding: '4px 8px', backgroundColor: '#1e1010',
+          border: '1px solid #3a1010', borderRadius: 4,
+          fontSize: 11, color: '#f87171', zIndex: 2,
+        }}>
+          {errorMsg}
+        </div>
+      )}
+      <div ref={containerRef} style={{ width: '100%', height: '100%', padding: 4 }} />
+
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            top: contextMenu.y,
+            left: contextMenu.x,
+            backgroundColor: '#1e2022',
+            border: '1px solid #2a2b2e',
+            borderRadius: 6,
+            padding: '4px 0',
+            zIndex: 1000,
+            minWidth: 140,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            fontSize: 13,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleCopy}
+            disabled={!contextMenu.hasSelection}
+            style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              padding: '6px 14px', background: 'none', border: 'none',
+              color: contextMenu.hasSelection ? '#d4d4d4' : '#4a4b4e',
+              cursor: contextMenu.hasSelection ? 'pointer' : 'default',
+              fontSize: 13,
+            }}
+          >
+            Copy
+            <span style={{ float: 'right', opacity: 0.4, fontSize: 11 }}>Ctrl+Shift+C</span>
+          </button>
+          <button
+            onClick={handlePaste}
+            style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              padding: '6px 14px', background: 'none', border: 'none',
+              color: '#d4d4d4', cursor: 'pointer', fontSize: 13,
+            }}
+          >
+            Paste
+            <span style={{ float: 'right', opacity: 0.4, fontSize: 11 }}>Ctrl+Shift+V</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

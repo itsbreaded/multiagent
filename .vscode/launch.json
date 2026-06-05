@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch MultiAgent",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "sourceMaps": false,
+      "autoAttachChildProcesses": false,
+      "cwd": "${workspaceFolder}",
+      "presentation": {
+        "group": "1-launch",
+        "order": 1
+      }
+    },
+    {
+      "name": "Debug Main Process",
+      "type": "node",
+      "request": "attach",
+      "port": 9229,
+      "timeout": 30000,
+      "restart": true,
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/out/main/**/*.js"],
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "preLaunchTask": "electron-vite: dev (inspect)",
+      "presentation": {
+        "group": "2-debug",
+        "order": 1
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug All",
+      "configurations": ["Debug Main Process"],
+      "presentation": {
+        "group": "2-debug",
+        "order": 2
+      }
+    }
+  ]
+}
