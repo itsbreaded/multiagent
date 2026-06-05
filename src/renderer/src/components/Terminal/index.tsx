@@ -73,12 +73,16 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
   useEffect(() => {
     if (!containerRef.current) return
 
+    const theme = pane.paneType === 'claude'
+      ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
+      : XTERM_THEME
+
     const xterm = new XTerm({
-      theme: XTERM_THEME,
+      theme,
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
       fontSize: 13,
       lineHeight: 1.3,
-      cursorBlink: true,
+      cursorBlink: pane.paneType !== 'claude',
       scrollback: 5000,
       allowTransparency: false,
     })
@@ -90,6 +94,18 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
 
     // Intercept keyboard shortcuts before xterm sees them
     xterm.attachCustomKeyEventHandler((e) => {
+      // xterm.js 6.x calls this handler for both keydown AND keypress events.
+      // Shift+Enter must be checked before the keydown guard so the keypress
+      // event is also suppressed — otherwise xterm sends \r on keypress and
+      // the message submits immediately after the newline is inserted.
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Enter') {
+        if (e.type === 'keydown') {
+          const ptyId = ptyIdRef.current
+          if (ptyId) window.ipc.invoke('pty:write', ptyId, '\x1b[13;2u').catch(() => {})
+        }
+        return false
+      }
+
       if (e.type !== 'keydown') return true
 
       // Ctrl+Shift+C: copy selection
@@ -121,9 +137,20 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     })
     ro.observe(containerRef.current)
 
+    // Block paste events from reaching xterm's internal textarea listener.
+    // Without this, Ctrl+Shift+V triggers both our key handler AND xterm's
+    // native paste handler, causing every paste to appear twice in the PTY.
+    const container = containerRef.current
+    const blockPaste = (e: ClipboardEvent): void => {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    container.addEventListener('paste', blockPaste, true)
+
     setStatus('connecting')
 
     return () => {
+      container.removeEventListener('paste', blockPaste, true)
       ro.disconnect()
       xterm.dispose()
       xtermRef.current = null

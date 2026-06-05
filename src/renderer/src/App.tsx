@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
@@ -6,7 +6,9 @@ import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
 import { BrowserPanel } from './components/BrowserPanel'
+import { RestorePrompt } from './components/RestorePrompt'
 import { usePanesStore } from './store/panes'
+import type { Tab } from '../../shared/types'
 
 function useGlobalKeyboard() {
   const addTab = usePanesStore((s) => s.addTab)
@@ -131,6 +133,51 @@ export default function App(): JSX.Element {
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const [browserPanelVisible, setBrowserPanelVisible] = useState(false)
+  const [restoreData, setRestoreData] = useState<{
+    tabs: Tab[]
+    sidebarWidth: number
+    sidebarOpen: boolean
+  } | null>(null)
+
+  const tabs = usePanesStore((s) => s.tabs)
+  const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
+  const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
+
+  // Peek at saved layout on mount; show restore prompt if previous session exists
+  useEffect(() => {
+    const store = usePanesStore.getState()
+    window.ipc.invoke('layout:load').then((saved) => {
+      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
+      if (data?.tabs?.length) {
+        setRestoreData(data)
+      } else {
+        store.addTab()
+      }
+    }).catch(() => {
+      store.addTab()
+    })
+  }, [])
+
+  const handleRestore = useCallback(() => {
+    if (restoreData) {
+      usePanesStore.getState().applyLayout(restoreData)
+    }
+    setRestoreData(null)
+  }, [restoreData])
+
+  const handleDiscard = useCallback(() => {
+    setRestoreData(null)
+    usePanesStore.getState().addTab()
+  }, [])
+
+  // Debounced layout save whenever tabs or sidebar state changes
+  useEffect(() => {
+    if (!tabs.length) return
+    const timer = setTimeout(() => {
+      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen).catch(() => {})
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [tabs, sidebarWidth, sidebarOpen])
 
   // Open browser panel when main process signals an agent is using the browser
   useEffect(() => {
@@ -188,6 +235,15 @@ export default function App(): JSX.Element {
       {/* Overlays */}
       {sessionBrowserOpen && <SessionBrowser />}
       {commandPaletteOpen && <CommandPalette />}
+
+      {/* Startup restore prompt - shown before any tabs load */}
+      {restoreData && (
+        <RestorePrompt
+          tabs={restoreData.tabs}
+          onRestore={handleRestore}
+          onDiscard={handleDiscard}
+        />
+      )}
     </div>
   )
 }

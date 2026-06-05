@@ -113,6 +113,10 @@ export interface IPCChannels {
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean) => void
   'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
 
+  // --- Session detection ---
+  // Main notifies renderer when a new claude session file is detected for a spawned PTY
+  'session:detected': (ptyId: string, sessionId: string) => void
+
   // --- Browser panel (MCP) ---
   // Renderer shows/hides browser panel
   'browser:toggle': () => void
@@ -141,4 +145,5 @@ export type EventChannels =
   | 'sessions:updated'
   | 'pty:data'
   | 'pty:cwd'
+  | 'session:detected'
   | 'browser:agent-active'

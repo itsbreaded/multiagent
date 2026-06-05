@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Tab, PaneNode, PaneLeaf, PaneSplit, SplitDirection } from '../../../shared/types'
+import { collectLeaves } from '../utils/tabLabels'
 
 function uuid(): string {
   return crypto.randomUUID()
@@ -128,6 +129,9 @@ interface PanesStore {
   addShellPane: (cwd: string) => Promise<void>
   setPaneCwd: (ptyId: string, cwd: string) => void
   setPaneCustomName: (paneId: string, name: string) => void
+
+  // Layout persistence
+  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean }) => Promise<void>
 
   // UI toggles
   toggleSidebar: () => void
@@ -414,6 +418,55 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
+  applyLayout: async (saved) => {
+    try {
+      // Strip ptyIds and convert unresumable claude panes to shell panes up front.
+      // A claude pane with no sessionId means the session file was never detected
+      // before the layout saved — leaving it as-is would hang on "Starting session..."
+      function sanitizeNode(node: PaneNode): PaneNode {
+        if (node.type === 'leaf') {
+          if (node.paneType === 'claude' && !node.sessionId) {
+            return { ...node, paneType: 'shell', ptyId: undefined }
+          }
+          return { ...node, ptyId: undefined }
+        }
+        return { ...node, first: sanitizeNode(node.first), second: sanitizeNode(node.second) }
+      }
+      const tabs = saved.tabs.map((t) => ({ ...t, rootNode: sanitizeNode(t.rootNode) }))
+
+      set({
+        tabs,
+        activeTabId: tabs[0]?.id ?? '',
+        sidebarWidth: saved.sidebarWidth ?? 220,
+        sidebarOpen: saved.sidebarOpen ?? true,
+      })
+
+      if (typeof window === 'undefined' || !window.ipc) return
+
+      // Auto-resume claude sessions that have a known sessionId
+      for (const tab of tabs) {
+        for (const leaf of collectLeaves(tab.rootNode)) {
+          if (leaf.paneType === 'claude' && leaf.sessionId) {
+            try {
+              const result = await window.ipc.invoke('session:resume', leaf.sessionId, leaf.cwd) as { ptyId: string }
+              if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
+            } catch {
+              // Session file deleted or corrupt — fall back to shell pane
+              set((s) => ({
+                tabs: s.tabs.map((t) => ({
+                  ...t,
+                  rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', sessionId: undefined }),
+                })),
+              }))
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[MultiAgent] applyLayout failed:', err)
+    }
+  },
+
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false })),
@@ -454,6 +507,21 @@ if (typeof window !== 'undefined' && window.ipc) {
   window.ipc.on('pty:cwd', (ptyId: unknown, cwd: unknown) => {
     if (typeof ptyId === 'string' && typeof cwd === 'string') {
       usePanesStore.getState().setPaneCwd(ptyId, cwd)
+    }
+  })
+
+  // When the main process detects a new claude session file, link it to the pane
+  // so the session can be persisted and auto-resumed on next launch.
+  window.ipc.on('session:detected', (ptyId: unknown, sessionId: unknown) => {
+    if (typeof ptyId !== 'string' || typeof sessionId !== 'string') return
+    const store = usePanesStore.getState()
+    for (const tab of store.tabs) {
+      const leaves = collectLeaves(tab.rootNode)
+      const pane = leaves.find((l) => l.ptyId === ptyId)
+      if (pane) {
+        store.setSessionId(pane.id, sessionId)
+        break
+      }
     }
   })
 }

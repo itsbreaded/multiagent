@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, shell, clipboard } from 'electron'
+import { ipcMain, BrowserWindow, shell, clipboard, app } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
@@ -28,7 +28,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   const index = new SessionIndex()
   const scanner = new TranscriptScanner()
   const ptyManager = new PtyManager()
-  const spawner = new SessionSpawner(ptyManager)
+  const spawner = new SessionSpawner(ptyManager, mainWindow)
 
   // Send current index state as soon as the renderer finishes loading.
   mainWindow.webContents.once('did-finish-load', () => {
@@ -114,9 +114,23 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     clipboard.writeText(text)
   })
 
-  // Stubbed until LayoutPersistence is implemented
-  ipcMain.handle('layout:load', () => null)
-  ipcMain.handle('layout:save', () => {})
+  const layoutPath = path.join(app.getPath('userData'), 'layout.json')
+
+  ipcMain.handle('layout:load', () => {
+    try {
+      return JSON.parse(fs.readFileSync(layoutPath, 'utf8'))
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown) => {
+    try {
+      fs.writeFileSync(layoutPath, JSON.stringify({ tabs, sidebarWidth, sidebarOpen }))
+    } catch (err) {
+      console.error('[MultiAgent] layout:save failed:', err)
+    }
+  })
 
   return () => {
     clearInterval(contentTimer)
