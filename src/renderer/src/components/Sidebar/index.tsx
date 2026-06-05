@@ -69,10 +69,12 @@ export function Sidebar(): JSX.Element {
     >
       <SidebarHeader />
 
-      {/* Action buttons */}
-      <div style={{ padding: '8px 8px 6px', display: 'flex', gap: 6 }}>
-        <SidebarButton onClick={() => newSession(activeCwd())} label="+ Session" />
-        <SidebarButton onClick={() => addShellPane(activeCwd())} label="+ Shell" />
+      {/* Action buttons — 2×2 grid: rows=type, cols=split direction */}
+      <div style={{ padding: '8px 8px 6px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
+        <SidebarButton onClick={() => newSession(activeCwd(), 'vertical')}   label="Session →" />
+        <SidebarButton onClick={() => newSession(activeCwd(), 'horizontal')} label="Session ↓" />
+        <SidebarButton onClick={() => addShellPane(activeCwd(), 'vertical')}   label="Shell →" />
+        <SidebarButton onClick={() => addShellPane(activeCwd(), 'horizontal')} label="Shell ↓" />
       </div>
 
       {/* Scrollable session list */}

@@ -125,8 +125,8 @@ interface PanesStore {
   // Session / PTY actions (Phase 2)
   resumeSession: (sessionId: string, cwd: string) => Promise<void>
   resumeSessionInNewTab: (sessionId: string, cwd: string) => Promise<void>
-  newSession: (cwd: string) => Promise<void>
-  addShellPane: (cwd: string) => Promise<void>
+  newSession: (cwd: string, direction?: SplitDirection) => Promise<void>
+  addShellPane: (cwd: string, direction?: SplitDirection) => Promise<void>
   setPaneCwd: (ptyId: string, cwd: string) => void
   setPaneCustomName: (paneId: string, name: string) => void
 
@@ -361,7 +361,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
-  newSession: async (cwd) => {
+  newSession: async (cwd, direction = 'vertical') => {
     const leaf = makeLeaf(cwd, 'claude')
     set((s) => {
       if (s.tabs.length === 0) {
@@ -371,7 +371,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
         const existing = t.rootNode
-        const split = makeSplit('vertical', existing, leaf)
+        const split = makeSplit(direction, existing, leaf)
         return { ...t, rootNode: split, focusedPaneId: leaf.id }
       })
       return { tabs }
@@ -391,7 +391,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
-  addShellPane: async (cwd) => {
+  addShellPane: async (cwd, direction = 'vertical') => {
     const leaf = makeLeaf(cwd, 'shell')
     set((s) => {
       if (s.tabs.length === 0) {
@@ -401,7 +401,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
         const existing = t.rootNode
-        const split = makeSplit('vertical', existing, leaf)
+        const split = makeSplit(direction, existing, leaf)
         return { ...t, rootNode: split, focusedPaneId: leaf.id }
       })
       return { tabs }
