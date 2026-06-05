@@ -4,6 +4,7 @@ import { useSessions } from '../../hooks/useSessions'
 import { SidebarHeader } from './SidebarHeader'
 import { SidebarSection } from './SidebarSection'
 import { SessionRow } from './SessionRow'
+import { OpenTabs } from './OpenTabs'
 
 export function Sidebar(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
@@ -12,7 +13,8 @@ export function Sidebar(): JSX.Element {
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
-  const { live, resumable, archived, loading } = useSessions()
+  const tabs = usePanesStore((s) => s.tabs)
+  const { resumable, archived, loading } = useSessions()
 
   const defaultCwd = navigator.userAgent.includes('Windows')
     ? 'C:\\source'
@@ -82,16 +84,11 @@ export function Sidebar(): JSX.Element {
             Scanning sessions...
           </div>
         )}
-        {!loading && live.length === 0 && resumable.length === 0 && (
-          <div style={{ padding: '12px 16px', fontSize: 11, color: '#4a4b4e' }}>
-            No sessions found
-          </div>
-        )}
-        {live.length > 0 && (
-          <SidebarSection title="Live" count={live.length} defaultOpen>
-            {live.map((s) => (
-              <SessionRow key={s.sessionId} session={s} />
-            ))}
+
+        {/* Open tabs - always visible, reflects current app state */}
+        {tabs.length > 0 && (
+          <SidebarSection title="Open" count={tabs.length} defaultOpen>
+            <OpenTabs />
           </SidebarSection>
         )}
 

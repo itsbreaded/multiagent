@@ -1,11 +1,7 @@
 import type { PtyManager } from '../pty/PtyManager'
-import type { LiveSessionWatcher } from './LiveSessionWatcher'
 
 export class SessionSpawner {
-  constructor(
-    private ptyManager: PtyManager,
-    private watcher: LiveSessionWatcher
-  ) {}
+  constructor(private ptyManager: PtyManager) {}
 
   async spawnNew(cwd: string): Promise<{ ptyId: string; sessionId: string | null }> {
     const ptyId = this.ptyManager.createClaude(cwd)
@@ -16,7 +12,6 @@ export class SessionSpawner {
   async spawnResume(sessionId: string, cwd: string): Promise<{ ptyId: string }> {
     const ptyId = this.ptyManager.createClaude(cwd)
     this._writeWhenPromptReady(ptyId, `claude --resume ${sessionId}\r`)
-    this.watcher.markAsAttached(sessionId)
     return { ptyId }
   }
 

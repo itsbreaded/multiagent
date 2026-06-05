@@ -106,6 +106,10 @@ interface PanesStore {
   addTab: (initialCwd?: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
+  renameTab: (tabId: string, label: string) => void
+  duplicateTab: (tabId: string) => void
+  closeOtherTabs: (tabId: string) => void
+  closeTabsToRight: (tabId: string) => void
 
   // Pane operations
   focusPane: (paneId: string) => void
@@ -119,8 +123,11 @@ interface PanesStore {
 
   // Session / PTY actions (Phase 2)
   resumeSession: (sessionId: string, cwd: string) => Promise<void>
+  resumeSessionInNewTab: (sessionId: string, cwd: string) => Promise<void>
   newSession: (cwd: string) => Promise<void>
   addShellPane: (cwd: string) => Promise<void>
+  setPaneCwd: (ptyId: string, cwd: string) => void
+  setPaneCustomName: (paneId: string, name: string) => void
 
   // UI toggles
   toggleSidebar: () => void
@@ -161,6 +168,49 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setActiveTab: (tabId) => set({ activeTabId: tabId }),
+
+  renameTab: (tabId, label) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === tabId ? { ...t, customLabel: label.trim() || undefined } : t
+      ),
+    }))
+  },
+
+  duplicateTab: (tabId) => {
+    set((s) => {
+      const tab = s.tabs.find((t) => t.id === tabId)
+      if (!tab) return s
+      const focusedLeaf =
+        findLeaf(tab.rootNode, tab.focusedPaneId) ??
+        (tab.rootNode.type === 'leaf' ? tab.rootNode : null)
+      const cwd = focusedLeaf?.cwd ?? 'C:\\'
+      const leaf = makeLeaf(cwd, 'shell')
+      const newTab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
+      const idx = s.tabs.findIndex((t) => t.id === tabId)
+      const tabs = [...s.tabs.slice(0, idx + 1), newTab, ...s.tabs.slice(idx + 1)]
+      return { tabs, activeTabId: newTab.id }
+    })
+  },
+
+  closeOtherTabs: (tabId) => {
+    set((s) => {
+      const tabs = s.tabs.filter((t) => t.id === tabId)
+      return { tabs, activeTabId: tabId }
+    })
+  },
+
+  closeTabsToRight: (tabId) => {
+    set((s) => {
+      const idx = s.tabs.findIndex((t) => t.id === tabId)
+      if (idx === -1) return s
+      const tabs = s.tabs.slice(0, idx + 1)
+      const activeTabId = tabs.find((t) => t.id === s.activeTabId)
+        ? s.activeTabId
+        : tabId
+      return { tabs, activeTabId }
+    })
+  },
 
   focusPane: (paneId) => {
     set((s) => {
@@ -230,22 +280,37 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setPtyId: (paneId, ptyId) => {
+    // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id !== s.activeTabId
-          ? t
-          : { ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId }) }
-      ),
+      tabs: s.tabs.map((t) => ({ ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId }) })),
+    }))
+  },
+
+  setPaneCwd: (ptyId, cwd) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        function patchCwd(node: PaneNode): PaneNode {
+          if (node.type === 'leaf') return node.ptyId === ptyId ? { ...node, cwd } : node
+          return { ...node, first: patchCwd(node.first), second: patchCwd(node.second) }
+        }
+        return { ...t, rootNode: patchCwd(t.rootNode) }
+      }),
+    }))
+  },
+
+  setPaneCustomName: (paneId, name) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => ({
+        ...t,
+        rootNode: updateLeaf(t.rootNode, paneId, { customName: name.trim() || undefined }),
+      })),
     }))
   },
 
   setSessionId: (paneId, sessionId) => {
+    // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id !== s.activeTabId
-          ? t
-          : { ...t, rootNode: updateLeaf(t.rootNode, paneId, { sessionId }) }
-      ),
+      tabs: s.tabs.map((t) => ({ ...t, rootNode: updateLeaf(t.rootNode, paneId, { sessionId }) })),
     }))
   },
 
@@ -271,6 +336,21 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (result?.ptyId) {
           get().setPtyId(leaf.id, result.ptyId)
         }
+      } catch (err) {
+        console.error('session:resume IPC failed', err)
+      }
+    }
+  },
+
+  resumeSessionInNewTab: async (sessionId, cwd) => {
+    const leaf = makeLeaf(cwd, 'claude')
+    leaf.sessionId = sessionId
+    const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+    if (typeof window !== 'undefined' && window.ipc) {
+      try {
+        const result = (await window.ipc.invoke('session:resume', sessionId, cwd)) as { ptyId: string }
+        if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
       } catch (err) {
         console.error('session:resume IPC failed', err)
       }
@@ -368,3 +448,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     return undefined
   },
 }))
+
+// Wire up the pty:cwd event once at module load so CWD changes update pane headers.
+if (typeof window !== 'undefined' && window.ipc) {
+  window.ipc.on('pty:cwd', (ptyId: unknown, cwd: unknown) => {
+    if (typeof ptyId === 'string' && typeof cwd === 'string') {
+      usePanesStore.getState().setPaneCwd(ptyId, cwd)
+    }
+  })
+}
+

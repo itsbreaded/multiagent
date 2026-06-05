@@ -1,28 +1,41 @@
 import { ipcMain, BrowserWindow, shell, clipboard } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
+import * as fs from 'fs'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
-import { LiveSessionWatcher } from '../sessions/LiveSessionWatcher'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { defaultShell } from '../pty/shell'
+
+/**
+ * Parse an OSC 7 CWD escape sequence from PTY output.
+ * Format: ESC ] 7 ; file://[host]/path BEL  (or ST terminator)
+ */
+function parseOsc7(data: string): string | null {
+  const match = data.match(/\x1b\]7;file:\/\/[^\x07\x1b/]*(\/?[^\x07\x1b]*)(?:\x07|\x1b\\)/)
+  if (!match || !match[1]) return null
+  let cwd = match[1]
+  try { cwd = decodeURIComponent(cwd) } catch { /* use raw value */ }
+  if (process.platform === 'win32') {
+    if (/^\/[A-Za-z]:/.test(cwd)) cwd = cwd.slice(1)  // /C:/... → C:/...
+    cwd = cwd.replace(/\//g, '\\')
+  }
+  return cwd || null
+}
 
 export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<() => void> {
   const index = new SessionIndex()
   const scanner = new TranscriptScanner()
   const ptyManager = new PtyManager()
-  const watcher = new LiveSessionWatcher(index)
-  const spawner = new SessionSpawner(ptyManager, watcher)
+  const spawner = new SessionSpawner(ptyManager)
 
   // Send current index state as soon as the renderer finishes loading.
-  // This clears the 'loading' flag even before the scan completes, avoiding
-  // a race where the scan finishes before the renderer has subscribed.
   mainWindow.webContents.once('did-finish-load', () => {
     mainWindow.webContents.send('sessions:updated', index.getAll())
   })
 
-  // Scan all transcripts and push the results when done
+  // Initial full scan on startup.
   scanner.scanAll().then((sessions) => {
     sessions.forEach((s) => {
       try { index.upsert(s) } catch { /* skip malformed entries */ }
@@ -33,47 +46,37 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     mainWindow.webContents.send('sessions:updated', [])
   })
 
-  // Watch transcript directory for changes
   const projectsDir = path.join(os.homedir(), '.claude', 'projects')
-  const { watch } = await import('chokidar')
-  const transcriptWatcher = watch(path.join(projectsDir, '**', '*.jsonl'), {
-    persistent: true,
-    ignoreInitial: true,
-    awaitWriteFinish: {
-      stabilityThreshold: 300,
-      pollInterval: 100
-    }
-  })
+  fs.mkdirSync(projectsDir, { recursive: true })
 
-  transcriptWatcher.on('add', async (filePath) => {
-    const session = await scanner.scanFile(filePath)
-    if (session) {
-      index.upsert(session)
-      mainWindow.webContents.send('sessions:updated', index.getAll())
-    }
-  })
+  let lastSessionsJson = ''
 
-  transcriptWatcher.on('change', async (filePath) => {
-    const session = await scanner.scanFile(filePath)
-    if (session) {
-      index.upsert(session)
-      mainWindow.webContents.send('sessions:updated', index.getAll())
+  async function pollSessions(): Promise<void> {
+    try {
+      const sessions = await scanner.scanAll()
+      for (const session of sessions) {
+        index.upsert(session)
+      }
+      const all = index.getAll()
+      const json = JSON.stringify(all)
+      if (json !== lastSessionsJson) {
+        lastSessionsJson = json
+        mainWindow.webContents.send('sessions:updated', all)
+      }
+    } catch (err) {
+      console.error('[MultiAgent] pollSessions error:', err)
     }
-  })
+  }
 
-  // Watch live sessions
-  watcher.start()
-  watcher.on('change', () => {
-    mainWindow.webContents.send('sessions:updated', index.getAll())
-  })
+  const contentTimer = setInterval(() => { void pollSessions() }, 5000)
 
   // PTY data -> renderer
   ptyManager.on('data', (ptyId: string, data: string) => {
     mainWindow.webContents.send('pty:data', ptyId, data)
+    const cwd = parseOsc7(data)
+    if (cwd) mainWindow.webContents.send('pty:cwd', ptyId, cwd)
   })
 
-  // Show exit code in the terminal when a process exits non-zero — helps diagnose
-  // silent crashes (e.g. claude exiting immediately with no output).
   ptyManager.on('exit', (ptyId: string, exitCode: number) => {
     if (exitCode !== 0) {
       const msg = `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`
@@ -94,7 +97,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   )
 
   ipcMain.handle('pty:create', (_e, cwd: string) => ({
-    ptyId: ptyManager.createDeferred(cwd, [defaultShell()])
+    ptyId: ptyManager.createShell(cwd)
   }))
 
   ipcMain.handle('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
@@ -115,10 +118,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   ipcMain.handle('layout:load', () => null)
   ipcMain.handle('layout:save', () => {})
 
-  // Return cleanup function so the caller can close the DB on quit
   return () => {
-    transcriptWatcher.close()
-    watcher.stop()
+    clearInterval(contentTimer)
     index.close()
     ptyManager.destroy()
   }

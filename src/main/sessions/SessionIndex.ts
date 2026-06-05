@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import type { Session, SessionStatus } from '../../shared/types'
+import type { Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
 
 const DB_PATH = path.join(os.homedir(), '.claude', 'multiagent-index.db')
@@ -18,9 +18,7 @@ function scannedToSession(row: DbRow): Session {
     firstActivity: row.firstActivity ?? null,
     lastActivity: row.lastActivity ?? null,
     messageCount: row.messageCount,
-    status: (row.status as SessionStatus) ?? 'resumable',
-    pid: row.pid ?? undefined,
-    liveStatus: (row.liveStatus as 'idle' | 'running' | undefined) ?? undefined
+    status: (row.status as Session['status']) ?? 'resumable',
   }
 }
 
@@ -37,8 +35,6 @@ interface DbRow {
   filePath: string
   mtimeMs: number
   status: string
-  pid: number | null
-  liveStatus: string | null
 }
 
 export class SessionIndex {
@@ -64,9 +60,7 @@ export class SessionIndex {
         messageCount INTEGER NOT NULL DEFAULT 0,
         filePath TEXT NOT NULL,
         mtimeMs REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'resumable',
-        pid INTEGER,
-        liveStatus TEXT
+        status TEXT NOT NULL DEFAULT 'resumable'
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
@@ -133,6 +127,10 @@ export class SessionIndex {
     })
   }
 
+  has(sessionId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM sessions WHERE sessionId = ?').get(sessionId)
+  }
+
   getAll(): Session[] {
     const rows = this.db
       .prepare(
@@ -165,19 +163,6 @@ export class SessionIndex {
       )
       .all(query) as DbRow[]
     return rows.map(scannedToSession)
-  }
-
-  setStatus(
-    sessionId: string,
-    status: SessionStatus,
-    pid?: number,
-    liveStatus?: 'idle' | 'running'
-  ): void {
-    this.db
-      .prepare(
-        `UPDATE sessions SET status = ?, pid = ?, liveStatus = ? WHERE sessionId = ?`
-      )
-      .run(status, pid ?? null, liveStatus ?? null, sessionId)
   }
 
   delete(sessionId: string): void {

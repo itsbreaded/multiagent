@@ -22,28 +22,33 @@ Warp-style terminal experience where Claude Code sessions are first-class citize
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Electron App                    │
-│                                                  │
-│  ┌──────────────┐   ┌────────────────────────┐  │
-│  │  Renderer    │   │     Main Process        │  │
-│  │  (React UI)  │◄──►  SessionManager        │  │
-│  │              │   │  ProcessWatcher         │  │
-│  │  - Sidebar   │   │  TranscriptScanner      │  │
-│  │  - Pane grid │   │  MCP Browser Server     │  │
-│  │  - Terminals │   │  PTY Manager            │  │
-│  └──────────────┘   └────────────────────────┘  │
-│                                                  │
-│  ┌────────────────────────────────────────────┐  │
-│  │         WebContentsView (Browser)           │  │
-│  │  Embedded browser panel visible to user,   │  │
-│  │  controllable by agents via MCP tools      │  │
-│  └────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
-         │                        │
-    node-pty                 MCP stdio
-    (PTYs for               (injected into
-   terminals)             claude --mcp-server)
+┌─────────────────────────────────────────────────────────────┐
+│                       Electron App                           │
+│                                                              │
+│  ┌──────────────┐   ┌──────────────────────────────────┐   │
+│  │  Renderer    │   │          Main Process             │   │
+│  │  (React UI)  │◄──►  PtyManager (IPC bridge)         │   │
+│  │              │   │  SessionSpawner                   │   │
+│  │  - Sidebar   │   │  TranscriptScanner                │   │
+│  │  - Pane grid │   │  LiveSessionWatcher               │   │
+│  │  - Terminals │   │  SessionIndex (SQLite)            │   │
+│  │  - TabBar    │   │  BrowserMcpServer                 │   │
+│  └──────────────┘   └──────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+          child_process.spawn(electron.exe, [ptyWorker.js],
+                    { ELECTRON_RUN_AS_NODE: '1' })
+                              │
+          ┌───────────────────▼──────────────────┐
+          │  ptyWorker (pure Node.js mode)        │
+          │  node-pty pty.spawn(shell, ...)       │
+          │  env: CLAUDECODE=1                    │
+          │       CLAUDE_CODE_DISABLE_*           │
+          └──────────────────────────────────────┘
+
+PTY worker runs outside Chromium context so node-pty handles do not
+propagate into claude.exe (a Bun binary that crashes on inherited
+Chromium IPC handles). Same isolation pattern as VS Code's PTY host.
 ```
 
 ---
@@ -278,243 +283,99 @@ The user sees the browser panel docked below or beside the terminal. When an age
 
 ---
 
-## Execution Plan (Agent-Parallel)
+## Implementation Status
 
-Work is structured into phases. Within each phase, streams run in parallel - each stream owns exclusive files. No two streams touch the same file.
+### Working
 
----
+- **App shell** - Electron window, preload, contextBridge, typed IPC channels
+- **PTY worker isolation** - `child_process.spawn(electron.exe, [ptyWorker.js], { ELECTRON_RUN_AS_NODE: '1' })` keeps node-pty handles away from Chromium; claude.exe launches correctly
+- **CLAUDECODE=1** - activates claude's embedded-terminal rendering path (no alternate screen, no mouse capture, no virtual scroll)
+- **Session scanning** - `TranscriptScanner` walks `~/.claude/projects/`, streams JSONL files, extracts metadata, caches by mtime in SQLite
+- **Live session detection** - `LiveSessionWatcher` watches `~/.claude/sessions/` to distinguish live-attached vs live-detached sessions
+- **Session index** - SQLite with FTS5, `sessions:updated` IPC push to renderer
+- **Session Browser** - `Ctrl+Shift+O` or the ⊞ button in the tab bar; left project list, right session rows with expand drawer, search, "Resume in split" and "Resume in new tab" both wired to real store actions
+- **Command Palette** - `Ctrl+P` or the ⌕ button in the tab bar; session fuzzy search + static actions
+- **Sidebar** - session list grouped by LIVE / RECENT / ARCHIVED, collapsible, resizable drag handle, "+ Session" and "+ Shell" buttons that use the active pane's cwd
+- **TabBar toolbar** - permanent ≡ (sidebar toggle), ⊞ (session browser), ⌕ (command palette) buttons so all features are discoverable without knowing hotkeys
+- **Tab management** - drag to reorder, middle-click to close, + button, Ctrl+T / Ctrl+W, live dot indicator per tab
+- **Pane splitting** - binary tree model via allotment, Ctrl+Shift+E (vertical), Ctrl+Shift+D (horizontal)
+- **Pane zoom** - Ctrl+Shift+Enter toggles zoom on focused pane
+- **MCP browser server** - `BrowserMcpServer`, `BrowserViewManager`, `McpInjector` files exist; server code is in place
 
-### Phase 0 - Foundation (Serial, 1 agent)
+### Stubbed / Incomplete
 
-Must complete before any parallel work begins. Establishes the shared contract that all other agents code against.
+| Feature | State |
+|---------|-------|
+| PaneHeader status pill | Always shows "waiting" - never reads actual claude output state |
+| Layout persistence | `layout:load` / `layout:save` IPC handlers registered but are no-ops |
+| Command Palette "Open shell pane" action | Still calls `addTab()` instead of `addShellPane()` |
+| McpInjector wiring | Files exist but `SessionSpawner.spawn()` does not call `McpInjector` |
+| Session sidebar row click | Single-click does nothing - no focus/resume handler on sidebar rows |
+| Right-click context menu on session rows | Not implemented |
+| Session ended placeholder in Claude panes | No placeholder when session ends or on relaunch |
+| Sidebar search (Ctrl+F) | Not implemented |
 
-**Deliverables:**
-- `package.json` - all dependencies installed (electron, react, vite, xterm, node-pty, better-sqlite3, allotment, zustand, chokidar, @modelcontextprotocol/sdk, tailwind)
-- `electron.vite.config.ts`, `tsconfig.json`, `tailwind.config.ts`
-- `src/shared/types.ts` - the contract file. Must define:
-  - `Session` (sessionId, cwd, gitBranch, projectName, firstMessage, lastMessage, lastActivity, messageCount, status: `live-attached` | `live-detached` | `resumable` | `archived`)
-  - `PaneNode` (binary tree: `{ type: 'leaf', id, paneType: 'shell'|'claude', cwd, sessionId? }` | `{ type: 'split', direction: 'h'|'v', ratio, first, second }`)
-  - `Tab` (id, rootNode, focusedPaneId, title)
-  - `AppState` (tabs, activeTabId, sessions, sidebarOpen, sidebarWidth)
-  - All IPC channel signatures as a typed map
-- `src/main/index.ts` - Electron entry: creates BrowserWindow, loads renderer, sets up preload
-- `src/main/preload.ts` - contextBridge exposing typed `window.ipc` object (send/on/invoke per channel)
-- `src/renderer/main.tsx`, `src/renderer/App.tsx` (empty shell: sidebar placeholder left, pane area placeholder right)
-- `src/renderer/store/index.ts` - Zustand store stub with `AppState` shape, no real logic yet
+### Not Started
 
-**Done when:** App launches, shows a split layout shell with no content, TypeScript compiles clean, all IPC channels are declared in `src/shared/types.ts`.
+- Settings window (shell path, font size, theme, shortcut overrides)
+- Layout persistence (serialize/rehydrate tab+pane tree across restarts)
+- Auto-update via `electron-updater`
+- GitHub Actions CI / electron-builder packaging
+- macOS notarization
+- Token usage display in pane header
+- Full transcript viewer overlay
 
----
-
-### Phase 1 - Parallel Streams (3 agents simultaneously)
-
-Start all three after Phase 0 completes. Each stream reads `src/shared/types.ts` but never writes it.
-
----
-
-#### Stream A - Main Process (1 agent)
-
-**Owns exclusively:**
-```
-src/main/sessions/TranscriptScanner.ts
-src/main/sessions/SessionIndex.ts
-src/main/sessions/LiveSessionWatcher.ts
-src/main/sessions/SessionSpawner.ts
-src/main/pty/PtyManager.ts
-src/main/ipc/handlers.ts
-```
-
-**Tasks:**
-- `TranscriptScanner`: Walk `~/.claude/projects/`, stream first 30 + last 10 lines of each `.jsonl`. Extract sessionId, cwd, gitBranch, first real user message (skip `isMeta: true` and content starting with `<command`), first/last timestamps. Cache-key = filePath + mtime.
-- `SessionIndex`: SQLite with better-sqlite3. Tables: `sessions` (all fields from `Session` type), FTS5 virtual table on `firstMessage` + `lastMessage`. Invalidate rows by mtime. Methods: `upsert`, `query`, `search(text)`, `getByProject(cwd)`.
-- `LiveSessionWatcher`: Chokidar watch on `~/.claude/sessions/`. On file add/change: read pid JSON (`{pid, sessionId, cwd, status, updatedAt}`), mark matching session as `live-detached`. On file remove: revert to `resumable`. Track which sessionIds were spawned by this app (set maintained by `SessionSpawner`) to distinguish `live-attached` vs `live-detached`.
-- `SessionSpawner`: Spawn `claude --resume <id>` or `claude` in a given cwd via node-pty. Returns PTY instance. Registers sessionId as app-spawned.
-- `PtyManager`: Lifecycle for all PTY instances. Methods: `create(cwd, cmd[])`, `write(id, data)`, `resize(id, cols, rows)`, `kill(id)`. Emits data events back via IPC.
-- `handlers.ts`: Registers all IPC handlers. Wires scanner + watcher into session state, emits `sessions:updated` to renderer on change. Handles: `pty:create`, `pty:write`, `pty:resize`, `pty:kill`, `session:resume`, `session:new`, `session:delete`, `sessions:search`.
-
-**Does not touch:** Anything in `src/renderer/`.
-
----
-
-#### Stream B - Renderer (1 agent)
-
-**Owns exclusively:**
-```
-src/renderer/store/sessions.ts
-src/renderer/store/panes.ts
-src/renderer/components/Sidebar/
-src/renderer/components/TabBar/
-src/renderer/components/PaneGrid/
-src/renderer/components/PaneHeader/
-src/renderer/components/Terminal/
-src/renderer/components/SessionBrowser/
-src/renderer/components/CommandPalette/
-src/renderer/hooks/
-src/renderer/App.tsx  (replaces the Phase 0 shell)
-```
-
-**Tasks:**
-- `store/sessions.ts`: Zustand slice. Subscribes to `sessions:updated` IPC event. Exposes `sessions`, `liveSessionIds`, `getByProject()`, `search()`.
-- `store/panes.ts`: Zustand slice for tab/pane tree state. `PaneNode` binary tree operations: split, close, resize, zoom, focus. Persists to localStorage on change.
-- `Sidebar`: Session list with LIVE / RECENT / ARCHIVED sections. Session rows show indicator, project name, relative timestamp. Hover tooltip with first message. Right-click context menu (Resume in new split / new tab / Open folder / Copy ID / Delete). Collapsible, resizable via drag.
-- `TabBar`: Tab strip at top. Renders tabs from store. Drag to reorder, middle-click to close, + button for new tab.
-- `PaneGrid`: Uses `allotment` to render the `PaneNode` binary tree. Each leaf renders a `Terminal` or placeholder. Propagates resize events to store.
-- `PaneHeader`: 24px bar per pane. Icon, title (project name for Claude panes, abbreviated CWD for shell), git branch, status indicator (waiting / thinking / running tool / done), split/zoom/close buttons.
-- `Terminal`: xterm.js instance in a `useEffect`. Connects to PTY via `window.ipc`. Calls `pty:create` on mount, `pty:write` on input, `pty:resize` on container resize, `pty:kill` on unmount.
-- `SessionBrowser`: Full-screen overlay (Cmd+Shift+O). Left panel: project list. Right panel: sessions per project with detail drawer. Transcript preview (last 6 turns). Resume/Open/Delete actions.
-- `CommandPalette`: Cmd+P overlay. Fuzzy search across sessions (calls `sessions:search` IPC) and static actions. Keyboard nav.
-
-**Uses mock IPC during development:** `window.ipc` calls return mock data (hardcoded `Session[]`) until Phase 2 integration. Define a `src/renderer/mocks/sessions.ts` with realistic fixture data.
-
-**Does not touch:** Anything in `src/main/`.
-
----
-
-#### Stream C - MCP Browser Server (1 agent)
-
-**Owns exclusively:**
-```
-src/main/mcp/BrowserMcpServer.ts
-src/main/mcp/McpInjector.ts
-src/main/mcp/tools/navigate.ts
-src/main/mcp/tools/click.ts
-src/main/mcp/tools/type.ts
-src/main/mcp/tools/screenshot.ts
-src/main/mcp/tools/evaluate.ts
-src/main/mcp/tools/getContent.ts
-src/main/mcp/tools/scroll.ts
-src/main/mcp/tools/waitFor.ts
-src/main/browser/BrowserViewManager.ts
-src/renderer/components/BrowserPanel/
-```
-
-**Tasks:**
-- `BrowserMcpServer`: Implements MCP protocol over stdio using `@modelcontextprotocol/sdk`. Registers all tools. Runs as a child process spawned by the main process.
-- Each tool in `tools/`: implements the tool handler, calls into `BrowserViewManager` via IPC or direct import.
-- `BrowserViewManager`: Manages a `WebContentsView` attached to the main `BrowserWindow`. Methods: `navigate(url)`, `click(selector)`, `type(selector, text)`, `screenshot()` → base64, `evaluate(js)`, `getContent()`, `scroll(x,y)`, `waitFor(selector, timeout)`. Tracks agent-controlled vs user-controlled state.
-- `McpInjector`: When `SessionSpawner` spawns a Claude session, writes a temp JSON MCP config file pointing to the local server's stdio pipe, passes it via `CLAUDE_MCP_CONFIG` env var (or equivalent flag - verify exact mechanism).
-- `BrowserPanel` (renderer): Shows/hides the embedded browser. "Agent is browsing" overlay when agent-controlled. Click to take user control (blocks agent). Toolbar: URL bar (read-only when agent-controlled), reload, toggle visibility.
-
-**Does not touch:** `src/main/sessions/`, `src/main/pty/`, `src/main/ipc/handlers.ts`, `src/renderer/store/`, or any Sidebar/Terminal/PaneGrid components.
-
----
-
-### Phase 2 - Integration (Serial, 1 agent)
-
-Runs after all three Phase 1 streams complete.
-
-**Tasks:**
-- Register all `src/main/ipc/handlers.ts` handlers in `src/main/index.ts`
-- Start `LiveSessionWatcher` and `TranscriptScanner` on app ready
-- Replace mock IPC calls in renderer store with real `window.ipc` invocations
-- Wire `SessionSpawner` into `PtyManager` - resume/new session actions create real PTYs
-- Register `BrowserMcpServer` startup in main process init
-- Wire `McpInjector` into `SessionSpawner.spawn()`
-- End-to-end smoke test: launch app, scan sessions, resume one, verify terminal renders, verify sidebar updates live state
-
----
-
-### Phase 3 - Polish (2 parallel agents)
-
-Runs after Phase 2.
-
-#### Stream D - App Polish (1 agent)
-
-**Owns exclusively:**
-```
-src/renderer/components/Settings/
-src/renderer/hooks/useKeyboardShortcuts.ts
-src/main/layout/LayoutPersistence.ts
-```
-
-- Keyboard shortcut system: global `keydown` handler reading shortcut map, dispatching to store actions. Configurable via Settings.
-- Settings window: shell path, default CWD, theme (dark/light), font size, sidebar default width, shortcut overrides.
-- Layout persistence: on store change, serialize tab/pane tree to SQLite. On app launch, rehydrate. Claude panes restore as "Session ended" placeholders; shell panes reopen in saved CWD.
-
-#### Stream E - Packaging (1 agent)
-
-**Owns exclusively:**
-```
-electron-builder.config.ts
-.github/workflows/build.yml
-build/  (icons, entitlements)
-```
-
-- `electron-builder` config for Windows (NSIS installer) and macOS (DMG + zip)
-- GitHub Actions CI: build matrix for win/mac, artifact upload
-- macOS entitlements file for hardened runtime (needed for notarization)
-- Windows code signing config stubs (actual certs added later)
-
----
-
-### Phase 4 - Distribution (Serial, 1 agent)
-
-- macOS notarization via `electron-notarize`
-- Auto-update via `electron-updater` (GitHub Releases as update server)
-- Release workflow: tag → build → sign → notarize → publish
 
 ---
 
 ## File Structure
 
-Annotated with which phase/stream produces each file.
-
 ```
 MultiAgent/
 ├── src/
 │   ├── shared/
-│   │   └── types.ts                        # [Phase 0] Session, PaneNode, Tab, IPC channels
+│   │   └── types.ts                        # Session, PaneNode, Tab, IPC channels
 │   │
 │   ├── main/                               # Electron main process
-│   │   ├── index.ts                        # [Phase 0] App entry, window, preload registration
-│   │   ├── preload.ts                      # [Phase 0] contextBridge typed IPC
+│   │   ├── index.ts                        # App entry, window, preload registration
+│   │   ├── preload.ts                      # contextBridge typed IPC
 │   │   ├── ipc/
-│   │   │   └── handlers.ts                 # [Stream A] Registers all IPC handlers
+│   │   │   └── handlers.ts                 # All IPC handler registrations
 │   │   ├── sessions/
-│   │   │   ├── TranscriptScanner.ts        # [Stream A]
-│   │   │   ├── SessionIndex.ts             # [Stream A] SQLite + FTS5
-│   │   │   ├── LiveSessionWatcher.ts       # [Stream A] watches ~/.claude/sessions/
-│   │   │   └── SessionSpawner.ts           # [Stream A] spawns claude via node-pty
+│   │   │   ├── TranscriptScanner.ts        # Walks ~/.claude/projects/, caches in SQLite
+│   │   │   ├── SessionIndex.ts             # SQLite + FTS5
+│   │   │   ├── LiveSessionWatcher.ts       # Watches ~/.claude/sessions/
+│   │   │   └── SessionSpawner.ts           # Spawns claude / claude --resume
 │   │   ├── pty/
-│   │   │   └── PtyManager.ts               # [Stream A]
+│   │   │   ├── PtyManager.ts               # IPC bridge to ptyWorker child process
+│   │   │   ├── ptyWorker.ts                # Runs as ELECTRON_RUN_AS_NODE=1 child; owns node-pty
+│   │   │   └── shell.ts                    # defaultShell() helper
 │   │   ├── mcp/
-│   │   │   ├── BrowserMcpServer.ts         # [Stream C]
-│   │   │   ├── McpInjector.ts              # [Stream C]
-│   │   │   └── tools/                      # [Stream C] one file per MCP tool
-│   │   ├── browser/
-│   │   │   └── BrowserViewManager.ts       # [Stream C] WebContentsView wrapper
-│   │   └── layout/
-│   │       └── LayoutPersistence.ts        # [Stream D]
+│   │   │   ├── BrowserMcpServer.ts         # MCP stdio server (not yet wired to sessions)
+│   │   │   ├── McpInjector.ts              # Injects MCP config into spawned sessions (stub)
+│   │   │   └── tools/                      # One file per MCP browser tool
+│   │   └── browser/
+│   │       └── BrowserViewManager.ts       # WebContentsView wrapper
 │   │
 │   └── renderer/                           # React app
-│       ├── main.tsx                        # [Phase 0]
-│       ├── App.tsx                         # [Phase 0 shell → Stream B replaces]
-│       ├── mocks/
-│       │   └── sessions.ts                 # [Stream B] fixture data for dev
+│       ├── main.tsx
+│       ├── App.tsx                         # Global keyboard shortcuts, layout shell
 │       ├── store/
-│       │   ├── index.ts                    # [Phase 0 stub → Stream B fills]
-│       │   ├── sessions.ts                 # [Stream B]
-│       │   └── panes.ts                    # [Stream B]
+│       │   ├── sessions.ts                 # Zustand - session list, IPC subscription
+│       │   └── panes.ts                    # Zustand - tab/pane tree, overlays
 │       ├── hooks/
-│       │   ├── useSessions.ts              # [Stream B]
-│       │   ├── usePanes.ts                 # [Stream B]
-│       │   └── useKeyboardShortcuts.ts     # [Stream D]
+│       │   └── useSessions.ts              # Targeted selectors over sessions store
 │       └── components/
-│           ├── Sidebar/                    # [Stream B]
-│           ├── TabBar/                     # [Stream B]
-│           ├── PaneGrid/                   # [Stream B] allotment-based
-│           ├── PaneHeader/                 # [Stream B]
-│           ├── Terminal/                   # [Stream B] xterm.js wrapper
-│           ├── SessionBrowser/             # [Stream B]
-│           ├── CommandPalette/             # [Stream B]
-│           ├── BrowserPanel/               # [Stream C]
-│           └── Settings/                   # [Stream D]
+│           ├── Sidebar/                    # Session list, + Session / + Shell buttons
+│           ├── TabBar/                     # Tab strip + ≡ / ⊞ / ⌕ toolbar
+│           ├── PaneGrid/                   # allotment binary tree renderer
+│           ├── PaneHeader/                 # Per-pane chrome (status pill stubbed)
+│           ├── Terminal/                   # xterm.js + PTY IPC wiring
+│           ├── SessionBrowser/             # Ctrl+Shift+O overlay
+│           └── CommandPalette/             # Ctrl+P overlay
 │
-├── build/                                  # [Stream E] icons, entitlements
-├── .github/workflows/build.yml             # [Stream E]
-├── electron-builder.config.ts             # [Stream E]
-├── electron.vite.config.ts               # [Phase 0]
-├── package.json                           # [Phase 0]
+├── electron.vite.config.ts               # ptyWorker compiled as separate entry point
+├── package.json
 └── PLAN.md
 ```
 
@@ -564,12 +425,16 @@ Main process owns all state (sessions, PTYs, MCP server). Renderer is a pure vie
 
 Tabs represent independent pane layouts, not individual panes. Each tab can contain any number of split panes.
 
+The tab bar has three persistent zones:
+- **Left:** ≡ sidebar toggle (always visible even when sidebar is collapsed)
+- **Center:** tab strip - drag to reorder, middle-click to close, + for new tab
+- **Right:** ⊞ session browser button, ⌕ command palette button
+
+Tab behavior:
 - Tab title shows: project name (if a Claude pane is focused in that tab), or CWD (if all shell panes)
 - Live dot (●) on tab when it contains an active Claude session
 - Cmd/Ctrl+T: new tab (opens a shell pane by default)
 - Cmd/Ctrl+W: close active tab (prompts if Claude session is live)
-- Cmd/Ctrl+Shift+]: next tab
-- Cmd/Ctrl+Shift+[: prev tab
 - Drag to reorder tabs
 - Middle-click to close
 
@@ -578,7 +443,7 @@ Tabs represent independent pane layouts, not individual panes. Each tab can cont
 The pane tree is a binary split layout (same model as tmux). Every split produces exactly two children.
 
 **Splitting:**
-- Cmd/Ctrl+D: split focused pane vertically (new pane opens to the right)
+- Cmd/Ctrl+Shift+E: split focused pane vertically (new pane opens to the right)
 - Cmd/Ctrl+Shift+D: split focused pane horizontally (new pane opens below)
 - New pane inherits CWD of the pane it split from
 - Drag the divider between panes to resize; double-click divider to equalize
@@ -611,7 +476,7 @@ Each pane has a 24px header bar:
 - Left: pane type icon (terminal glyph for shell, Claude mark for Claude pane)
 - Left: title - project name for Claude panes, abbreviated CWD for shell panes
 - Left: git branch (read from CWD on a 5s poll, only shown if in a git repo)
-- Left: status indicator for Claude panes only:
+- Left: status indicator for Claude panes only (currently stubbed - always shows "waiting"):
   - ● waiting for input (dim)
   - ● thinking... (animated, yellow)
   - ● running tool (animated, blue) - shows tool name
@@ -624,9 +489,9 @@ Each pane has a 24px header bar:
 **Structure:**
 ```
 ┌────────────────────────────┐
-│ ⊞ MultiAgent          [<]  │  <- collapse button
+│ Sessions                   │  <- header (collapse via ≡ in tab bar)
 ├────────────────────────────┤
-│ [+ New Claude Session]     │
+│ [+ Session]  [+ Shell]     │  <- new session / new shell pane buttons
 ├────────────────────────────┤
 │ ● LIVE                     │
 │   ● ecentria/core          │  live-attached: solid dot
@@ -754,6 +619,7 @@ All shortcuts configurable via Settings.
 
 ## Open Questions
 
-- Should the browser panel be a `BrowserView` (deprecated) or `WebContentsView` (Electron 28+)? Use `WebContentsView` - it's the current API and supports proper layering.
 - Session resume: should the app auto-resume the most recent session in a project when you open it, or always show the session picker? Probably show picker unless there's only one.
-- Multi-window support: single window with tabs, or allow multiple top-level windows? Defer to M3 feedback.
+- Multi-window support: single window with tabs, or allow multiple top-level windows? Deferred.
+- Status pill: parse claude's output stream to detect state (thinking / running tool / idle), or use a separate IPC channel from the main process? Currently stubbed as "waiting".
+- Layout persistence format: store the full pane tree in SQLite on every change, or only on quit? SQLite seems right but schema needs design.

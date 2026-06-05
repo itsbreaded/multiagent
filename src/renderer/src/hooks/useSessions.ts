@@ -1,19 +1,47 @@
+import { useMemo } from 'react'
 import { useSessionsStore } from '../store/sessions'
-import type { Session } from '../../../shared/types'
+import { usePanesStore } from '../store/panes'
+import type { Session, PaneNode } from '../../../shared/types'
+
+function collectSessionIds(node: PaneNode, ids: Set<string>): void {
+  if (node.type === 'leaf') {
+    if (node.sessionId) ids.add(node.sessionId)
+    return
+  }
+  collectSessionIds(node.first, ids)
+  collectSessionIds(node.second, ids)
+}
 
 export function useSessions() {
-  const store = useSessionsStore()
+  const sessions = useSessionsStore((s) => s.sessions)
+  const loading = useSessionsStore((s) => s.loading)
+  const tabs = usePanesStore((s) => s.tabs)
+
+  // Derive which sessions are currently open in panes. No filesystem watching
+  // needed — the panes store is the source of truth for what's running.
+  const liveIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const tab of tabs) collectSessionIds(tab.rootNode, ids)
+    return ids
+  }, [tabs])
+
+  // Override status for sessions that are open in a pane right now.
+  const withLive = useMemo(
+    () =>
+      sessions.map((s) =>
+        liveIds.has(s.sessionId) ? { ...s, status: 'live-attached' as const } : s
+      ),
+    [sessions, liveIds]
+  )
+
   return {
-    sessions: store.sessions,
-    loading: store.loading,
-    live: store.liveSessions(),
-    resumable: store.resumableSessions(),
-    archived: store.archivedSessions(),
-    // Synchronous local search used by CommandPalette / SessionBrowser.
-    // IPC-backed async search is available via store.searchSessions directly.
+    sessions: withLive,
+    loading,
+    resumable: withLive.filter((s) => s.status === 'resumable' && !liveIds.has(s.sessionId)),
+    archived: withLive.filter((s) => s.status === 'archived'),
     search: (query: string): Session[] => {
       const q = query.toLowerCase()
-      return store.sessions.filter(
+      return withLive.filter(
         (s) =>
           s.projectName.toLowerCase().includes(q) ||
           s.firstMessage?.toLowerCase().includes(q) ||

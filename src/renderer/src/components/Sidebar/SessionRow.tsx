@@ -18,8 +18,6 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
   const [hovered, setHovered] = useState(false)
   const rowRef = useRef<HTMLDivElement>(null)
   const resumeSession = usePanesStore((s) => s.resumeSession)
-  const focusPane = usePanesStore((s) => s.focusPane)
-  const findPaneBySessionId = usePanesStore((s) => s.findPaneBySessionId)
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -27,13 +25,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
   }
 
   function handleClick() {
-    if (session.status === 'live-attached') {
-      // Focus the existing pane that has this session
-      const pane = findPaneBySessionId(session.sessionId)
-      if (pane) focusPane(pane.id)
-    } else if (session.status === 'resumable' || session.status === 'live-detached') {
-      resumeSession(session.sessionId, session.cwd)
-    }
+    resumeSession(session.sessionId, session.cwd)
   }
 
   function closeMenu() {
@@ -81,22 +73,6 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
           {session.projectName.split('/').pop()}
         </span>
 
-        {/* live-detached badge */}
-        {session.status === 'live-detached' && (
-          <span
-            style={{
-              fontSize: 9,
-              color: '#6b7280',
-              backgroundColor: '#2a2b2e',
-              borderRadius: 3,
-              padding: '1px 4px',
-              flexShrink: 0,
-            }}
-          >
-            ext
-          </span>
-        )}
-
         {/* Relative time */}
         <span
           style={{
@@ -132,22 +108,6 @@ function getStatusDot(session: Session): React.ReactNode {
           backgroundColor: '#4ade80',
           display: 'inline-block',
           flexShrink: 0,
-        }}
-      />
-    )
-  }
-  if (session.status === 'live-detached') {
-    return (
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          backgroundColor: '#4ade80',
-          display: 'inline-block',
-          flexShrink: 0,
-          animation: 'pulse 2s infinite',
-          opacity: 0.7,
         }}
       />
     )

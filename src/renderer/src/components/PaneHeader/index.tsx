@@ -1,7 +1,8 @@
-import React from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
+import { paneLabelText } from '../../utils/tabLabels'
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -14,20 +15,33 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const zoomPane = usePanesStore((s) => s.zoomPane)
   const unzoom = usePanesStore((s) => s.unzoom)
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
+  const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
   const sessions = useSessionsStore((s) => s.sessions)
 
-  const session = pane.sessionId
-    ? sessions.find((s) => s.sessionId === pane.sessionId)
-    : null
+  const [renaming, setRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  const title = pane.title ??
-    session?.projectName ??
-    pane.cwd.replace(/\\/g, '/').split('/').pop() ??
-    pane.cwd
+  useEffect(() => {
+    if (renaming) inputRef.current?.select()
+  }, [renaming])
 
-  const branch = session?.gitBranch ?? null
+  function startRename(e: React.MouseEvent): void {
+    e.stopPropagation()
+    setRenameValue(pane.customName ?? '')
+    setRenaming(true)
+  }
+
+  function commitRename(): void {
+    setPaneCustomName(pane.id, renameValue)
+    setRenaming(false)
+  }
+
+  const label = paneLabelText(pane, sessions)
   const isZoomed = zoomedPaneId === pane.id
   const icon = pane.paneType === 'claude' ? 'C' : '>'
+  const session = pane.sessionId ? sessions.find((s) => s.sessionId === pane.sessionId) : null
+  const branch = session?.gitBranch ?? null
 
   return (
     <div
@@ -45,7 +59,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         overflow: 'hidden',
       }}
     >
-      {/* Icon */}
+      {/* Type icon */}
       <span
         style={{
           fontSize: 10,
@@ -60,22 +74,51 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         {icon}
       </span>
 
-      {/* Title */}
-      <span
-        style={{
-          fontSize: 12,
-          color: isFocused ? '#d4d4d4' : '#6b7280',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          flexShrink: 1,
-        }}
-      >
-        {title}
-      </span>
+      {/* Title — double-click to rename */}
+      {renaming ? (
+        <input
+          ref={inputRef}
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setRenaming(false) }
+          }}
+          onClick={(e) => e.stopPropagation()}
+          placeholder="Label (optional)"
+          style={{
+            background: '#141517',
+            border: '1px solid #4ade80',
+            borderRadius: 3,
+            color: '#c9cdd1',
+            fontSize: 12,
+            padding: '1px 4px',
+            outline: 'none',
+            width: 120,
+            flexShrink: 0,
+          }}
+        />
+      ) : (
+        <span
+          onDoubleClick={startRename}
+          title="Double-click to add a label"
+          style={{
+            fontSize: 12,
+            color: isFocused ? '#d4d4d4' : '#6b7280',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            flexShrink: 1,
+            cursor: 'default',
+          }}
+        >
+          {label}
+        </span>
+      )}
 
       {/* Git branch */}
-      {branch && (
+      {branch && !renaming && (
         <span
           style={{
             fontSize: 11,
@@ -90,11 +133,10 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         </span>
       )}
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
       {/* Status pill for claude panes */}
-      {pane.paneType === 'claude' && (
+      {pane.paneType === 'claude' && !renaming && (
         <span
           style={{
             fontSize: 10,
@@ -111,30 +153,15 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       )}
 
       {/* Action buttons */}
-      <HeaderButton
-        title="Split vertical (Ctrl+Shift+E)"
-        onClick={() => splitPane(pane.id, 'vertical')}
-      >
-        ⊟
-      </HeaderButton>
-      <HeaderButton
-        title="Split horizontal (Ctrl+Shift+D)"
-        onClick={() => splitPane(pane.id, 'horizontal')}
-      >
-        ⊞
-      </HeaderButton>
+      <HeaderButton title="Split vertical (Ctrl+Shift+E)" onClick={() => splitPane(pane.id, 'vertical')}>⊟</HeaderButton>
+      <HeaderButton title="Split horizontal (Ctrl+Shift+D)" onClick={() => splitPane(pane.id, 'horizontal')}>⊞</HeaderButton>
       <HeaderButton
         title={isZoomed ? 'Unzoom' : 'Zoom pane (Ctrl+Shift+Enter)'}
         onClick={() => (isZoomed ? unzoom() : zoomPane(pane.id))}
       >
         {isZoomed ? '⊟' : '⤢'}
       </HeaderButton>
-      <HeaderButton
-        title="Close pane (Ctrl+Shift+W)"
-        onClick={() => closePane(pane.id)}
-      >
-        ×
-      </HeaderButton>
+      <HeaderButton title="Close pane (Ctrl+Shift+W)" onClick={() => closePane(pane.id)}>×</HeaderButton>
     </div>
   )
 }

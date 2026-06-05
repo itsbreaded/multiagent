@@ -5,9 +5,6 @@ interface SessionsStore {
   sessions: Session[]
   loading: boolean
   setSessions: (sessions: Session[]) => void
-  liveSessions: () => Session[]
-  resumableSessions: () => Session[]
-  archivedSessions: () => Session[]
   searchSessions: (query: string) => Promise<Session[]>
   deleteSession: (sessionId: string) => Promise<void>
   getByProject: (cwd: string) => Session[]
@@ -18,15 +15,6 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   loading: true,
 
   setSessions: (sessions) => set({ sessions, loading: false }),
-
-  liveSessions: () =>
-    get().sessions.filter(
-      (s) => s.status === 'live-attached' || s.status === 'live-detached'
-    ),
-
-  resumableSessions: () => get().sessions.filter((s) => s.status === 'resumable'),
-
-  archivedSessions: () => get().sessions.filter((s) => s.status === 'archived'),
 
   searchSessions: async (query) => {
     if (typeof window !== 'undefined' && window.ipc) {

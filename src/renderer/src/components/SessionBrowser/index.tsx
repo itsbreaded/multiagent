@@ -16,6 +16,8 @@ function groupByProject(sessions: Session[]): Map<string, Session[]> {
 
 export function SessionBrowser(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
+  const resumeSession = usePanesStore((s) => s.resumeSession)
+  const resumeSessionInNewTab = usePanesStore((s) => s.resumeSessionInNewTab)
   const { sessions, search } = useSessions()
   const [query, setQuery] = useState('')
   const [selectedProject, setSelectedProject] = useState<string | null>(null)
@@ -30,21 +32,20 @@ export function SessionBrowser(): JSX.Element {
   const grouped = useMemo(() => groupByProject(filtered), [filtered])
   const projects = Array.from(grouped.keys())
 
-  useEffect(() => {
-    if (projects.length > 0 && !selectedProject) {
-      setSelectedProject(projects[0])
-    }
-  }, [projects.join(',')])
+  // Derive the active project synchronously so the first render already shows
+  // the right content. Using useEffect for this causes a visible flicker: the
+  // component paints once with selectedProject=null (showing all projects),
+  // then the effect fires and re-renders with only the first project shown.
+  const activeProject = selectedProject ?? projects[0] ?? null
 
   function statusLabel(s: Session): string {
     if (s.status === 'live-attached') return 'LIVE'
-    if (s.status === 'live-detached') return 'LIVE (ext)'
     if (s.status === 'resumable') return 'RESUMABLE'
     return 'ARCHIVED'
   }
 
   function statusColor(s: Session): string {
-    if (s.status === 'live-attached' || s.status === 'live-detached') return '#4ade80'
+    if (s.status === 'live-attached') return '#4ade80'
     if (s.status === 'resumable') return '#6b7280'
     return '#4a4b4e'
   }
@@ -131,13 +132,13 @@ export function SessionBrowser(): JSX.Element {
                     display: 'block',
                     width: '100%',
                     padding: '7px 12px',
-                    background: selectedProject === proj ? '#242528' : 'none',
+                    background: activeProject === proj ? '#242528' : 'none',
                     border: 'none',
-                    borderLeft: selectedProject === proj ? '2px solid #4ade80' : '2px solid transparent',
+                    borderLeft: activeProject === proj ? '2px solid #4ade80' : '2px solid transparent',
                     textAlign: 'left',
                     cursor: 'pointer',
                     fontSize: 12,
-                    color: selectedProject === proj ? '#d4d4d4' : '#6b7280',
+                    color: activeProject === proj ? '#d4d4d4' : '#6b7280',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -152,7 +153,7 @@ export function SessionBrowser(): JSX.Element {
           {/* Right: sessions by project */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
             {Array.from(grouped.entries()).map(([proj, projSessions]) => {
-              if (selectedProject && proj !== selectedProject) return null
+              if (activeProject && proj !== activeProject) return null
               const first = projSessions[0]
               return (
                 <div key={proj} style={{ marginBottom: 20 }}>
@@ -200,6 +201,14 @@ export function SessionBrowser(): JSX.Element {
                           prev?.sessionId === s.sessionId ? null : s
                         )
                       }
+                      onResumeSplit={() => {
+                        resumeSession(s.sessionId, s.cwd)
+                        closeOverlays()
+                      }}
+                      onResumeNewTab={() => {
+                        resumeSessionInNewTab(s.sessionId, s.cwd)
+                        closeOverlays()
+                      }}
                     />
                   ))}
                 </div>
@@ -216,13 +225,12 @@ interface SessionBrowserRowProps {
   session: Session
   isExpanded: boolean
   onToggle: () => void
+  onResumeSplit: () => void
+  onResumeNewTab: () => void
 }
 
-function SessionBrowserRow({ session, isExpanded, onToggle }: SessionBrowserRowProps): JSX.Element {
-  const statusDotColor =
-    session.status === 'live-attached' || session.status === 'live-detached'
-      ? '#4ade80'
-      : '#6b7280'
+function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onResumeNewTab }: SessionBrowserRowProps): JSX.Element {
+  const statusDotColor = session.status === 'live-attached' ? '#4ade80' : '#6b7280'
 
   return (
     <div
@@ -254,9 +262,7 @@ function SessionBrowserRow({ session, isExpanded, onToggle }: SessionBrowserRowP
             height: 7,
             borderRadius: '50%',
             backgroundColor:
-              session.status === 'live-attached' || session.status === 'live-detached'
-                ? statusDotColor
-                : 'transparent',
+              session.status === 'live-attached' ? statusDotColor : 'transparent',
             border:
               session.status === 'resumable' || session.status === 'archived'
                 ? `1.5px solid ${statusDotColor}`
@@ -308,12 +314,8 @@ function SessionBrowserRow({ session, isExpanded, onToggle }: SessionBrowserRowP
           />
 
           <div style={{ marginTop: 10, display: 'flex', gap: 6 }}>
-            <ActionButton onClick={() => console.log('resume-split', session.sessionId)}>
-              Resume in split
-            </ActionButton>
-            <ActionButton onClick={() => console.log('resume-tab', session.sessionId)}>
-              Resume in new tab
-            </ActionButton>
+            <ActionButton onClick={onResumeSplit}>Resume in split</ActionButton>
+            <ActionButton onClick={onResumeNewTab}>Resume in new tab</ActionButton>
           </div>
         </div>
       )}

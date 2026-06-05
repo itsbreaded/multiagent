@@ -1,5 +1,5 @@
 // Session status
-export type SessionStatus = 'live-attached' | 'live-detached' | 'resumable' | 'archived'
+export type SessionStatus = 'live-attached' | 'resumable' | 'archived'
 
 // A Claude Code session as stored/displayed
 export interface Session {
@@ -13,9 +13,6 @@ export interface Session {
   lastActivity: string | null  // ISO timestamp
   messageCount: number
   status: SessionStatus
-  // for live sessions
-  pid?: number
-  liveStatus?: 'idle' | 'running'  // from ~/.claude/sessions/<pid>.json
 }
 
 // Pane tree - binary split layout (same model as tmux)
@@ -26,9 +23,10 @@ export interface PaneLeaf {
   id: string
   paneType: PaneType
   cwd: string
-  sessionId?: string   // set when paneType === 'claude'
-  ptyId?: string       // set once PTY is created
-  title?: string       // display override
+  sessionId?: string    // set when paneType === 'claude'
+  ptyId?: string        // set once PTY is created
+  title?: string        // programmatic display override (full)
+  customName?: string   // user-set label prefix shown before the directory name
 }
 
 export type SplitDirection = 'horizontal' | 'vertical'
@@ -49,6 +47,7 @@ export interface Tab {
   id: string
   rootNode: PaneNode
   focusedPaneId: string
+  customLabel?: string  // user-set via rename; overrides auto-generated label when present
 }
 
 // Full app state shape (used by renderer Zustand store)
@@ -103,6 +102,9 @@ export interface IPCChannels {
   // Main pushes PTY output to renderer
   'pty:data': (ptyId: string, data: string) => void
 
+  // Main pushes CWD changes to renderer (parsed from OSC 7 sequences)
+  'pty:cwd': (ptyId: string, cwd: string) => void
+
   // --- Shell ---
   'shell:open-folder': (path: string) => void
   'shell:copy-to-clipboard': (text: string) => void
@@ -138,4 +140,5 @@ export type InvokeChannels =
 export type EventChannels =
   | 'sessions:updated'
   | 'pty:data'
+  | 'pty:cwd'
   | 'browser:agent-active'

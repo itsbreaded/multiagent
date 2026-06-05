@@ -1,15 +1,9 @@
 import React from 'react'
-import { usePanesStore } from '../../store/panes'
 
 export function SidebarHeader(): JSX.Element {
-  const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
-
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
         padding: '10px 12px 8px',
         borderBottom: '1px solid #2a2b2e',
         flexShrink: 0,
@@ -24,24 +18,8 @@ export function SidebarHeader(): JSX.Element {
           letterSpacing: '0.02em',
         }}
       >
-        MultiAgent
+        Sessions
       </span>
-      <button
-        onClick={toggleSidebar}
-        title="Collapse sidebar (Ctrl+B)"
-        style={{
-          background: 'none',
-          border: 'none',
-          color: '#5a5c61',
-          cursor: 'pointer',
-          padding: '2px 4px',
-          borderRadius: 3,
-          fontSize: 14,
-          lineHeight: 1,
-        }}
-      >
-        {'<'}
-      </button>
     </div>
   )
 }

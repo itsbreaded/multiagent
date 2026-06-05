@@ -110,12 +110,27 @@ export class PtyManager extends EventEmitter {
     return id
   }
 
+  private _shellCmd(): string[] {
+    if (process.platform === 'win32') {
+      // Use [char]27/[char]7 for ESC/BEL — backtick-e is unreliable in Windows PowerShell 5.x.
+      // The wrapped prompt emits an OSC 7 sequence (parsed by main process for CWD tracking)
+      // before the visible prompt text. -NoLogo suppresses the copyright banner.
+      const script = [
+        '$__mp = if (Test-Path Function:prompt) { ${Function:prompt} } else { $null }',
+        "function prompt { $e=[char]27; $bel=[char]7; $b = if ($__mp) { & $__mp } else { 'PS ' + $pwd + '> ' }; $c = $pwd.Path.Replace('\\', '/'); \"${e}]7;file:///$c${bel}$b\" }",
+      ].join('; ')
+      const encoded = Buffer.from(script, 'utf16le').toString('base64')
+      return ['powershell.exe', '-NoLogo', '-NoExit', '-EncodedCommand', encoded]
+    }
+    return [defaultShell()]
+  }
+
   createShell(cwd: string): string {
-    return this.createDeferred(cwd, [defaultShell()])
+    return this.createDeferred(cwd, this._shellCmd())
   }
 
   createClaude(cwd: string): string {
-    return this.createDeferred(cwd, [defaultShell()], { CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1' })
+    return this.createDeferred(cwd, this._shellCmd(), { CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1' })
   }
 
   write(ptyId: string, data: string): void {

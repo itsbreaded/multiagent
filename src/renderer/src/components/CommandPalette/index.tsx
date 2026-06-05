@@ -25,6 +25,7 @@ export function CommandPalette(): JSX.Element {
   const splitPane = usePanesStore((s) => s.splitPane)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
+  const resumeSession = usePanesStore((s) => s.resumeSession)
 
   const { sessions, search } = useSessions()
   const [query, setQuery] = useState('')
@@ -116,7 +117,7 @@ export function CommandPalette(): JSX.Element {
     if (entry.kind === 'action') {
       entry.run()
     } else {
-      console.log('resume session', entry.session.sessionId)
+      resumeSession(entry.session.sessionId, entry.session.cwd)
       closeOverlays()
     }
   }

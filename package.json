@@ -9,7 +9,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-vite build && electron-builder",
     "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3"
   },
   "keywords": [],
@@ -57,8 +57,14 @@
     "files": [
       "out/**/*"
     ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/node-pty/**",
+      "**/better-sqlite3/**"
+    ],
+    "npmRebuild": false,
     "win": {
-      "target": "nsis"
+      "target": "dir"
     },
     "mac": {
       "target": "dmg",
