@@ -55,6 +55,16 @@ IPC listeners are wired at module level after store creation (not inside compone
 
 `SessionIndex` wraps better-sqlite3 with FTS5 for full-text search over session transcripts. `TranscriptScanner` reads `~/.claude/projects/**/*.jsonl` and extracts metadata. Sessions are polled every 5 seconds and pushed to the renderer on change.
 
+### Session detection (new sessions)
+
+`SessionSpawner` detects which Claude session file belongs to a newly spawned PTY. A single shared chokidar watcher (chokidar v5, ESM-only - must use dynamic `import()`) watches `~/.claude/projects/` for new `.jsonl` files. Pending detections are kept in a `Map<normalizedCwd, PendingDetection[]>` (FIFO queue per cwd). When a new JSONL appears, the watcher reads its `cwd` field and dispatches to the oldest waiting entry for that cwd, then sends `session:detected` IPC to the renderer.
+
+Key constraints:
+- One shared watcher (not one per session) - prevents concurrent watchers from racing on the same file
+- FIFO per cwd - guarantees the first session spawned in a directory claims the first JSONL written there
+- `readSessionInfo` scans up to 10 lines - `sessionId` and `cwd` may be on different records in the JSONL
+- Layout restore prompt appears on startup if a previous layout exists; "Start Fresh" lands on the empty state, not a new tab
+
 ### Browser panel (MCP)
 
 `BrowserViewManager` embeds a `BrowserView` that an MCP server (`BrowserMcpServer`) can control via tools in `src/main/mcp/tools/`. The renderer shows/hides it via `browser:toggle`.

@@ -5,6 +5,61 @@ import * as readline from 'readline'
 import type { BrowserWindow } from 'electron'
 import type { PtyManager } from '../pty/PtyManager'
 
+// --- Shared watcher state ---
+// One chokidar instance watches ~/.claude/projects/ for all sessions.
+// Pending detections are queued per normalized cwd so the first session
+// waiting on a given directory always claims the first JSONL that appears
+// for that directory (FIFO). This prevents concurrent watchers from
+// cross-linking or mis-ordering sessions.
+
+interface PendingDetection {
+  ptyId: string
+  mainWindow: BrowserWindow
+  cleanup: () => void
+}
+
+const pendingByCwd = new Map<string, PendingDetection[]>()
+let watcherReady = false
+
+function ensureSharedWatcher(projectsDir: string): void {
+  if (watcherReady) return
+  watcherReady = true
+
+  void import('chokidar').then(({ watch }) => {
+    const watcher = watch(projectsDir, {
+      ignoreInitial: true,
+      depth: 1,
+      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
+    })
+
+    watcher.on('add', (filePath: string) => {
+      if (!filePath.endsWith('.jsonl')) return
+
+      void (async () => {
+        // Gap 3: retry once after 500ms if the file isn't fully flushed yet
+        let info = await readSessionInfo(filePath)
+        if (!info) {
+          await new Promise<void>((r) => setTimeout(r, 500))
+          info = await readSessionInfo(filePath)
+        }
+        if (!info) return
+
+        const normalizedCwd = normalizePath(info.cwd)
+        const queue = pendingByCwd.get(normalizedCwd)
+        if (!queue?.length) return
+
+        // FIFO: the oldest pending session for this cwd claims this file
+        const pending = queue.shift()
+        if (!queue.length) pendingByCwd.delete(normalizedCwd)
+        if (!pending) return
+
+        pending.cleanup()
+        pending.mainWindow.webContents.send('session:detected', pending.ptyId, info.sessionId)
+      })()
+    })
+  })
+}
+
 export class SessionSpawner {
   constructor(private ptyManager: PtyManager, private mainWindow: BrowserWindow) {}
 
@@ -21,66 +76,47 @@ export class SessionSpawner {
     return { ptyId }
   }
 
-  // Watch ~/.claude/projects/ for a new JSONL file that appears after spawning.
-  // When found, read its sessionId field and notify the renderer so the pane
-  // can persist and resume the session across restarts.
   private _watchForNewSession(ptyId: string, spawnCwd: string): void {
     const projectsDir = path.join(os.homedir(), '.claude', 'projects')
     fs.mkdirSync(projectsDir, { recursive: true })
 
-    const spawnTime = Date.now()
+    ensureSharedWatcher(projectsDir)
+
+    const normalizedCwd = normalizePath(spawnCwd)
     const mainWindow = this.mainWindow
-    const normalizedSpawnCwd = normalizePath(spawnCwd)
+    let cancelled = false
 
-    // chokidar v5 is ESM-only; use dynamic import to avoid CJS require() error
-    void import('chokidar').then(({ watch }) => {
-      let closed = false
+    const removePending = () => {
+      const queue = pendingByCwd.get(normalizedCwd)
+      if (!queue) return
+      const idx = queue.indexOf(pending)
+      if (idx >= 0) queue.splice(idx, 1)
+      if (!queue.length) pendingByCwd.delete(normalizedCwd)
+    }
 
-      const cleanup = () => {
-        if (closed) return
-        closed = true
-        clearTimeout(timeout)
-        this.ptyManager.off('exit', onExit)
-        watcher.close()
-      }
+    const cleanup = () => {
+      if (cancelled) return
+      cancelled = true
+      clearTimeout(timeout)
+      this.ptyManager.off('exit', onExit)
+      removePending()
+    }
 
-      // Gap 2: cancel watcher early if the PTY exits before detection completes
-      const onExit = (exitId: string) => {
-        if (exitId !== ptyId) return
-        cleanup()
-      }
-      this.ptyManager.on('exit', onExit)
+    // Gap 2: cancel if the PTY exits before detection completes
+    const onExit = (exitId: string) => {
+      if (exitId !== ptyId) return
+      cleanup()
+    }
+    this.ptyManager.on('exit', onExit)
 
-      const timeout = setTimeout(cleanup, 60_000)
+    const timeout = setTimeout(cleanup, 60_000)
 
-      const watcher = watch(projectsDir, {
-        ignoreInitial: true,
-        depth: 1,
-        awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-      })
+    const pending: PendingDetection = { ptyId, mainWindow, cleanup }
 
-      watcher.on('add', (filePath: string) => {
-        if (closed || !filePath.endsWith('.jsonl')) return
-        if (Date.now() - spawnTime > 60_000) { cleanup(); return }
-
-        void (async () => {
-          // Gap 3: retry once after 500ms if the file isn't flushed yet
-          let info = await readSessionInfo(filePath)
-          if (!info) {
-            await new Promise<void>((r) => setTimeout(r, 500))
-            info = await readSessionInfo(filePath)
-          }
-          if (!info || closed) return
-
-          // Gap 1: verify the JSONL's cwd matches the spawning cwd to avoid
-          // cross-linking sessions from concurrent Claude instances
-          if (normalizePath(info.cwd) !== normalizedSpawnCwd) return
-
-          cleanup()
-          mainWindow.webContents.send('session:detected', ptyId, info.sessionId)
-        })()
-      })
-    })
+    if (!pendingByCwd.has(normalizedCwd)) {
+      pendingByCwd.set(normalizedCwd, [])
+    }
+    pendingByCwd.get(normalizedCwd)!.push(pending)
   }
 
   // Wait until the shell has printed its prompt (detected by 'PS ' or '$ ' or '> '
@@ -142,27 +178,36 @@ function normalizePath(p: string): string {
   return path.resolve(p).toLowerCase()
 }
 
+// sessionId and cwd may appear on different lines - accumulate from first 10 lines
 async function readSessionInfo(filePath: string): Promise<{ sessionId: string; cwd: string } | null> {
   return new Promise((resolve) => {
     try {
       const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
       const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-      let found = false
+      let sessionId = ''
+      let cwd = ''
+      let lineCount = 0
 
       rl.on('line', (line) => {
-        if (found) return
+        if (sessionId && cwd) return
+        lineCount++
+        if (lineCount > 10) {
+          rl.close()
+          stream.destroy()
+          return
+        }
         try {
           const record = JSON.parse(line) as { sessionId?: string; cwd?: string }
-          if (record.sessionId && record.cwd) {
-            found = true
+          if (!sessionId && record.sessionId) sessionId = record.sessionId
+          if (!cwd && record.cwd) cwd = record.cwd
+          if (sessionId && cwd) {
             rl.close()
             stream.destroy()
-            resolve({ sessionId: record.sessionId, cwd: record.cwd })
           }
         } catch { /* skip malformed lines */ }
       })
 
-      rl.on('close', () => { if (!found) resolve(null) })
+      rl.on('close', () => resolve(sessionId && cwd ? { sessionId, cwd } : null))
       rl.on('error', () => resolve(null))
       stream.on('error', () => resolve(null))
     } catch {

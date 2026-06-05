@@ -145,17 +145,12 @@ export default function App(): JSX.Element {
 
   // Peek at saved layout on mount; show restore prompt if previous session exists
   useEffect(() => {
-    const store = usePanesStore.getState()
     window.ipc.invoke('layout:load').then((saved) => {
       const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
       if (data?.tabs?.length) {
         setRestoreData(data)
-      } else {
-        store.addTab()
       }
-    }).catch(() => {
-      store.addTab()
-    })
+    }).catch(() => {})
   }, [])
 
   const handleRestore = useCallback(() => {
@@ -167,7 +162,6 @@ export default function App(): JSX.Element {
 
   const handleDiscard = useCallback(() => {
     setRestoreData(null)
-    usePanesStore.getState().addTab()
   }, [])
 
   // Debounced layout save whenever tabs or sidebar state changes
