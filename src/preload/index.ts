@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import * as os from 'os'
 import type { InvokeChannels, EventChannels } from '../shared/types'
 
 // Expose typed IPC bridge to renderer
@@ -23,6 +24,10 @@ contextBridge.exposeInMainWorld('ipc', {
   }
 })
 
+// Expose home directory so renderer can use it without process.env (which
+// is not available in contextIsolation mode)
+contextBridge.exposeInMainWorld('homeDir', os.homedir())
+
 // Type augmentation for window.ipc — consumed by renderer TypeScript
 export interface IpcBridge {
   invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
@@ -33,5 +38,6 @@ export interface IpcBridge {
 declare global {
   interface Window {
     ipc: IpcBridge
+    homeDir: string
   }
 }

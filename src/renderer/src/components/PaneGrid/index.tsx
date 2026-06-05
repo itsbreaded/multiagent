@@ -33,7 +33,7 @@ function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number
   )
 }
 
-const DEFAULT_CWD = process.env.USERPROFILE ?? process.env.HOME ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
+const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
 export function PaneGrid(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)

@@ -16,7 +16,7 @@ export function Sidebar(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const { resumable, archived, loading } = useSessions()
 
-  const defaultCwd = process.env.USERPROFILE ?? process.env.HOME ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
+  const defaultCwd = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
   function activeCwd(): string {
     return getFocusedPane()?.cwd ?? defaultCwd
