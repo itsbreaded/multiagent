@@ -7,10 +7,12 @@ import type { PtyManager } from '../pty/PtyManager'
 
 // --- Shared watcher state ---
 // One chokidar instance watches ~/.claude/projects/ for all sessions.
-// Pending detections are queued per normalized cwd so the first session
-// waiting on a given directory always claims the first JSONL that appears
-// for that directory (FIFO). This prevents concurrent watchers from
-// cross-linking or mis-ordering sessions.
+// All pending detections share a single global FIFO queue. Sessions are
+// always started by sequential user action, and Claude Code writes its
+// JSONL in that same order, so the first JSONL that appears belongs to
+// the oldest pending entry. Per-cwd routing was tried but is fragile:
+// if the requested cwd doesn't exist on the machine, the PTY falls back
+// to a different directory and the JSONL cwd never matches.
 
 interface PendingDetection {
   ptyId: string
@@ -18,7 +20,7 @@ interface PendingDetection {
   cleanup: () => void
 }
 
-const pendingByCwd = new Map<string, PendingDetection[]>()
+const pendingQueue: PendingDetection[] = []
 let watcherReady = false
 
 function ensureSharedWatcher(projectsDir: string): void {
@@ -36,7 +38,7 @@ function ensureSharedWatcher(projectsDir: string): void {
       if (!filePath.endsWith('.jsonl')) return
 
       void (async () => {
-        // Gap 3: retry once after 500ms if the file isn't fully flushed yet
+        // Retry once after 500ms if the file isn't fully flushed yet
         let info = await readSessionInfo(filePath)
         if (!info) {
           await new Promise<void>((r) => setTimeout(r, 500))
@@ -44,13 +46,7 @@ function ensureSharedWatcher(projectsDir: string): void {
         }
         if (!info) return
 
-        const normalizedCwd = normalizePath(info.cwd)
-        const queue = pendingByCwd.get(normalizedCwd)
-        if (!queue?.length) return
-
-        // FIFO: the oldest pending session for this cwd claims this file
-        const pending = queue.shift()
-        if (!queue.length) pendingByCwd.delete(normalizedCwd)
+        const pending = pendingQueue.shift()
         if (!pending) return
 
         pending.cleanup()
@@ -66,7 +62,7 @@ export class SessionSpawner {
   async spawnNew(cwd: string): Promise<{ ptyId: string; sessionId: string | null }> {
     const ptyId = this.ptyManager.createClaude(cwd)
     this._writeWhenPromptReady(ptyId, 'claude\r')
-    this._watchForNewSession(ptyId, cwd)
+    this._watchForNewSession(ptyId)
     return { ptyId, sessionId: null }
   }
 
@@ -76,33 +72,25 @@ export class SessionSpawner {
     return { ptyId }
   }
 
-  private _watchForNewSession(ptyId: string, spawnCwd: string): void {
+  private _watchForNewSession(ptyId: string): void {
     const projectsDir = path.join(os.homedir(), '.claude', 'projects')
     fs.mkdirSync(projectsDir, { recursive: true })
 
     ensureSharedWatcher(projectsDir)
 
-    const normalizedCwd = normalizePath(spawnCwd)
     const mainWindow = this.mainWindow
     let cancelled = false
-
-    const removePending = () => {
-      const queue = pendingByCwd.get(normalizedCwd)
-      if (!queue) return
-      const idx = queue.indexOf(pending)
-      if (idx >= 0) queue.splice(idx, 1)
-      if (!queue.length) pendingByCwd.delete(normalizedCwd)
-    }
 
     const cleanup = () => {
       if (cancelled) return
       cancelled = true
       clearTimeout(timeout)
       this.ptyManager.off('exit', onExit)
-      removePending()
+      const idx = pendingQueue.indexOf(pending)
+      if (idx >= 0) pendingQueue.splice(idx, 1)
     }
 
-    // Gap 2: cancel if the PTY exits before detection completes
+    // Cancel if the PTY exits before detection completes
     const onExit = (exitId: string) => {
       if (exitId !== ptyId) return
       cleanup()
@@ -112,11 +100,7 @@ export class SessionSpawner {
     const timeout = setTimeout(cleanup, 60_000)
 
     const pending: PendingDetection = { ptyId, mainWindow, cleanup }
-
-    if (!pendingByCwd.has(normalizedCwd)) {
-      pendingByCwd.set(normalizedCwd, [])
-    }
-    pendingByCwd.get(normalizedCwd)!.push(pending)
+    pendingQueue.push(pending)
   }
 
   // Wait until the shell has printed its prompt (detected by 'PS ' or '$ ' or '> '
@@ -172,10 +156,6 @@ export class SessionSpawner {
 
     this.ptyManager.on('ready', onReady)
   }
-}
-
-function normalizePath(p: string): string {
-  return path.resolve(p).toLowerCase()
 }
 
 // sessionId and cwd may appear on different lines - accumulate from first 10 lines
