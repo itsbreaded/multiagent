@@ -18,3 +18,13 @@ body {
   color: #e2e4e6;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Tab strip: hide scrollbar while keeping scroll */
+.tab-strip::-webkit-scrollbar { display: none; }
+.tab-strip { scrollbar-width: none; }
+
+/* Sash drag: prevent xterm canvas from stealing pointer events */
+.sash-dragging .xterm-screen,
+.sash-dragging .xterm canvas {
+  pointer-events: none !important;
+}

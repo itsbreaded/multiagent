@@ -162,7 +162,15 @@ export function TabBar(): JSX.Element {
 
   // Drag reorder
   const dragIndex = useRef<number | null>(null)
+  const dragSideRef = useRef<'left' | 'right' | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+  const [dragSide, setDragSide] = useState<'left' | 'right' | null>(null)
+  const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+
+  useEffect(() => {
+    const el = tabRefs.current.get(activeTabId)
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTabId])
 
   // Rename state
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
@@ -242,12 +250,14 @@ export function TabBar(): JSX.Element {
 
       {/* Tab strip */}
       <div
+        className="tab-strip"
         style={{
           flex: 1,
           display: 'flex',
           alignItems: 'center',
           gap: 2,
-          overflow: 'hidden',
+          overflowX: 'auto',
+          overflowY: 'hidden',
           paddingLeft: 6,
           paddingRight: 6,
         }}
@@ -261,21 +271,37 @@ export function TabBar(): JSX.Element {
           return (
             <div
               key={tab.id}
+              ref={(el) => { if (el) tabRefs.current.set(tab.id, el); else tabRefs.current.delete(tab.id) }}
               draggable={!isRenaming}
               onDragStart={() => { dragIndex.current = idx }}
-              onDragOver={(e) => { e.preventDefault(); setDragOverIndex(idx) }}
-              onDragLeave={() => setDragOverIndex(null)}
+              onDragOver={(e) => {
+                e.preventDefault()
+                const rect = e.currentTarget.getBoundingClientRect()
+                const side = e.clientX - rect.left < rect.width / 2 ? 'left' : 'right'
+                dragSideRef.current = side
+                setDragOverIndex(idx)
+                setDragSide(side)
+              }}
+              onDragLeave={() => { setDragOverIndex(null); setDragSide(null) }}
+              onDragEnd={() => { dragIndex.current = null; dragSideRef.current = null; setDragOverIndex(null); setDragSide(null) }}
               onDrop={() => {
-                if (dragIndex.current !== null && dragIndex.current !== idx) {
+                const from = dragIndex.current
+                const side = dragSideRef.current
+                const targetTabId = tab.id
+                if (from !== null && from !== idx) {
                   usePanesStore.setState((s) => {
                     const next = [...s.tabs]
-                    const [moved] = next.splice(dragIndex.current!, 1)
-                    next.splice(idx, 0, moved)
+                    const [moved] = next.splice(from, 1)
+                    const newTargetIdx = next.findIndex((t) => t.id === targetTabId)
+                    const insertAt = side === 'right' ? newTargetIdx + 1 : newTargetIdx
+                    next.splice(Math.max(0, insertAt), 0, moved)
                     return { tabs: next }
                   })
                 }
                 dragIndex.current = null
+                dragSideRef.current = null
                 setDragOverIndex(null)
+                setDragSide(null)
               }}
               onClick={() => !isRenaming && setActiveTab(tab.id)}
               onAuxClick={(e) => { if (e.button === 1) closeTab(tab.id) }}
@@ -292,14 +318,19 @@ export function TabBar(): JSX.Element {
                 gap: 5,
                 borderRadius: '4px 4px 0 0',
                 backgroundColor: isActive ? '#1e2022' : 'transparent',
-                border: isActive ? '1px solid #2a2b2e' : '1px solid transparent',
-                borderBottomColor: isActive ? '#4ade80' : 'transparent',
+                borderTop: isActive ? '1px solid #2a2b2e' : '1px solid transparent',
+                borderBottom: isActive ? '1px solid #4ade80' : '1px solid transparent',
+                borderLeft: dragOverIndex === idx && dragSide === 'left'
+                  ? '2px solid #4ade80'
+                  : isActive ? '1px solid #2a2b2e' : '1px solid transparent',
+                borderRight: dragOverIndex === idx && dragSide === 'right'
+                  ? '2px solid #4ade80'
+                  : isActive ? '1px solid #2a2b2e' : '1px solid transparent',
                 fontSize: 12,
                 color: isActive ? '#e2e4e6' : '#6b7280',
                 cursor: 'pointer',
                 userSelect: 'none',
                 flexShrink: 0,
-                outline: dragOverIndex === idx ? '1px dashed #4ade80' : 'none',
                 transition: 'color 0.1s',
                 position: 'relative',
               }}

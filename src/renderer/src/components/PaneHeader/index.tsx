@@ -16,6 +16,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const unzoom = usePanesStore((s) => s.unzoom)
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
+  const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
   const sessions = useSessionsStore((s) => s.sessions)
 
   const [renaming, setRenaming] = useState(false)
@@ -59,6 +60,27 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         overflow: 'hidden',
       }}
     >
+      {/* Drag handle */}
+      <span
+        draggable
+        onDragStart={(e) => { e.stopPropagation(); setDraggedPane(pane.id) }}
+        onDragEnd={() => setDraggedPane(null)}
+        title="Drag to rearrange pane"
+        style={{
+          fontSize: 10,
+          color: '#3a3b3e',
+          cursor: 'grab',
+          flexShrink: 0,
+          lineHeight: 1,
+          userSelect: 'none',
+          paddingRight: 2,
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#6b7280' }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#3a3b3e' }}
+      >
+        ⠿
+      </span>
+
       {/* Type icon */}
       <span
         style={{

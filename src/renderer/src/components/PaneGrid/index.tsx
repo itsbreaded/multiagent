@@ -1,13 +1,19 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
 import type { PaneNode, PaneLeaf, PaneSplit } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { PaneContainer } from './PaneContainer'
+import { PaneSplitDropTarget } from './PaneSplitDropTarget'
 
 function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void): React.ReactNode {
   if (node.type === 'leaf') {
-    return <PaneContainer key={node.id} pane={node as PaneLeaf} />
+    const pane = node as PaneLeaf
+    return (
+      <PaneSplitDropTarget key={pane.id} pane={pane}>
+        <PaneContainer pane={pane} />
+      </PaneSplitDropTarget>
+    )
   }
 
   const split = node as PaneSplit
@@ -44,6 +50,13 @@ export function PaneGrid(): JSX.Element {
   const addShellPane = usePanesStore((s) => s.addShellPane)
   const unzoom = usePanesStore((s) => s.unzoom)
   const findPane = usePanesStore((s) => s.findPane)
+
+  const [isSashDragging, setIsSashDragging] = useState(false)
+
+  useEffect(() => {
+    const elements = document.querySelectorAll<HTMLElement>('.xterm-screen')
+    elements.forEach((el) => { el.style.pointerEvents = isSashDragging ? 'none' : '' })
+  }, [isSashDragging])
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
@@ -140,7 +153,20 @@ export function PaneGrid(): JSX.Element {
   }
 
   return (
-    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <div
+      style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+      onMouseDownCapture={(e) => {
+        const target = e.target as HTMLElement
+        if (target.closest('[class*="sash-module_sash"]')) {
+          setIsSashDragging(true)
+          const onUp = (): void => {
+            setIsSashDragging(false)
+            window.removeEventListener('mouseup', onUp)
+          }
+          window.addEventListener('mouseup', onUp)
+        }
+      }}
+    >
       {renderNode(activeTab.rootNode, updatePaneRatio)}
     </div>
   )

@@ -140,6 +140,11 @@ interface PanesStore {
   toggleCommandPalette: () => void
   closeOverlays: () => void
 
+  // Drag state (pane rearrangement)
+  draggedPaneId: string | null
+  setDraggedPane: (paneId: string | null) => void
+  movePaneToSplit: (sourcePaneId: string, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean) => void
+
   // Getters
   activeTab: () => Tab | undefined
   getFocusedPane: () => PaneLeaf | undefined
@@ -155,6 +160,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   sidebarWidth: 220,
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
+  draggedPaneId: null,
 
   addTab: (initialCwd = 'C:\\') => {
     const leaf = makeLeaf(initialCwd, 'shell')
@@ -465,6 +471,28 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     } catch (err) {
       console.error('[MultiAgent] applyLayout failed:', err)
     }
+  },
+
+  setDraggedPane: (paneId) => set({ draggedPaneId: paneId }),
+
+  movePaneToSplit: (sourcePaneId, targetPaneId, direction, sourceBefore) => {
+    if (sourcePaneId === targetPaneId) return
+    set((s) => {
+      const tabs = s.tabs.map((t) => {
+        if (t.id !== s.activeTabId) return t
+        const sourceLeaf = findLeaf(t.rootNode, sourcePaneId)
+        if (!sourceLeaf) return t
+        const treeWithoutSource = removeLeaf(t.rootNode, sourcePaneId)
+        if (!treeWithoutSource) return t
+        if (!findLeaf(treeWithoutSource, targetPaneId)) return t
+        const newSplit = sourceBefore
+          ? makeSplit(direction, sourceLeaf, findLeaf(treeWithoutSource, targetPaneId)!)
+          : makeSplit(direction, findLeaf(treeWithoutSource, targetPaneId)!, sourceLeaf)
+        const newRoot = replaceNode(treeWithoutSource, targetPaneId, newSplit)
+        return { ...t, rootNode: newRoot, focusedPaneId: sourcePaneId }
+      })
+      return { tabs }
+    })
   },
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
