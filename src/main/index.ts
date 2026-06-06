@@ -1,17 +1,68 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, screen } from 'electron'
 import { join } from 'path'
+import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { BrowserViewManager } from './browser/BrowserViewManager'
 import { BrowserMcpServer } from './mcp/BrowserMcpServer'
 
+interface WindowState {
+  x: number
+  y: number
+  width: number
+  height: number
+  isMaximized: boolean
+}
+
+const DEFAULTS: WindowState = { x: 0, y: 0, width: 1280, height: 800, isMaximized: false }
+
+function windowStatePath(): string {
+  return join(app.getPath('userData'), 'window-state.json')
+}
+
+function loadWindowState(): WindowState {
+  try {
+    const raw = readFileSync(windowStatePath(), 'utf-8')
+    const saved = JSON.parse(raw) as WindowState
+    // Verify the saved position is still on a connected display
+    const visible = screen.getAllDisplays().some((d) => {
+      const b = d.bounds
+      return saved.x < b.x + b.width && saved.x + saved.width > b.x &&
+             saved.y < b.y + b.height && saved.y + saved.height > b.y
+    })
+    return visible ? saved : DEFAULTS
+  } catch {
+    return DEFAULTS
+  }
+}
+
+function saveWindowState(win: BrowserWindow): void {
+  const isMaximized = win.isMaximized()
+  const bounds = isMaximized ? undefined : win.getBounds()
+  try {
+    const current = loadWindowState()
+    const next: WindowState = {
+      x: bounds?.x ?? current.x,
+      y: bounds?.y ?? current.y,
+      width: bounds?.width ?? current.width,
+      height: bounds?.height ?? current.height,
+      isMaximized,
+    }
+    writeFileSync(windowStatePath(), JSON.stringify(next))
+  } catch { /* ignore write errors */ }
+}
+
 // Keep a reference so SessionIndex can be closed on quit
 let cleanupFn: (() => void) | null = null
 
 async function createWindow(): Promise<void> {
+  const state = loadWindowState()
+
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    x: state.x || undefined,
+    y: state.y || undefined,
+    width: state.width,
+    height: state.height,
     show: false,
     autoHideMenuBar: true,
     // Use standard frame on Windows, frameless on macOS
@@ -26,8 +77,11 @@ async function createWindow(): Promise<void> {
   })
 
   mainWindow.on('ready-to-show', () => {
+    if (state.isMaximized) mainWindow.maximize()
     mainWindow.show()
   })
+
+  mainWindow.on('close', () => saveWindowState(mainWindow))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)

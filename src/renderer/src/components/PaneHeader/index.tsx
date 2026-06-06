@@ -175,8 +175,8 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       )}
 
       {/* Action buttons */}
-      <HeaderButton title="Split vertical (Ctrl+Shift+E)" onClick={() => splitPane(pane.id, 'vertical')}>⊞</HeaderButton>
-      <HeaderButton title="Split horizontal (Ctrl+Shift+D)" onClick={() => splitPane(pane.id, 'horizontal')}>⊟</HeaderButton>
+      <HeaderButton title="Split vertical (Ctrl+Shift+E)" onClick={() => splitPane(pane.id, 'vertical', pane.paneType)}>⊞</HeaderButton>
+      <HeaderButton title="Split horizontal (Ctrl+Shift+D)" onClick={() => splitPane(pane.id, 'horizontal', pane.paneType)}>⊟</HeaderButton>
       <HeaderButton
         title={isZoomed ? 'Unzoom' : 'Zoom pane (Ctrl+Shift+Enter)'}
         onClick={() => (isZoomed ? unzoom() : zoomPane(pane.id))}

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Tab, PaneNode, PaneLeaf, PaneSplit, SplitDirection } from '../../../shared/types'
+import type { Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 
 function uuid(): string {
@@ -114,7 +114,7 @@ interface PanesStore {
 
   // Pane operations
   focusPane: (paneId: string) => void
-  splitPane: (paneId: string, direction: SplitDirection) => void
+  splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType) => Promise<void>
   closePane: (paneId: string) => void
   zoomPane: (paneId: string) => void
   unzoom: () => void
@@ -231,19 +231,34 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  splitPane: (paneId, direction) => {
+  splitPane: async (paneId, direction, paneType) => {
+    const existing = get().findPane(paneId)
+    const resolvedType: PaneType = paneType ?? existing?.paneType ?? 'shell'
+    const cwd = existing?.cwd ?? 'C:\\'
+    const newLeaf = makeLeaf(cwd, resolvedType)
+
     set((s) => {
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
-        const existing = findLeaf(t.rootNode, paneId)
-        if (!existing) return t
-        const newLeaf = makeLeaf(existing.cwd, 'shell')
-        const split = makeSplit(direction, existing, newLeaf)
+        const existingNode = findLeaf(t.rootNode, paneId)
+        if (!existingNode) return t
+        const split = makeSplit(direction, existingNode, newLeaf)
         const rootNode = replaceNode(t.rootNode, paneId, split)
         return { ...t, rootNode, focusedPaneId: newLeaf.id }
       })
       return { tabs }
     })
+
+    if (resolvedType === 'claude' && typeof window !== 'undefined' && window.ipc) {
+      try {
+        const result = await window.ipc.invoke('session:new', cwd) as { ptyId: string; sessionId: string | null }
+        if (result?.ptyId) get().setPtyId(newLeaf.id, result.ptyId)
+        if (result?.sessionId) get().setSessionId(newLeaf.id, result.sessionId)
+      } catch (err) {
+        console.error('session:new IPC failed', err)
+      }
+    }
+    // shell panes: Terminal handles pty:create automatically on mount
   },
 
   closePane: (paneId) => {

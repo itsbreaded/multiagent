@@ -4,7 +4,7 @@ import { useSessions } from '../../hooks/useSessions'
 import { SidebarHeader } from './SidebarHeader'
 import { SidebarSection } from './SidebarSection'
 import { SessionRow } from './SessionRow'
-import { OpenTabs } from './OpenTabs'
+import { TabSections } from './TabSections'
 
 export function Sidebar(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
@@ -13,7 +13,6 @@ export function Sidebar(): JSX.Element {
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
-  const tabs = usePanesStore((s) => s.tabs)
   const { resumable, archived, loading } = useSessions()
 
   const defaultCwd = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
@@ -85,12 +84,7 @@ export function Sidebar(): JSX.Element {
           </div>
         )}
 
-        {/* Open tabs - always visible, reflects current app state */}
-        {tabs.length > 0 && (
-          <SidebarSection title="Open" count={tabs.length} defaultOpen>
-            <OpenTabs />
-          </SidebarSection>
-        )}
+        <TabSections />
 
         {resumable.length > 0 && (
           <SidebarSection title="Recent" count={resumable.length} defaultOpen>
