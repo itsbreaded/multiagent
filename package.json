@@ -1,7 +1,7 @@
 {
   "name": "multiagent",
   "version": "0.1.0",
-  "description": "GUI-first terminal multiplexer for managing Claude Code sessions",
+  "description": "Multiagent",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

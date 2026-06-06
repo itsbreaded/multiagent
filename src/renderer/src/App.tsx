@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react'
-import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
@@ -194,9 +193,6 @@ export default function App(): JSX.Element {
         color: '#d4d4d4',
       }}
     >
-      {/* Title bar - drag region at top */}
-      <TitleBar />
-
       {/* Main content row */}
       <div
         style={{
