@@ -68,16 +68,52 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async click(selector: string): Promise<void> {
-    await this.win?.webContents.executeJavaScript(
-      `document.querySelector(${JSON.stringify(selector)})?.click()`
-    )
+    const wc = this.win?.webContents
+    if (!wc) return
+    const pos = await wc.executeJavaScript(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      })()
+    `, true) as { x: number; y: number } | null
+    if (!pos) throw new Error(`Selector not found: ${selector}`)
+    this.win!.focus()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
   }
 
   async type(selector: string, text: string): Promise<void> {
-    await this.win?.webContents.executeJavaScript(`
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (el) { el.focus(); el.value = ${JSON.stringify(text)}; el.dispatchEvent(new Event('input', {bubbles:true})); }
-    `)
+    const wc = this.win?.webContents
+    if (!wc) return
+    const pos = await wc.executeJavaScript(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      })()
+    `, true) as { x: number; y: number } | null
+    if (!pos) throw new Error(`Selector not found: ${selector}`)
+    this.win!.focus()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    for (const char of text) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wc.sendInputEvent({ type: 'char', keyCode: char } as any)
+    }
+    // Notify React of the new value — char events update the DOM but not React's synthetic event system
+    await wc.executeJavaScript(`
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (el) el.dispatchEvent(new Event('input', { bubbles: true }));
+      })()
+    `, true)
   }
 
   async screenshot(): Promise<string> {
@@ -87,7 +123,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async evaluate(js: string): Promise<unknown> {
-    return this.win?.webContents.executeJavaScript(js)
+    return this.win?.webContents.executeJavaScript(js, true)
   }
 
   async getContent(): Promise<string> {
