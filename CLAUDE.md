@@ -68,3 +68,26 @@ Key constraints:
 ### Browser panel (MCP)
 
 `BrowserViewManager` embeds a `BrowserView` that an MCP server (`BrowserMcpServer`) can control via tools in `src/main/mcp/tools/`. The renderer shows/hides it via `browser:toggle`.
+
+Available MCP tools (server name `multiagent-browser`):
+
+| Tool | Description |
+|---|---|
+| `browser_navigate` | Navigate to a URL |
+| `browser_go_back` | Go back one step in history |
+| `browser_go_forward` | Go forward one step in history |
+| `browser_click` | Click an element by CSS selector |
+| `browser_type` | Type text into an element |
+| `browser_hover` | Hover over an element (triggers mouseover/mouseenter + native mouse-move) |
+| `browser_keyboard` | Send a key press — e.g. `Return`, `Escape`, `Tab`, `F5` — with optional modifiers |
+| `browser_select` | Set a `<select>` dropdown value by CSS selector |
+| `browser_scroll` | Scroll the page by x/y pixels |
+| `browser_screenshot` | Capture a base64 PNG of the current view |
+| `browser_get_content` | Get visible text content of the page |
+| `browser_get_url` | Get the current URL |
+| `browser_evaluate` | Execute JavaScript and return the result |
+| `browser_wait_for` | Wait for a CSS selector to appear |
+| `browser_wait_for_load` | Wait for the page to finish loading |
+| `browser_set_cookies` | Set cookies on the current session |
+
+All tools are neutral primitives — no decision-making is embedded. To override JS dialogs (`alert`/`confirm`/`prompt`), use `browser_evaluate` to patch `window.confirm = () => true` etc. after navigation.

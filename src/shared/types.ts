@@ -117,11 +117,6 @@ export interface IPCChannels {
   // Main notifies renderer when a new claude session file is detected for a spawned PTY
   'session:detected': (ptyId: string, sessionId: string) => void
 
-  // --- Browser panel (MCP) ---
-  // Renderer shows/hides browser panel
-  'browser:toggle': () => void
-  // Main notifies renderer that an agent is using the browser
-  'browser:agent-active': (active: boolean) => void
 }
 
 // Helper type for extracting invoke vs event channels
@@ -139,11 +134,9 @@ export type InvokeChannels =
   | 'shell:copy-to-clipboard'
   | 'layout:save'
   | 'layout:load'
-  | 'browser:toggle'
 
 export type EventChannels =
   | 'sessions:updated'
   | 'pty:data'
   | 'pty:cwd'
   | 'session:detected'
-  | 'browser:agent-active'

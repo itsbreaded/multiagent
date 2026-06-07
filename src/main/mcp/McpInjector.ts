@@ -1,64 +1,45 @@
-import { writeFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { tmpdir } from 'os'
+import { homedir } from 'os'
 
-export interface McpConfig {
-  mcpServers: Record<
-    string,
-    {
-      command: string
-      args: string[]
-      env?: Record<string, string>
-    }
-  >
-}
+const SERVER_KEY = 'multiagent-browser'
 
 export class McpInjector {
-  private configPath: string
+  // Claude Code stores user-scope MCP servers in ~/.claude.json (not settings.json).
+  // The format mirrors what `claude mcp add --transport sse --scope user` writes.
+  private claudeJsonPath: string
 
   constructor() {
-    this.configPath = join(tmpdir(), 'multiagent-mcp-config.json')
+    this.claudeJsonPath = join(homedir(), '.claude.json')
   }
 
-  /**
-   * Write the MCP config file. Call this once when the server starts.
-   *
-   * @param serverCommand - How to launch the MCP server (e.g. path to a script or 'node server.js')
-   * @param serverArgs - Arguments to pass to the server command
-   */
-  writeConfig(serverCommand: string, serverArgs: string[]): void {
-    const config: McpConfig = {
-      mcpServers: {
-        'multiagent-browser': {
-          command: serverCommand,
-          args: serverArgs,
-        },
-      },
+  // Merge our MCP server entry into ~/.claude.json under the top-level mcpServers key.
+  // All other Claude Code state in the file is preserved.
+  inject(sseUrl: string): void {
+    let root: Record<string, unknown> = {}
+    try {
+      root = JSON.parse(readFileSync(this.claudeJsonPath, 'utf-8'))
+    } catch { /* file may not exist on first run */ }
+
+    if (!root.mcpServers || typeof root.mcpServers !== 'object') {
+      root.mcpServers = {}
     }
-    writeFileSync(this.configPath, JSON.stringify(config, null, 2), 'utf-8')
-  }
-
-  /**
-   * Returns env vars to inject when spawning a Claude Code session.
-   *
-   * NOTE: The exact env var name used by Claude Code to load MCP config needs
-   * verification against the Claude Code release notes / source. At time of
-   * writing the most likely candidates are:
-   *   - CLAUDE_MCP_CONFIG  (pointing to a JSON file path)
-   *   - MCP_CONFIG_PATH
-   *
-   * The JSON file format itself (`mcpServers` key) mirrors what Claude Code
-   * stores in its project-level `.claude/mcp.json` and user-level
-   * `~/.claude/mcp.json`, so the config file structure is safe regardless
-   * of which env var name ends up being correct.
-   */
-  getEnv(): Record<string, string> {
-    return {
-      CLAUDE_MCP_CONFIG: this.configPath,
+    ;(root.mcpServers as Record<string, unknown>)[SERVER_KEY] = {
+      type: 'sse',
+      url: sseUrl,
     }
+
+    writeFileSync(this.claudeJsonPath, JSON.stringify(root, null, 2), 'utf-8')
   }
 
-  getConfigPath(): string {
-    return this.configPath
+  // Remove our entry from ~/.claude.json on app quit.
+  cleanup(): void {
+    try {
+      const root = JSON.parse(readFileSync(this.claudeJsonPath, 'utf-8')) as Record<string, unknown>
+      const servers = root.mcpServers as Record<string, unknown> | undefined
+      if (!servers) return
+      delete servers[SERVER_KEY]
+      writeFileSync(this.claudeJsonPath, JSON.stringify(root, null, 2), 'utf-8')
+    } catch { /* ignore */ }
   }
 }

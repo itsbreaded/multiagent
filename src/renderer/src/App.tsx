@@ -4,7 +4,6 @@ import { TabBar } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
-import { BrowserPanel } from './components/BrowserPanel'
 import { RestorePrompt } from './components/RestorePrompt'
 import { usePanesStore } from './store/panes'
 import type { Tab } from '../../shared/types'
@@ -131,7 +130,6 @@ export default function App(): JSX.Element {
 
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
-  const [browserPanelVisible, setBrowserPanelVisible] = useState(false)
   const [restoreData, setRestoreData] = useState<{
     tabs: Tab[]
     sidebarWidth: number
@@ -172,15 +170,6 @@ export default function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [tabs, sidebarWidth, sidebarOpen])
 
-  // Open browser panel when main process signals an agent is using the browser
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.ipc) return
-    const unsub = window.ipc.on('browser:agent-active', (active: unknown) => {
-      if (active) setBrowserPanelVisible(true)
-    })
-    return unsub
-  }, [])
-
   return (
     <div
       style={{
@@ -215,12 +204,6 @@ export default function App(): JSX.Element {
           <PaneGrid />
         </div>
       </div>
-
-      {/* Browser panel (MCP-controlled embedded browser chrome) */}
-      <BrowserPanel
-        visible={browserPanelVisible}
-        onClose={() => setBrowserPanelVisible(false)}
-      />
 
       {/* Overlays */}
       {sessionBrowserOpen && <SessionBrowser />}

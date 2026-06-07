@@ -5,6 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { BrowserViewManager } from './browser/BrowserViewManager'
 import { BrowserMcpServer } from './mcp/BrowserMcpServer'
+import { McpInjector } from './mcp/McpInjector'
 
 interface WindowState {
   x: number
@@ -52,8 +53,10 @@ function saveWindowState(win: BrowserWindow): void {
   } catch { /* ignore write errors */ }
 }
 
-// Keep a reference so SessionIndex can be closed on quit
+// Keep references so resources can be cleaned up on quit
 let cleanupFn: (() => void) | null = null
+let mcpInjector: McpInjector | null = null
+let browserViewManager: BrowserViewManager | null = null
 
 async function createWindow(): Promise<void> {
   const state = loadWindowState()
@@ -82,6 +85,7 @@ async function createWindow(): Promise<void> {
   })
 
   mainWindow.on('close', () => saveWindowState(mainWindow))
+  mainWindow.on('closed', () => app.quit())
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -92,27 +96,17 @@ async function createWindow(): Promise<void> {
   const cleanup = await registerIpcHandlers(mainWindow)
   cleanupFn = cleanup ?? null
 
-  // Set up browser panel (MCP-controlled embedded browser)
-  const browserViewManager = new BrowserViewManager(mainWindow)
+  // Set up browser window (MCP-controlled separate window)
+  browserViewManager = new BrowserViewManager()
   browserViewManager.initialize()
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _browserMcpServer = new BrowserMcpServer(browserViewManager)
-
-  // Push browser state changes to renderer
-  browserViewManager.on('state-changed', (state: string) => {
-    const active = state === 'agent-controlled'
-    mainWindow.webContents.send('browser:agent-active', active)
-  })
-
-  // Toggle browser panel visibility on demand from renderer
-  ipcMain.handle('browser:toggle', () => {
-    const current = browserViewManager.getState()
-    if (current === 'hidden') {
-      browserViewManager.show()
-    } else {
-      browserViewManager.hide()
-    }
+  const browserMcpServer = new BrowserMcpServer(browserViewManager)
+  mcpInjector = new McpInjector()
+  browserMcpServer.startHttp().then((port) => {
+    mcpInjector!.inject(`http://127.0.0.1:${port}/sse`)
+    console.log(`[MultiAgent] Browser MCP server listening on port ${port}`)
+  }).catch((err) => {
+    console.error('[MultiAgent] Browser MCP server failed to start:', err)
   })
 
   // Load renderer
@@ -149,4 +143,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   cleanupFn?.()
+  mcpInjector?.cleanup()
+  browserViewManager?.destroy()
 })
