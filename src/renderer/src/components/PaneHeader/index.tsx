@@ -157,6 +157,11 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
 
       <div style={{ flex: 1 }} />
 
+      {/* Session ID — click to copy full ID */}
+      {pane.paneType === 'claude' && pane.sessionId && !renaming && (
+        <SessionIdBadge sessionId={pane.sessionId} />
+      )}
+
       {/* Status pill for claude panes */}
       {pane.paneType === 'claude' && !renaming && (
         <span
@@ -185,6 +190,41 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       </HeaderButton>
       <HeaderButton title="Close pane (Ctrl+Shift+W)" onClick={() => closePane(pane.id)}>×</HeaderButton>
     </div>
+  )
+}
+
+function SessionIdBadge({ sessionId }: { sessionId: string }): JSX.Element {
+  const [copied, setCopied] = useState(false)
+
+  function handleClick(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (window.ipc) {
+      window.ipc.invoke('shell:copy-to-clipboard', sessionId).catch(() => {})
+    } else {
+      navigator.clipboard.writeText(sessionId).catch(() => {})
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <span
+      onClick={handleClick}
+      title={`Session ID: ${sessionId}\nClick to copy`}
+      style={{
+        fontSize: 10,
+        fontFamily: 'monospace',
+        color: copied ? '#4ade80' : '#3a3b3e',
+        cursor: 'pointer',
+        flexShrink: 0,
+        letterSpacing: '0.02em',
+        transition: 'color 0.15s',
+      }}
+      onMouseEnter={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#6b7280' }}
+      onMouseLeave={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#3a3b3e' }}
+    >
+      {copied ? '✓' : sessionId.slice(0, 8)}
+    </span>
   )
 }
 

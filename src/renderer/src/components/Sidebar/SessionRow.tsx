@@ -33,6 +33,10 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
   }
 
   const statusDot = getStatusDot(session)
+  const projectLabel = session.projectName.split('/').pop() ?? session.projectName
+  const preview = session.firstMessage
+    ? session.firstMessage.replace(/^\/\w+\s*/, '').trim().slice(0, 55) || null
+    : null
 
   return (
     <>
@@ -42,10 +46,10 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
         onContextMenu={handleContextMenu}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        title={session.firstMessage ?? session.projectName}
+        title={session.cwd}
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           gap: 8,
           padding: '5px 12px 5px 16px',
           cursor: 'pointer',
@@ -56,33 +60,71 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
           position: 'relative',
         }}
       >
-        {/* Status dot */}
-        <span style={{ flexShrink: 0 }}>{statusDot}</span>
+        {/* Status dot — offset down to align with first text line */}
+        <span style={{ flexShrink: 0, marginTop: 2 }}>{statusDot}</span>
 
-        {/* Project name */}
-        <span
-          style={{
-            flex: 1,
-            fontSize: 12,
-            color: '#c9cdd1',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {session.projectName.split('/').pop()}
-        </span>
+        {/* Content column */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Line 1: project name + relative time */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span
+              style={{
+                flex: 1,
+                fontSize: 12,
+                color: '#c9cdd1',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {projectLabel}
+            </span>
+            <span style={{ fontSize: 11, color: '#6b7280', flexShrink: 0 }}>
+              {formatRelativeTime(session.lastActivity)}
+            </span>
+          </div>
 
-        {/* Relative time */}
-        <span
-          style={{
-            fontSize: 11,
-            color: '#6b7280',
-            flexShrink: 0,
-          }}
-        >
-          {formatRelativeTime(session.lastActivity)}
-        </span>
+          {/* Line 2: git branch badge + first message preview */}
+          {(session.gitBranch || preview) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+              {session.gitBranch && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: '#4a4b4e',
+                    backgroundColor: '#191a1d',
+                    border: '1px solid #2a2b2e',
+                    borderRadius: 3,
+                    padding: '0 4px',
+                    lineHeight: '14px',
+                    flexShrink: 0,
+                    maxWidth: 64,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {session.gitBranch}
+                </span>
+              )}
+              {preview && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: '#5a5c61',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: 1,
+                    lineHeight: '14px',
+                  }}
+                >
+                  {preview}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {contextMenu && (

@@ -144,6 +144,7 @@ interface PanesStore {
   draggedPaneId: string | null
   setDraggedPane: (paneId: string | null) => void
   movePaneToSplit: (sourcePaneId: string, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean) => void
+  movePaneToNewTab: (paneId: string) => void
 
   // Getters
   activeTab: () => Tab | undefined
@@ -491,6 +492,49 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setDraggedPane: (paneId) => set({ draggedPaneId: paneId }),
+
+  movePaneToNewTab: (paneId) => {
+    set((s) => {
+      let sourceTabIdx = -1
+      let sourceLeaf: PaneLeaf | undefined
+      for (let i = 0; i < s.tabs.length; i++) {
+        const tab = s.tabs[i]
+        if (!tab.rootNode) continue
+        const leaf = findLeaf(tab.rootNode, paneId)
+        if (leaf) { sourceTabIdx = i; sourceLeaf = leaf; break }
+      }
+      if (sourceTabIdx === -1 || !sourceLeaf) return s
+
+      const sourceTab = s.tabs[sourceTabIdx]
+      const newRoot = removeLeaf(sourceTab.rootNode!, paneId)
+      const newTab: Tab = { id: uuid(), rootNode: sourceLeaf, focusedPaneId: sourceLeaf.id }
+
+      let updatedTabs: Tab[]
+      if (!newRoot) {
+        // Source tab had only this pane — replace it with the new tab in-place
+        updatedTabs = [
+          ...s.tabs.slice(0, sourceTabIdx),
+          newTab,
+          ...s.tabs.slice(sourceTabIdx + 1),
+        ]
+      } else {
+        const leafIds = collectLeafIds(newRoot)
+        const updatedSource: Tab = {
+          ...sourceTab,
+          rootNode: newRoot,
+          focusedPaneId: sourceTab.focusedPaneId === paneId ? (leafIds[0] ?? '') : sourceTab.focusedPaneId,
+        }
+        updatedTabs = [
+          ...s.tabs.slice(0, sourceTabIdx),
+          updatedSource,
+          newTab,
+          ...s.tabs.slice(sourceTabIdx + 1),
+        ]
+      }
+
+      return { tabs: updatedTabs, activeTabId: newTab.id }
+    })
+  },
 
   movePaneToSplit: (sourcePaneId, targetPaneId, direction, sourceBefore) => {
     if (sourcePaneId === targetPaneId) return

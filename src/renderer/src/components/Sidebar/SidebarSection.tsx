@@ -5,6 +5,7 @@ interface SidebarSectionProps {
   count?: number
   defaultOpen?: boolean
   children: React.ReactNode
+  onContextMenu?: React.MouseEventHandler<HTMLButtonElement>
 }
 
 export function SidebarSection({
@@ -12,6 +13,7 @@ export function SidebarSection({
   count,
   defaultOpen = true,
   children,
+  onContextMenu,
 }: SidebarSectionProps): JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
 
@@ -19,6 +21,7 @@ export function SidebarSection({
     <div style={{ flexShrink: 0 }}>
       <button
         onClick={() => setOpen((o) => !o)}
+        onContextMenu={onContextMenu}
         style={{
           display: 'flex',
           alignItems: 'center',
