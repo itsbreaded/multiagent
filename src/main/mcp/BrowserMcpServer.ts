@@ -157,6 +157,65 @@ export class BrowserMcpServer {
           inputSchema: { type: 'object' as const, properties: {} },
         },
         {
+          name: 'browser_click_text',
+          description: 'Click the first visible element whose text content matches the given string. Preferred over browser_click when you know the label but not the CSS selector — e.g. clicking a menu item, button, or link by its visible label.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              text: { type: 'string', description: 'Visible text to search for (case-insensitive substring match by default)' },
+              exact: { type: 'boolean', description: 'If true, require an exact full-text match (default false)' },
+            },
+            required: ['text'],
+          },
+        },
+        {
+          name: 'browser_click_at',
+          description: 'Click at specific (x, y) pixel coordinates in the browser viewport. Use when a CSS selector is ambiguous or two elements overlap — check element positions first with browser_get_elements.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              x: { type: 'number', description: 'Horizontal pixel coordinate' },
+              y: { type: 'number', description: 'Vertical pixel coordinate' },
+            },
+            required: ['x', 'y'],
+          },
+        },
+        {
+          name: 'browser_hover_at',
+          description: 'Hover at specific (x, y) pixel coordinates, firing native mouse-move and JS mouse events at the element underneath. Use when browser_hover triggers the wrong element due to overlapping selectors.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              x: { type: 'number', description: 'Horizontal pixel coordinate' },
+              y: { type: 'number', description: 'Vertical pixel coordinate' },
+            },
+            required: ['x', 'y'],
+          },
+        },
+        {
+          name: 'browser_get_elements',
+          description: 'Return all elements matching a CSS selector with their tag, visible text, value, id, classes, and bounding box (x/y/width/height). Use this to discover selectors, inspect the DOM, or find element coordinates before browser_click_at / browser_hover_at.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              selector: { type: 'string', description: 'CSS selector to query' },
+            },
+            required: ['selector'],
+          },
+        },
+        {
+          name: 'browser_wait_for_text',
+          description: 'Wait until the given text appears anywhere on the page (case-insensitive). Useful for confirming a login succeeded, an error message appeared, or an async action completed.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              text: { type: 'string', description: 'Text to wait for' },
+              timeout_ms: { type: 'number', default: 5000 },
+            },
+            required: ['text'],
+          },
+        },
+        {
           name: 'browser_set_cookies',
           description: 'Set one or more cookies in the browser session',
           inputSchema: {
@@ -265,6 +324,27 @@ export class BrowserMcpServer {
 
           case 'browser_get_url':
             return { content: [{ type: 'text' as const, text: this.browser.getCurrentUrl() }] }
+
+          case 'browser_click_text':
+            await this.browser.clickText(args!.text as string, (args!.exact ?? false) as boolean)
+            return { content: [{ type: 'text' as const, text: `Clicked element with text: ${args!.text}` }] }
+
+          case 'browser_click_at':
+            await this.browser.clickAt(args!.x as number, args!.y as number)
+            return { content: [{ type: 'text' as const, text: `Clicked at (${args!.x}, ${args!.y})` }] }
+
+          case 'browser_hover_at':
+            await this.browser.hoverAt(args!.x as number, args!.y as number)
+            return { content: [{ type: 'text' as const, text: `Hovered at (${args!.x}, ${args!.y})` }] }
+
+          case 'browser_get_elements': {
+            const elements = await this.browser.getElements(args!.selector as string)
+            return { content: [{ type: 'text' as const, text: JSON.stringify(elements, null, 2) }] }
+          }
+
+          case 'browser_wait_for_text':
+            await this.browser.waitForText(args!.text as string, (args!.timeout_ms ?? 5000) as number)
+            return { content: [{ type: 'text' as const, text: `Text found: ${args!.text}` }] }
 
           case 'browser_set_cookies': {
             const cookies = (args!.cookies as Array<{ url: string; name: string; value: string; domain?: string; path?: string; secure?: boolean; http_only?: boolean; expiration_date?: number }>)

@@ -195,10 +195,115 @@ export class BrowserViewManager extends EventEmitter {
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return;
-        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+        const init = { bubbles: true, cancelable: true, clientX: ${pos.x}, clientY: ${pos.y} };
+        el.dispatchEvent(new MouseEvent('mousemove', init));
+        el.dispatchEvent(new MouseEvent('mouseover', init));
+        el.dispatchEvent(new MouseEvent('mouseenter', { ...init, bubbles: false }));
       })()
     `)
+  }
+
+  async hoverAt(x: number, y: number): Promise<void> {
+    const wc = this.win?.webContents
+    if (!wc) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseMove', x, y } as any)
+    await wc.executeJavaScript(`
+      (() => {
+        const el = document.elementFromPoint(${x}, ${y});
+        if (!el) return;
+        const init = { bubbles: true, cancelable: true, clientX: ${x}, clientY: ${y} };
+        el.dispatchEvent(new MouseEvent('mousemove', init));
+        el.dispatchEvent(new MouseEvent('mouseover', init));
+        el.dispatchEvent(new MouseEvent('mouseenter', { ...init, bubbles: false }));
+      })()
+    `)
+  }
+
+  async clickAt(x: number, y: number): Promise<void> {
+    const wc = this.win?.webContents
+    if (!wc) return
+    this.win!.focus()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 } as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 } as any)
+    await wc.executeJavaScript(`
+      (() => {
+        const el = document.elementFromPoint(${x}, ${y});
+        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: ${x}, clientY: ${y} }));
+      })()
+    `)
+  }
+
+  async clickText(text: string, exact = false): Promise<void> {
+    const wc = this.win?.webContents
+    if (!wc) return
+    const pos = await wc.executeJavaScript(`
+      (() => {
+        const exact = ${JSON.stringify(exact)};
+        const needle = ${JSON.stringify(text)};
+        const all = document.querySelectorAll('a, button, [role="button"], [role="menuitem"], [role="option"], li, td, th, label, span, div, p');
+        for (const el of all) {
+          const t = (el.innerText || el.textContent || '').trim();
+          if (exact ? t === needle : t.toLowerCase().includes(needle.toLowerCase())) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            }
+          }
+        }
+        return null;
+      })()
+    `, true) as { x: number; y: number } | null
+    if (!pos) throw new Error(`No visible element with text: ${JSON.stringify(text)}`)
+    this.win!.focus()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    await wc.executeJavaScript(`
+      (() => {
+        const el = document.elementFromPoint(${pos.x}, ${pos.y});
+        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      })()
+    `)
+  }
+
+  async getElements(selector: string): Promise<Array<{ tag: string; text: string; value: string; id: string; classes: string; x: number; y: number; width: number; height: number; visible: boolean }>> {
+    const wc = this.win?.webContents
+    if (!wc) return []
+    return await wc.executeJavaScript(`
+      (() => {
+        return [...document.querySelectorAll(${JSON.stringify(selector)})].map(el => {
+          const r = el.getBoundingClientRect();
+          return {
+            tag: el.tagName.toLowerCase(),
+            text: (el.innerText || el.textContent || '').trim().slice(0, 200),
+            value: el.value || '',
+            id: el.id || '',
+            classes: el.className || '',
+            x: Math.round(r.left),
+            y: Math.round(r.top),
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+            visible: r.width > 0 && r.height > 0,
+          };
+        });
+      })()
+    `, true) as Array<{ tag: string; text: string; value: string; id: string; classes: string; x: number; y: number; width: number; height: number; visible: boolean }>
+  }
+
+  async waitForText(text: string, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const found = (await this.win?.webContents.executeJavaScript(
+        `document.body.innerText.toLowerCase().includes(${JSON.stringify(text.toLowerCase())})`
+      )) as boolean | undefined
+      if (found) return
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    throw new Error(`Text not found within ${timeoutMs}ms: ${JSON.stringify(text)}`)
   }
 
   async keyboard(key: string, modifiers: string[] = []): Promise<void> {

@@ -77,17 +77,29 @@ Available MCP tools (server name `multiagent-browser`):
 | `browser_go_back` | Go back one step in history |
 | `browser_go_forward` | Go forward one step in history |
 | `browser_click` | Click an element by CSS selector |
+| `browser_click_text` | Click the first visible element whose text matches a string (case-insensitive substring by default; set `exact: true` for full match). Preferred when you know the label but not the selector. |
+| `browser_click_at` | Click at specific `(x, y)` pixel coordinates — use when selectors are ambiguous or elements overlap |
 | `browser_type` | Type text into an element |
-| `browser_hover` | Hover over an element (triggers mouseover/mouseenter + native mouse-move) |
+| `browser_hover` | Hover over an element by CSS selector (fires native mouse-move + `mousemove`/`mouseover`/`mouseenter` JS events) |
+| `browser_hover_at` | Hover at specific `(x, y)` pixel coordinates — use when `browser_hover` hits the wrong element |
 | `browser_keyboard` | Send a key press — e.g. `Return`, `Escape`, `Tab`, `F5` — with optional modifiers |
 | `browser_select` | Set a `<select>` dropdown value by CSS selector |
 | `browser_scroll` | Scroll the page by x/y pixels |
 | `browser_screenshot` | Capture a base64 PNG of the current view |
 | `browser_get_content` | Get visible text content of the page |
 | `browser_get_url` | Get the current URL |
+| `browser_get_elements` | Query all elements matching a CSS selector; returns tag, text, value, id, classes, and bounding box `(x/y/width/height)`. Use to discover selectors or find coordinates before `browser_click_at` / `browser_hover_at`. |
 | `browser_evaluate` | Execute JavaScript and return the result |
 | `browser_wait_for` | Wait for a CSS selector to appear |
+| `browser_wait_for_text` | Wait for a text string to appear anywhere on the page (case-insensitive) |
 | `browser_wait_for_load` | Wait for the page to finish loading |
 | `browser_set_cookies` | Set cookies on the current session |
 
 All tools are neutral primitives — no decision-making is embedded. To override JS dialogs (`alert`/`confirm`/`prompt`), use `browser_evaluate` to patch `window.confirm = () => true` etc. after navigation.
+
+### Recommended tool selection order
+
+1. **Know the text label** → `browser_click_text` (e.g. "Log Out", "Submit", "Accept")
+2. **Know a unique CSS selector** → `browser_click` / `browser_hover`
+3. **Selectors ambiguous or overlapping** → `browser_get_elements` to find coordinates, then `browser_click_at` / `browser_hover_at`
+4. **Need to inspect/debug the DOM** → `browser_get_elements` before reaching for `browser_evaluate`
