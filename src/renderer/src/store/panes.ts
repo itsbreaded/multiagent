@@ -104,7 +104,7 @@ interface PanesStore {
   commandPaletteOpen: boolean
 
   // Tab operations
-  addTab: (initialCwd?: string) => void
+  addTab: () => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, label: string) => void
@@ -162,9 +162,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   commandPaletteOpen: false,
   draggedPaneId: null,
 
-  addTab: (initialCwd = 'C:\\') => {
-    const leaf = makeLeaf(initialCwd, 'shell')
-    const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
+  addTab: () => {
+    const tab: Tab = { id: uuid(), focusedPaneId: '' }
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
   },
 
@@ -191,9 +190,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => {
       const tab = s.tabs.find((t) => t.id === tabId)
       if (!tab) return s
-      const focusedLeaf =
-        findLeaf(tab.rootNode, tab.focusedPaneId) ??
-        (tab.rootNode.type === 'leaf' ? tab.rootNode : null)
+      const focusedLeaf = tab.rootNode
+        ? (findLeaf(tab.rootNode, tab.focusedPaneId) ?? (tab.rootNode.type === 'leaf' ? tab.rootNode : null))
+        : null
       const cwd = focusedLeaf?.cwd ?? 'C:\\'
       const leaf = makeLeaf(cwd, 'shell')
       const newTab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
@@ -240,6 +239,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => {
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
+        if (!t.rootNode) return t
         const existingNode = findLeaf(t.rootNode, paneId)
         if (!existingNode) return t
         const split = makeSplit(direction, existingNode, newLeaf)
@@ -269,20 +269,21 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
     }
     set((s) => {
+      const tabsToRemove = new Set<string>()
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
+        if (!t.rootNode) return t
         const newRoot = removeLeaf(t.rootNode, paneId)
         if (!newRoot) {
-          // Last pane closed - remove the tab entirely (handled below)
-          return { ...t, rootNode: t.rootNode, focusedPaneId: '' }
+          tabsToRemove.add(t.id)
+          return t
         }
         const leafIds = collectLeafIds(newRoot)
         const focusedPaneId =
           t.focusedPaneId === paneId ? (leafIds[0] ?? '') : t.focusedPaneId
         return { ...t, rootNode: newRoot, focusedPaneId }
       })
-      // Clean up tabs that have no panes
-      const survivingTabs = tabs.filter((t) => t.focusedPaneId !== '')
+      const survivingTabs = tabs.filter((t) => !tabsToRemove.has(t.id))
       const activeTabId = survivingTabs.find((t) => t.id === s.activeTabId)
         ? s.activeTabId
         : (survivingTabs[survivingTabs.length - 1]?.id ?? '')
@@ -297,7 +298,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   updatePaneRatio: (splitId, ratio) => {
     set((s) => {
       const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId) return t
+        if (t.id !== s.activeTabId || !t.rootNode) return t
         return { ...t, rootNode: updateRatioInTree(t.rootNode, splitId, ratio) }
       })
       return { tabs }
@@ -307,13 +308,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setPtyId: (paneId, ptyId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) => ({ ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId }) })),
+      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId }) } : t),
     }))
   },
 
   setPaneCwd: (ptyId, cwd) => {
     set((s) => ({
       tabs: s.tabs.map((t) => {
+        if (!t.rootNode) return t
         function patchCwd(node: PaneNode): PaneNode {
           if (node.type === 'leaf') return node.ptyId === ptyId ? { ...node, cwd } : node
           return { ...node, first: patchCwd(node.first), second: patchCwd(node.second) }
@@ -325,17 +327,17 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   setPaneCustomName: (paneId, name) => {
     set((s) => ({
-      tabs: s.tabs.map((t) => ({
-        ...t,
-        rootNode: updateLeaf(t.rootNode, paneId, { customName: name.trim() || undefined }),
-      })),
+      tabs: s.tabs.map((t) => t.rootNode
+        ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { customName: name.trim() || undefined }) }
+        : t
+      ),
     }))
   },
 
   setSessionId: (paneId, sessionId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) => ({ ...t, rootNode: updateLeaf(t.rootNode, paneId, { sessionId }) })),
+      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { sessionId }) } : t),
     }))
   },
 
@@ -349,8 +351,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       }
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
-        const existing = t.rootNode
-        const split = makeSplit('vertical', existing, leaf)
+        if (!t.rootNode) return { ...t, rootNode: leaf, focusedPaneId: leaf.id }
+        const split = makeSplit('vertical', t.rootNode, leaf)
         return { ...t, rootNode: split, focusedPaneId: leaf.id }
       })
       return { tabs }
@@ -391,8 +393,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       }
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
-        const existing = t.rootNode
-        const split = makeSplit(direction, existing, leaf)
+        if (!t.rootNode) return { ...t, rootNode: leaf, focusedPaneId: leaf.id }
+        const split = makeSplit(direction, t.rootNode, leaf)
         return { ...t, rootNode: split, focusedPaneId: leaf.id }
       })
       return { tabs }
@@ -421,8 +423,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       }
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
-        const existing = t.rootNode
-        const split = makeSplit(direction, existing, leaf)
+        if (!t.rootNode) return { ...t, rootNode: leaf, focusedPaneId: leaf.id }
+        const split = makeSplit(direction, t.rootNode, leaf)
         return { ...t, rootNode: split, focusedPaneId: leaf.id }
       })
       return { tabs }
@@ -453,7 +455,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         }
         return { ...node, first: sanitizeNode(node.first), second: sanitizeNode(node.second) }
       }
-      const tabs = saved.tabs.map((t) => ({ ...t, rootNode: sanitizeNode(t.rootNode) }))
+      const tabs = saved.tabs.map((t) => t.rootNode ? { ...t, rootNode: sanitizeNode(t.rootNode) } : t)
 
       set({
         tabs,
@@ -466,7 +468,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
       // Auto-resume claude sessions that have a known sessionId
       for (const tab of tabs) {
-        for (const leaf of collectLeaves(tab.rootNode)) {
+        for (const leaf of (tab.rootNode ? collectLeaves(tab.rootNode) : [])) {
           if (leaf.paneType === 'claude' && leaf.sessionId) {
             try {
               const result = await window.ipc.invoke('session:resume', leaf.sessionId, leaf.cwd) as { ptyId: string }
@@ -474,10 +476,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
             } catch {
               // Session file deleted or corrupt — fall back to shell pane
               set((s) => ({
-                tabs: s.tabs.map((t) => ({
-                  ...t,
-                  rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', sessionId: undefined }),
-                })),
+                tabs: s.tabs.map((t) => t.rootNode
+                  ? { ...t, rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', sessionId: undefined }) }
+                  : t
+                ),
               }))
             }
           }
@@ -494,7 +496,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (sourcePaneId === targetPaneId) return
     set((s) => {
       const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId) return t
+        if (t.id !== s.activeTabId || !t.rootNode) return t
         const sourceLeaf = findLeaf(t.rootNode, sourcePaneId)
         if (!sourceLeaf) return t
         const treeWithoutSource = removeLeaf(t.rootNode, sourcePaneId)
@@ -524,20 +526,21 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   getFocusedPane: () => {
     const s = get()
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    if (!tab || !tab.focusedPaneId) return undefined
+    if (!tab || !tab.focusedPaneId || !tab.rootNode) return undefined
     return findLeaf(tab.rootNode, tab.focusedPaneId) ?? undefined
   },
 
   findPane: (paneId) => {
     const s = get()
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    if (!tab) return undefined
+    if (!tab || !tab.rootNode) return undefined
     return findLeaf(tab.rootNode, paneId) ?? undefined
   },
 
   findPaneBySessionId: (sessionId) => {
     const s = get()
     for (const tab of s.tabs) {
+      if (!tab.rootNode) continue
       const leaf = findLeafBySessionId(tab.rootNode, sessionId)
       if (leaf) return leaf
     }
@@ -559,6 +562,7 @@ if (typeof window !== 'undefined' && window.ipc) {
     if (typeof ptyId !== 'string' || typeof sessionId !== 'string') return
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
+      if (!tab.rootNode) continue
       const leaves = collectLeaves(tab.rootNode)
       const pane = leaves.find((l) => l.ptyId === ptyId)
       if (pane) {

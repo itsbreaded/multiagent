@@ -60,8 +60,8 @@ export function PaneGrid(): JSX.Element {
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
-  // Empty state
-  if (!activeTab) {
+  // Empty state: no tabs or active tab has no panes yet
+  if (!activeTab || !activeTab.rootNode) {
     return (
       <div
         style={{

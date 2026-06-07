@@ -131,7 +131,7 @@ function tabSummary(tab: Tab): string {
     if (node.type === 'leaf') return node.cwd
     return firstLeafCwd(node.first) ?? firstLeafCwd(node.second)
   }
-  const cwd = firstLeafCwd(tab.rootNode)
+  const cwd = tab.rootNode ? firstLeafCwd(tab.rootNode) : null
   if (!cwd) return 'Tab'
   const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean)
   return parts.slice(-2).join('/') || cwd

@@ -45,7 +45,7 @@ export type PaneNode = PaneLeaf | PaneSplit
 // A tab contains a pane tree
 export interface Tab {
   id: string
-  rootNode: PaneNode
+  rootNode?: PaneNode   // undefined = empty tab showing landing page
   focusedPaneId: string
   customLabel?: string  // user-set via rename; overrides auto-generated label when present
 }

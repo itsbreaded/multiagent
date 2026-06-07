@@ -92,38 +92,69 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     xterm.open(containerRef.current)
     fitAddon.fit()
 
-    // Intercept keyboard shortcuts before xterm sees them
+    // Intercept keyboard shortcuts before xterm sees them.
+    // xterm only calls stopPropagation when it processes a key (return true).
+    // When we return false, we must call e.stopPropagation() ourselves or the
+    // event bubbles to App.tsx's window listener and fires the action a second time.
     xterm.attachCustomKeyEventHandler((e) => {
-      // xterm.js 6.x calls this handler for both keydown AND keypress events.
-      // Shift+Enter must be checked before the keydown guard so the keypress
-      // event is also suppressed — otherwise xterm sends \r on keypress and
-      // the message submits immediately after the newline is inserted.
+      // Shift+Enter: checked before keydown guard so keypress is also suppressed.
+      // Without this, xterm sends \r on keypress right after the newline is inserted.
       if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Enter') {
         if (e.type === 'keydown') {
           const ptyId = ptyIdRef.current
           if (ptyId) window.ipc.invoke('pty:write', ptyId, '\x1b[13;2u').catch(() => {})
         }
+        e.stopPropagation()
+        e.preventDefault()
         return false
       }
 
       if (e.type !== 'keydown') return true
 
+      const stop = (): false => { e.stopPropagation(); e.preventDefault(); return false }
+      const mod = e.ctrlKey || e.metaKey
+      const store = usePanesStore.getState()
+
       // Ctrl+Shift+C: copy selection
-      if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+      if (mod && e.shiftKey && e.code === 'KeyC') {
         const selection = xterm.getSelection()
         if (selection) navigator.clipboard.writeText(selection).catch(() => {})
-        return false
+        return stop()
       }
 
       // Ctrl+Shift+V: paste from clipboard
-      if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
+      if (mod && e.shiftKey && e.code === 'KeyV') {
         const ptyId = ptyIdRef.current
         if (ptyId) {
           navigator.clipboard.readText().then((text) => {
             if (text) window.ipc.invoke('pty:write', ptyId, text).catch(() => {})
           }).catch(() => {})
         }
-        return false
+        return stop()
+      }
+
+      // Global app shortcuts — Ctrl+Shift chord
+      if (mod && e.shiftKey) {
+        if (e.code === 'KeyE') { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical'); return stop() }
+        if (e.code === 'KeyD') { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal'); return stop() }
+        if (e.code === 'KeyP') { store.toggleCommandPalette(); return stop() }
+        if (e.code === 'KeyO') { store.toggleSessionBrowser(); return stop() }
+        if (e.code === 'KeyW') { const p = store.getFocusedPane(); if (p) store.closePane(p.id); return stop() }
+        if (e.code === 'Enter') {
+          if (store.zoomedPaneId) { store.unzoom() } else { const p = store.getFocusedPane(); if (p) store.zoomPane(p.id) }
+          return stop()
+        }
+      }
+
+      // Global app shortcuts — Ctrl chord (no shift)
+      if (mod && !e.shiftKey) {
+        if (e.code === 'KeyT') { store.addTab(); return stop() }
+        if (e.code === 'KeyW') { if (store.activeTabId) store.closeTab(store.activeTabId); return stop() }
+        if (e.code === 'KeyB') { store.toggleSidebar(); return stop() }
+      }
+
+      if (!mod && !e.shiftKey && e.code === 'Escape') {
+        if (store.sessionBrowserOpen || store.commandPaletteOpen) { store.closeOverlays(); return stop() }
       }
 
       return true

@@ -222,6 +222,7 @@ export function TabBar(): JSX.Element {
   }, [renamingTabId, renameValue, renameTab])
 
   function hasClaudePane(tab: Tab): boolean {
+    if (!tab.rootNode) return false
     return collectLeaves(tab.rootNode).some((l) => l.paneType === 'claude')
   }
 

@@ -92,8 +92,8 @@ function useGlobalKeyboard() {
         return
       }
 
-      // Ctrl/Cmd + P: toggle command palette
-      if (e.key === 'p' && !e.shiftKey) {
+      // Ctrl/Cmd + Shift + P: toggle command palette
+      if (e.key === 'P' && e.shiftKey) {
         e.preventDefault()
         toggleCommandPalette()
         return

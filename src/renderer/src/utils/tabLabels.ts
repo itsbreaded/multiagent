@@ -32,6 +32,7 @@ export function paneLabelText(pane: PaneLeaf, sessions: Session[]): string {
 }
 
 function baseLabel(tab: Tab, sessions: Session[]): string {
+  if (!tab.rootNode) return 'New Tab'
   const leaf = findLeafById(tab.rootNode, tab.focusedPaneId) ?? firstLeaf(tab.rootNode)
   if (!leaf) return 'Shell'
   if (leaf.sessionId) {

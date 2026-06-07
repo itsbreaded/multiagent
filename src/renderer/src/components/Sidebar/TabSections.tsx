@@ -19,7 +19,7 @@ export function TabSections(): JSX.Element {
     <>
       {tabs.map((tab) => {
         const label = tabLabels.get(tab.id) ?? 'Shell'
-        const leaves = collectLeaves(tab.rootNode)
+        const leaves = tab.rootNode ? collectLeaves(tab.rootNode) : []
         const isActive = tab.id === activeTabId
 
         return (

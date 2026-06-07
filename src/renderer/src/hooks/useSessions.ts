@@ -21,7 +21,7 @@ export function useSessions() {
   // needed — the panes store is the source of truth for what's running.
   const liveIds = useMemo(() => {
     const ids = new Set<string>()
-    for (const tab of tabs) collectSessionIds(tab.rootNode, ids)
+    for (const tab of tabs) if (tab.rootNode) collectSessionIds(tab.rootNode, ids)
     return ids
   }, [tabs])
 
