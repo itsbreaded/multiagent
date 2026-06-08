@@ -11,7 +11,7 @@ npm run typecheck  # TypeScript type-check without emitting
 npm run dist       # build + package to dist\win-unpacked\ (requires Windows Developer Mode)
 ```
 
-`postinstall` runs `electron-rebuild` automatically after `npm install`, rebuilding `node-pty` and `better-sqlite3` for the Electron ABI. Do not re-run it manually or add `--ignore-scripts`.
+`postinstall` runs the `electron-rebuild` CLI from `@electron/rebuild` automatically after `npm install`, rebuilding `node-pty` and `better-sqlite3` for the Electron ABI. Do not re-run it manually or add `--ignore-scripts`.
 
 ### Packaging notes
 
