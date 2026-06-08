@@ -23,7 +23,7 @@ type Entry = SessionEntry | ActionEntry
 
 export function CommandPalette(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
-  const addTab = usePanesStore((s) => s.addTab)
+  const addShellPane = usePanesStore((s) => s.addShellPane)
   const newSession = usePanesStore((s) => s.newSession)
   const splitPane = usePanesStore((s) => s.splitPane)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
@@ -44,7 +44,6 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'New Claude session',
-      shortcut: HOTKEYS.newTab.display,
       icon: 'C',
       run: () => {
         const pane = getFocusedPane()
@@ -55,7 +54,6 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'New Codex session',
-      shortcut: HOTKEYS.newTab.display,
       icon: 'X',
       run: () => {
         const pane = getFocusedPane()
@@ -66,9 +64,12 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'Open shell pane',
-      shortcut: HOTKEYS.newTab.display,
       icon: '>',
-      run: () => { addTab(); closeOverlays() },
+      run: () => {
+        const pane = getFocusedPane()
+        addShellPane(pane?.cwd ?? window.homeDir ?? 'C:\\')
+        closeOverlays()
+      },
     },
     {
       kind: 'action',
@@ -99,7 +100,7 @@ export function CommandPalette(): JSX.Element {
       icon: '≡',
       run: () => { toggleSidebar(); closeOverlays() },
     },
-  ], [addTab, closeOverlays, splitPane, getFocusedPane, toggleSidebar, newSession])
+  ], [addShellPane, closeOverlays, splitPane, getFocusedPane, toggleSidebar, newSession])
 
   const filteredSessions: Session[] = query ? search(query) : sessions.slice(0, 6)
   const filteredActions: ActionEntry[] = query
