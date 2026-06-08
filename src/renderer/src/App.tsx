@@ -6,6 +6,7 @@ import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
 import { RestorePrompt } from './components/RestorePrompt'
 import { usePanesStore } from './store/panes'
+import { HOTKEYS, hotkeyKey, eventKey } from './utils/hotkeys'
 import type { Tab } from '../../shared/types'
 
 function useGlobalKeyboard() {
@@ -24,86 +25,25 @@ function useGlobalKeyboard() {
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
 
   useEffect(() => {
+    const dispatch: Record<string, () => void> = {
+      [hotkeyKey(HOTKEYS.newTab)]:          () => addTab(),
+      [hotkeyKey(HOTKEYS.closeTab)]:        () => { if (activeTabId) closeTab(activeTabId) },
+      [hotkeyKey(HOTKEYS.splitVertical)]:   () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'vertical') },
+      [hotkeyKey(HOTKEYS.splitHorizontal)]: () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'horizontal') },
+      [hotkeyKey(HOTKEYS.closePane)]:       () => { const p = getFocusedPane(); if (p) closePane(p.id) },
+      [hotkeyKey(HOTKEYS.zoomPane)]:        () => { if (zoomedPaneId) { unzoom() } else { const p = getFocusedPane(); if (p) zoomPane(p.id) } },
+      [hotkeyKey(HOTKEYS.toggleSidebar)]:   () => toggleSidebar(),
+      [hotkeyKey(HOTKEYS.commandPalette)]:  () => toggleCommandPalette(),
+      [hotkeyKey(HOTKEYS.sessionBrowser)]:  () => toggleSessionBrowser(),
+    }
+
     function handler(e: KeyboardEvent) {
-      const mod = e.ctrlKey || e.metaKey
-
-      if (!mod) {
-        if (e.key === 'Escape') {
-          closeOverlays()
-        }
+      if (!e.ctrlKey && !e.metaKey) {
+        if (e.key === 'Escape') closeOverlays()
         return
       }
-
-      // Ctrl/Cmd + T: new tab
-      if (e.key === 't' && !e.shiftKey) {
-        e.preventDefault()
-        addTab()
-        return
-      }
-
-      // Ctrl/Cmd + W: close active tab
-      if (e.key === 'w' && !e.shiftKey) {
-        e.preventDefault()
-        if (activeTabId) closeTab(activeTabId)
-        return
-      }
-
-      // Ctrl/Cmd + Shift + E: split vertical
-      if (e.key === 'E' && e.shiftKey) {
-        e.preventDefault()
-        const pane = getFocusedPane()
-        if (pane) splitPane(pane.id, 'vertical')
-        return
-      }
-
-      // Ctrl/Cmd + Shift + D: split horizontal
-      if (e.key === 'D' && e.shiftKey) {
-        e.preventDefault()
-        const pane = getFocusedPane()
-        if (pane) splitPane(pane.id, 'horizontal')
-        return
-      }
-
-      // Ctrl/Cmd + Shift + W: close pane
-      if (e.key === 'W' && e.shiftKey) {
-        e.preventDefault()
-        const pane = getFocusedPane()
-        if (pane) closePane(pane.id)
-        return
-      }
-
-      // Ctrl/Cmd + Shift + Enter: zoom/unzoom
-      if (e.key === 'Enter' && e.shiftKey) {
-        e.preventDefault()
-        if (zoomedPaneId) {
-          unzoom()
-        } else {
-          const pane = getFocusedPane()
-          if (pane) zoomPane(pane.id)
-        }
-        return
-      }
-
-      // Ctrl/Cmd + B: toggle sidebar
-      if (e.key === 'b' && !e.shiftKey) {
-        e.preventDefault()
-        toggleSidebar()
-        return
-      }
-
-      // Ctrl/Cmd + Shift + P: toggle command palette
-      if (e.key === 'P' && e.shiftKey) {
-        e.preventDefault()
-        toggleCommandPalette()
-        return
-      }
-
-      // Ctrl/Cmd + Shift + O: toggle session browser
-      if (e.key === 'O' && e.shiftKey) {
-        e.preventDefault()
-        toggleSessionBrowser()
-        return
-      }
+      const fn = dispatch[eventKey(e)]
+      if (fn) { e.preventDefault(); fn() }
     }
 
     window.addEventListener('keydown', handler)

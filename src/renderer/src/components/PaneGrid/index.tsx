@@ -5,6 +5,7 @@ import type { PaneNode, PaneLeaf, PaneSplit } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { PaneContainer } from './PaneContainer'
 import { PaneSplitDropTarget } from './PaneSplitDropTarget'
+import { DirPicker } from '../DirPicker'
 
 function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void): React.ReactNode {
   if (node.type === 'leaf') {
@@ -52,6 +53,7 @@ export function PaneGrid(): JSX.Element {
   const findPane = usePanesStore((s) => s.findPane)
 
   const [isSashDragging, setIsSashDragging] = useState(false)
+  const [dirPickerFor, setDirPickerFor] = useState<'claude' | 'shell' | null>(null)
 
   useEffect(() => {
     const elements = document.querySelectorAll<HTMLElement>('.xterm-screen')
@@ -59,6 +61,7 @@ export function PaneGrid(): JSX.Element {
   }, [isSashDragging])
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
+  const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
 
   // Empty state: no tabs or active tab has no panes yet
   if (!activeTab || !activeTab.rootNode) {
@@ -76,40 +79,103 @@ export function PaneGrid(): JSX.Element {
         <div style={{ textAlign: 'center', userSelect: 'none' }}>
           <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.2 }}>[]</div>
           <div style={{ fontSize: 14, color: '#4a4b4e', marginBottom: 16 }}>No sessions open</div>
-          <button
-            onClick={() => newSession(DEFAULT_CWD)}
-            style={{
-              display: 'block',
-              width: '100%',
-              marginBottom: 8,
-              padding: '8px 20px',
-              backgroundColor: '#1e2022',
-              border: '1px solid #2a2b2e',
-              borderRadius: 6,
-              color: '#c9cdd1',
-              fontSize: 13,
-              cursor: 'pointer',
-            }}
-          >
-            + New Claude Session
-          </button>
-          <button
-            onClick={() => addShellPane(DEFAULT_CWD)}
-            style={{
-              display: 'block',
-              width: '100%',
-              padding: '8px 20px',
-              backgroundColor: 'transparent',
-              border: '1px solid #2a2b2e',
-              borderRadius: 6,
-              color: '#6b7280',
-              fontSize: 13,
-              cursor: 'pointer',
-            }}
-          >
-            Open Shell
-          </button>
+
+          {/* New Claude Session row */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+            <button
+              onClick={() => newSession(cwdForNew)}
+              style={{
+                flex: 1,
+                padding: '8px 20px',
+                backgroundColor: '#1e2022',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#c9cdd1',
+                fontSize: 13,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              + New Claude Session
+            </button>
+            <button
+              onClick={() => setDirPickerFor('claude')}
+              title="Start session in a different directory"
+              style={{
+                padding: '8px 10px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#4a4b4e',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#c9cdd1' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
+            >
+              ▸
+            </button>
+          </div>
+
+          {/* Open Shell row */}
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              onClick={() => addShellPane(cwdForNew)}
+              style={{
+                flex: 1,
+                padding: '8px 20px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#6b7280',
+                fontSize: 13,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              Open Shell
+            </button>
+            <button
+              onClick={() => setDirPickerFor('shell')}
+              title="Start shell in a different directory"
+              style={{
+                padding: '8px 10px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#4a4b4e',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
+            >
+              ▸
+            </button>
+          </div>
+
+          {/* Optional hint when tab has a default dir */}
+          {activeTab?.defaultCwd && (
+            <div style={{ marginTop: 10, fontSize: 11, color: '#3a3b3e' }}>
+              default: {activeTab.defaultCwd}
+            </div>
+          )}
         </div>
+
+        {dirPickerFor && (
+          <DirPicker
+            title={dirPickerFor === 'claude' ? 'Start Claude session in...' : 'Start shell in...'}
+            initial={cwdForNew}
+            confirmLabel="Start"
+            skipLabel="Cancel"
+            onConfirm={(dir) => {
+              if (dirPickerFor === 'claude') newSession(dir)
+              else addShellPane(dir)
+              setDirPickerFor(null)
+            }}
+            onSkip={() => setDirPickerFor(null)}
+          />
+        )}
       </div>
     )
   }

@@ -3,6 +3,7 @@ import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
+import { HOTKEYS } from '../../utils/hotkeys'
 
 interface SessionEntry {
   kind: 'session'
@@ -41,21 +42,21 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'New Claude session',
-      shortcut: 'Ctrl+T',
+      shortcut: HOTKEYS.newTab.display,
       icon: '+',
       run: () => { addTab(); closeOverlays() },
     },
     {
       kind: 'action',
       label: 'Open shell pane',
-      shortcut: 'Ctrl+T',
+      shortcut: HOTKEYS.newTab.display,
       icon: '>',
       run: () => { addTab(); closeOverlays() },
     },
     {
       kind: 'action',
       label: 'Split pane vertical',
-      shortcut: 'Ctrl+Shift+E',
+      shortcut: HOTKEYS.splitVertical.display,
       icon: '|',
       run: () => {
         const pane = getFocusedPane()
@@ -66,7 +67,7 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'Split pane horizontal',
-      shortcut: 'Ctrl+Shift+D',
+      shortcut: HOTKEYS.splitHorizontal.display,
       icon: '-',
       run: () => {
         const pane = getFocusedPane()
@@ -77,7 +78,7 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'Toggle sidebar',
-      shortcut: 'Ctrl+B',
+      shortcut: HOTKEYS.toggleSidebar.display,
       icon: '≡',
       run: () => { toggleSidebar(); closeOverlays() },
     },

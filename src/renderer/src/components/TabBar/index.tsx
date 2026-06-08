@@ -3,6 +3,8 @@ import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import type { Tab } from '../../../../shared/types'
 import { computeLabels, collectLeaves } from '../../utils/tabLabels'
+import { DirPicker } from '../DirPicker'
+import { HOTKEYS } from '../../utils/hotkeys'
 
 // --- Sub-components ---
 
@@ -61,6 +63,7 @@ function ContextMenu({
   tabs,
   onClose,
   onRename,
+  onChangeDefaultDir,
   closeTab,
   closeOtherTabs,
   closeTabsToRight,
@@ -70,6 +73,7 @@ function ContextMenu({
   tabs: Tab[]
   onClose: () => void
   onRename: (tabId: string) => void
+  onChangeDefaultDir: (tabId: string) => void
   closeTab: (id: string) => void
   closeOtherTabs: (id: string) => void
   closeTabsToRight: (id: string) => void
@@ -78,6 +82,10 @@ function ContextMenu({
   const idx = tabs.findIndex((t) => t.id === menu.tabId)
   const hasRight = idx < tabs.length - 1
   const hasOthers = tabs.length > 1
+  const tab = tabs[idx]
+  const defaultDirLabel = tab?.defaultCwd
+    ? `Change Default Directory  (${tab.defaultCwd.split(/[\\/]/).pop()})`
+    : 'Set Default Directory'
 
   function item(label: string, onClick: () => void, disabled = false): JSX.Element {
     return (
@@ -123,11 +131,12 @@ function ContextMenu({
         border: '1px solid #2a2b2e',
         borderRadius: 6,
         padding: '4px 0',
-        minWidth: 190,
+        minWidth: 210,
         boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
       }}
     >
       {item('Rename Tab', () => { onRename(menu.tabId); onClose() })}
+      {item(defaultDirLabel, () => { onChangeDefaultDir(menu.tabId); onClose() })}
       {separator()}
       {item('Close Tab', () => { closeTab(menu.tabId); onClose() })}
       {item('Close Other Tabs', () => { closeOtherTabs(menu.tabId); onClose() }, !hasOthers)}
@@ -146,6 +155,7 @@ export function TabBar(): JSX.Element {
   const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const closeTab = usePanesStore((s) => s.closeTab)
   const addTab = usePanesStore((s) => s.addTab)
+  const setTabDefaultCwd = usePanesStore((s) => s.setTabDefaultCwd)
   const renameTab = usePanesStore((s) => s.renameTab)
   const duplicateTab = usePanesStore((s) => s.duplicateTab)
   const closeOtherTabs = usePanesStore((s) => s.closeOtherTabs)
@@ -179,6 +189,13 @@ export function TabBar(): JSX.Element {
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+
+  // Directory picker state: true = new tab flow, string = change default for that tabId
+  const [dirPickerState, setDirPickerState] = useState<'new-tab' | string | null>(null)
+
+  const dirPickerTab = typeof dirPickerState === 'string'
+    ? tabs.find((t) => t.id === dirPickerState)
+    : null
 
   // Close context menu on outside click
   useEffect(() => {
@@ -241,7 +258,7 @@ export function TabBar(): JSX.Element {
       {/* Sidebar toggle */}
       <BarButton
         onClick={toggleSidebar}
-        title={sidebarOpen ? 'Collapse sidebar (Ctrl+B)' : 'Open sidebar (Ctrl+B)'}
+        title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
         active={sidebarOpen}
       >
         ≡
@@ -410,8 +427,8 @@ export function TabBar(): JSX.Element {
         })}
 
         <button
-          onClick={() => addTab()}
-          title="New tab (Ctrl+T)"
+          onClick={() => setDirPickerState('new-tab')}
+          title={`New tab (${HOTKEYS.newTab.display})`}
           style={{
             marginLeft: 4,
             width: 24,
@@ -440,17 +457,17 @@ export function TabBar(): JSX.Element {
       {/* Global action buttons */}
       <BarButton
         onClick={toggleSessionBrowser}
-        title="Session browser (Ctrl+Shift+O)"
+        title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
         active={sessionBrowserOpen}
       >
-        ⊞
+        ⌕
       </BarButton>
       <BarButton
         onClick={toggleCommandPalette}
-        title="Command palette (Ctrl+P)"
+        title={`Command palette (${HOTKEYS.commandPalette.display})`}
         active={commandPaletteOpen}
       >
-        ⌕
+        &gt;
       </BarButton>
 
       {/* Context menu (rendered outside tab strip to avoid overflow clipping) */}
@@ -461,12 +478,36 @@ export function TabBar(): JSX.Element {
             tabs={tabs}
             onClose={() => setContextMenu(null)}
             onRename={startRename}
+            onChangeDefaultDir={(tabId) => setDirPickerState(tabId)}
             closeTab={closeTab}
             closeOtherTabs={closeOtherTabs}
             closeTabsToRight={closeTabsToRight}
             duplicateTab={duplicateTab}
           />
         </div>
+      )}
+
+      {/* Directory picker — new tab flow */}
+      {dirPickerState === 'new-tab' && (
+        <DirPicker
+          title="Set default directory"
+          description="All new sessions and shells in this tab will start here."
+          onConfirm={(dir) => { addTab(dir); setDirPickerState(null) }}
+          onSkip={() => { addTab(); setDirPickerState(null) }}
+        />
+      )}
+
+      {/* Directory picker — change default for existing tab */}
+      {typeof dirPickerState === 'string' && dirPickerState !== 'new-tab' && (
+        <DirPicker
+          title="Change default directory"
+          description="New sessions and shells in this tab will start here by default."
+          initial={dirPickerTab?.defaultCwd ?? ''}
+          confirmLabel="Change"
+          skipLabel="Cancel"
+          onConfirm={(dir) => { setTabDefaultCwd(dirPickerState, dir); setDirPickerState(null) }}
+          onSkip={() => setDirPickerState(null)}
+        />
       )}
     </div>
   )

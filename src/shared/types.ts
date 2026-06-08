@@ -48,6 +48,7 @@ export interface Tab {
   rootNode?: PaneNode   // undefined = empty tab showing landing page
   focusedPaneId: string
   customLabel?: string  // user-set via rename; overrides auto-generated label when present
+  defaultCwd?: string   // tab-scoped starting directory for new panes
 }
 
 // Full app state shape (used by renderer Zustand store)
@@ -109,6 +110,9 @@ export interface IPCChannels {
   'shell:open-folder': (path: string) => void
   'shell:copy-to-clipboard': (text: string) => void
 
+  // --- Dialogs ---
+  'dialog:pick-directory': (title?: string) => string | null
+
   // --- Layout persistence ---
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean) => void
   'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
@@ -134,6 +138,7 @@ export type InvokeChannels =
   | 'shell:copy-to-clipboard'
   | 'layout:save'
   | 'layout:load'
+  | 'dialog:pick-directory'
 
 export type EventChannels =
   | 'sessions:updated'

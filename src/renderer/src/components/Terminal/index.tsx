@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
+import { HOTKEYS, hotkeyKey, eventKey } from '../../utils/hotkeys'
 
 const XTERM_THEME = {
   background: '#0e1011',
@@ -133,24 +134,21 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         return stop()
       }
 
-      // Global app shortcuts — Ctrl+Shift chord
-      if (mod && e.shiftKey) {
-        if (e.code === 'KeyE') { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical'); return stop() }
-        if (e.code === 'KeyD') { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal'); return stop() }
-        if (e.code === 'KeyP') { store.toggleCommandPalette(); return stop() }
-        if (e.code === 'KeyO') { store.toggleSessionBrowser(); return stop() }
-        if (e.code === 'KeyW') { const p = store.getFocusedPane(); if (p) store.closePane(p.id); return stop() }
-        if (e.code === 'Enter') {
-          if (store.zoomedPaneId) { store.unzoom() } else { const p = store.getFocusedPane(); if (p) store.zoomPane(p.id) }
-          return stop()
+      // Global app shortcuts
+      if (mod) {
+        const dispatch: Record<string, () => void> = {
+          [hotkeyKey(HOTKEYS.splitVertical)]:   () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical') },
+          [hotkeyKey(HOTKEYS.splitHorizontal)]: () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal') },
+          [hotkeyKey(HOTKEYS.commandPalette)]:  () => store.toggleCommandPalette(),
+          [hotkeyKey(HOTKEYS.sessionBrowser)]:  () => store.toggleSessionBrowser(),
+          [hotkeyKey(HOTKEYS.closePane)]:       () => { const p = store.getFocusedPane(); if (p) store.closePane(p.id) },
+          [hotkeyKey(HOTKEYS.zoomPane)]:        () => { if (store.zoomedPaneId) { store.unzoom() } else { const p = store.getFocusedPane(); if (p) store.zoomPane(p.id) } },
+          [hotkeyKey(HOTKEYS.newTab)]:          () => store.addTab(),
+          [hotkeyKey(HOTKEYS.closeTab)]:        () => { if (store.activeTabId) store.closeTab(store.activeTabId) },
+          [hotkeyKey(HOTKEYS.toggleSidebar)]:   () => store.toggleSidebar(),
         }
-      }
-
-      // Global app shortcuts — Ctrl chord (no shift)
-      if (mod && !e.shiftKey) {
-        if (e.code === 'KeyT') { store.addTab(); return stop() }
-        if (e.code === 'KeyW') { if (store.activeTabId) store.closeTab(store.activeTabId); return stop() }
-        if (e.code === 'KeyB') { store.toggleSidebar(); return stop() }
+        const fn = dispatch[eventKey(e)]
+        if (fn) { fn(); return stop() }
       }
 
       if (!mod && !e.shiftKey && e.code === 'Escape') {

@@ -104,7 +104,8 @@ interface PanesStore {
   commandPaletteOpen: boolean
 
   // Tab operations
-  addTab: () => void
+  addTab: (defaultCwd?: string) => void
+  setTabDefaultCwd: (tabId: string, cwd: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, label: string) => void
@@ -114,7 +115,7 @@ interface PanesStore {
 
   // Pane operations
   focusPane: (paneId: string) => void
-  splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType) => Promise<void>
+  splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string) => Promise<void>
   closePane: (paneId: string) => void
   zoomPane: (paneId: string) => void
   unzoom: () => void
@@ -163,9 +164,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   commandPaletteOpen: false,
   draggedPaneId: null,
 
-  addTab: () => {
-    const tab: Tab = { id: uuid(), focusedPaneId: '' }
+  addTab: (defaultCwd?: string) => {
+    const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined }
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+  },
+
+  setTabDefaultCwd: (tabId, cwd) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => t.id === tabId ? { ...t, defaultCwd: cwd || undefined } : t),
+    }))
   },
 
   closeTab: (tabId) => {
@@ -231,10 +238,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  splitPane: async (paneId, direction, paneType) => {
+  splitPane: async (paneId, direction, paneType, cwdOverride?) => {
     const existing = get().findPane(paneId)
+    const tab = get().activeTab()
     const resolvedType: PaneType = paneType ?? existing?.paneType ?? 'shell'
-    const cwd = existing?.cwd ?? 'C:\\'
+    const cwd = cwdOverride ?? existing?.cwd ?? tab?.defaultCwd ?? 'C:\\'
     const newLeaf = makeLeaf(cwd, resolvedType)
 
     set((s) => {

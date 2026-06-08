@@ -1,8 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react'
-import type { PaneLeaf } from '../../../../shared/types'
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import type { PaneLeaf, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { paneLabelText } from '../../utils/tabLabels'
+import { DirPicker } from '../DirPicker'
+import { HOTKEYS } from '../../utils/hotkeys'
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -19,9 +21,14 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
   const sessions = useSessionsStore((s) => s.sessions)
 
+  const activeTab = usePanesStore((s) => s.activeTab())
+
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const [splitMenu, setSplitMenu] = useState<{ direction: SplitDirection; x: number; y: number } | null>(null)
+  const [dirPickerForSplit, setDirPickerForSplit] = useState<SplitDirection | null>(null)
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
@@ -180,16 +187,145 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       )}
 
       {/* Action buttons */}
-      <HeaderButton title="Split vertical (Ctrl+Shift+E)" onClick={() => splitPane(pane.id, 'vertical', pane.paneType)}>⊞</HeaderButton>
-      <HeaderButton title="Split horizontal (Ctrl+Shift+D)" onClick={() => splitPane(pane.id, 'horizontal', pane.paneType)}>⊟</HeaderButton>
+      {!isZoomed && (
+        <>
+          <HeaderButton
+            title={`Split vertical (${HOTKEYS.splitVertical.display})`}
+            onClick={(e) => setSplitMenu({ direction: 'vertical', x: e.clientX, y: e.clientY })}
+          >◫</HeaderButton>
+          <HeaderButton
+            title={`Split horizontal (${HOTKEYS.splitHorizontal.display})`}
+            onClick={(e) => setSplitMenu({ direction: 'horizontal', x: e.clientX, y: e.clientY })}
+          >⊟</HeaderButton>
+        </>
+      )}
       <HeaderButton
-        title={isZoomed ? 'Unzoom' : 'Zoom pane (Ctrl+Shift+Enter)'}
+        title={isZoomed ? 'Unzoom' : `Zoom pane (${HOTKEYS.zoomPane.display})`}
         onClick={() => (isZoomed ? unzoom() : zoomPane(pane.id))}
       >
         {isZoomed ? '⊟' : '⤢'}
       </HeaderButton>
-      <HeaderButton title="Close pane (Ctrl+Shift+W)" onClick={() => closePane(pane.id)}>×</HeaderButton>
+      <HeaderButton title={`Close pane (${HOTKEYS.closePane.display})`} onClick={() => closePane(pane.id)}>×</HeaderButton>
+
+      {/* Split direction context menu */}
+      {splitMenu && (
+        <SplitDirMenu
+          pane={pane}
+          direction={splitMenu.direction}
+          x={splitMenu.x}
+          y={splitMenu.y}
+          tabDefaultCwd={activeTab?.defaultCwd}
+          onClose={() => setSplitMenu(null)}
+          onSplit={(cwd) => { splitPane(pane.id, splitMenu.direction, pane.paneType, cwd); setSplitMenu(null) }}
+          onBrowse={() => { setDirPickerForSplit(splitMenu.direction); setSplitMenu(null) }}
+        />
+      )}
+
+      {/* DirPicker for one-off split directory */}
+      {dirPickerForSplit && (
+        <DirPicker
+          title={`Start ${pane.paneType === 'claude' ? 'session' : 'shell'} in...`}
+          initial={activeTab?.defaultCwd ?? pane.cwd}
+          confirmLabel="Split"
+          skipLabel="Cancel"
+          onConfirm={(dir) => { splitPane(pane.id, dirPickerForSplit, pane.paneType, dir); setDirPickerForSplit(null) }}
+          onSkip={() => setDirPickerForSplit(null)}
+        />
+      )}
     </div>
+  )
+}
+
+// --- Split directory context menu ---
+
+function SplitDirMenu({
+  pane,
+  direction,
+  x,
+  y,
+  tabDefaultCwd,
+  onClose,
+  onSplit,
+  onBrowse,
+}: {
+  pane: PaneLeaf
+  direction: SplitDirection
+  x: number
+  y: number
+  tabDefaultCwd?: string
+  onClose: () => void
+  onSplit: (cwd?: string) => void
+  onBrowse: () => void
+}): JSX.Element {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ left: number; top: number; visible: boolean }>({ left: x, top: y, visible: false })
+
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!el) return
+    const { width, height } = el.getBoundingClientRect()
+    const margin = 6
+    setPos({
+      left: Math.min(x, window.innerWidth - width - margin),
+      top: Math.min(y, window.innerHeight - height - margin),
+      visible: true,
+    })
+  }, [x, y])
+
+  const dirLabel = direction === 'vertical' ? 'Split vertical' : 'Split horizontal'
+
+  function menuBtn(label: string, sub: string | null, onClick: () => void, dimmed = false): JSX.Element {
+    return (
+      <button
+        onClick={onClick}
+        style={{
+          display: 'block',
+          width: '100%',
+          padding: '6px 12px',
+          background: 'none',
+          border: 'none',
+          textAlign: 'left',
+          fontSize: 12,
+          color: dimmed ? '#4a4b4e' : '#c9cdd1',
+          cursor: dimmed ? 'default' : 'pointer',
+        }}
+        onMouseEnter={(e) => { if (!dimmed) (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2a2b2e' }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
+      >
+        <div>{label}</div>
+        {sub && <div style={{ fontSize: 10, color: '#4a4b4e', fontFamily: 'monospace', marginTop: 1 }}>{sub}</div>}
+      </button>
+    )
+  }
+
+  return (
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 200 }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
+      <div
+        ref={menuRef}
+        style={{
+          position: 'fixed', left: pos.left, top: pos.top, zIndex: 201,
+          backgroundColor: '#1a1b1e', border: '1px solid #2a2b2e',
+          borderRadius: 6, padding: '4px 0', minWidth: 220,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
+          visibility: pos.visible ? 'visible' : 'hidden',
+        }}
+      >
+        <div style={{ padding: '4px 12px 6px', fontSize: 10, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          {dirLabel}
+        </div>
+        <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '0 0 4px' }} />
+        {menuBtn('Same directory', pane.cwd, () => onSplit())}
+        {menuBtn(
+          tabDefaultCwd ? 'Tab default' : 'Tab default (not set)',
+          tabDefaultCwd ?? null,
+          tabDefaultCwd ? () => onSplit(tabDefaultCwd) : () => {},
+          !tabDefaultCwd,
+        )}
+        <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '4px 0' }} />
+        {menuBtn('Choose directory...', null, onBrowse)}
+      </div>
+    </>
   )
 }
 
@@ -233,7 +369,7 @@ function HeaderButton({
   title,
   children,
 }: {
-  onClick: () => void
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   title: string
   children: React.ReactNode
 }): JSX.Element {

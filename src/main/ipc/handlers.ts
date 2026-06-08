@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, shell, clipboard, app } from 'electron'
+import { ipcMain, BrowserWindow, shell, clipboard, app, dialog } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
@@ -112,6 +112,15 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   ipcMain.handle('shell:copy-to-clipboard', (_e, text: string) => {
     clipboard.writeText(text)
+  })
+
+  ipcMain.handle('dialog:pick-directory', async (_e, title?: string) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: title ?? 'Select Directory',
+      properties: ['openDirectory'],
+      defaultPath: os.homedir(),
+    })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
   })
 
   const layoutPath = path.join(app.getPath('userData'), 'layout.json')
