@@ -110,7 +110,7 @@ export function Sidebar(): JSX.Element {
       </div>
 
       {/* Scrollable session list */}
-      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+      <div className="dark-scrollbar" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
         {loading && (
           <div style={{ padding: '12px 16px', fontSize: 11, color: '#4a4b4e' }}>
             Scanning sessions...

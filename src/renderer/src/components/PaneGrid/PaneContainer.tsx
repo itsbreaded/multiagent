@@ -24,6 +24,8 @@ export function PaneContainer({ pane }: PaneContainerProps): JSX.Element {
         flexDirection: 'column',
         height: '100%',
         width: '100%',
+        minHeight: 0,
+        minWidth: 0,
         overflow: 'hidden',
         outline: isFocused ? '1px solid #4ade8033' : 'none',
       }}

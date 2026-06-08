@@ -127,6 +127,8 @@ export default function App(): JSX.Element {
         style={{
           display: 'flex',
           flex: 1,
+          minHeight: 0,
+          minWidth: 0,
           overflow: 'hidden',
         }}
       >
@@ -135,6 +137,8 @@ export default function App(): JSX.Element {
         <div
           style={{
             flex: 1,
+            minHeight: 0,
+            minWidth: 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',

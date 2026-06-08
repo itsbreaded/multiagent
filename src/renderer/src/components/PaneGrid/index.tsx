@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
 import type { PaneNode, PaneLeaf, PaneSplit } from '../../../../shared/types'
@@ -54,11 +54,6 @@ export function PaneGrid(): JSX.Element {
 
   const [isSashDragging, setIsSashDragging] = useState(false)
   const [dirPickerFor, setDirPickerFor] = useState<'claude' | 'shell' | null>(null)
-
-  useEffect(() => {
-    const elements = document.querySelectorAll<HTMLElement>('.xterm-screen')
-    elements.forEach((el) => { el.style.pointerEvents = isSashDragging ? 'none' : '' })
-  }, [isSashDragging])
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
@@ -188,6 +183,8 @@ export function PaneGrid(): JSX.Element {
         <div
           style={{
             flex: 1,
+            minHeight: 0,
+            minWidth: 0,
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
@@ -220,7 +217,8 @@ export function PaneGrid(): JSX.Element {
 
   return (
     <div
-      style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+      className={isSashDragging ? 'sash-dragging' : undefined}
+      style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
       onMouseDownCapture={(e) => {
         const target = e.target as HTMLElement
         if (target.closest('[class*="sash-module_sash"]')) {

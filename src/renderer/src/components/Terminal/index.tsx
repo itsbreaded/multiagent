@@ -272,7 +272,14 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
 
   return (
     <div
-      style={{ flex: 1, overflow: 'hidden', backgroundColor: '#0e1011', position: 'relative' }}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        overflow: 'hidden',
+        backgroundColor: '#0e1011',
+        position: 'relative',
+      }}
       onContextMenu={onContextMenu}
       onClick={() => contextMenu && setContextMenu(null)}
     >
@@ -296,7 +303,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
           {errorMsg}
         </div>
       )}
-      <div ref={containerRef} style={{ width: '100%', height: '100%', padding: 4 }} />
+      <div ref={containerRef} style={{ width: '100%', height: '100%', minHeight: 0, minWidth: 0, padding: 4 }} />
 
       {contextMenu && (
         <div

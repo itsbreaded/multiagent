@@ -4,6 +4,10 @@
   box-sizing: border-box;
 }
 
+.xterm, .xterm * {
+  box-sizing: content-box;
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;
@@ -22,6 +26,52 @@ body {
 /* Tab strip: hide scrollbar while keeping scroll */
 .tab-strip::-webkit-scrollbar { display: none; }
 .tab-strip { scrollbar-width: none; }
+
+.dark-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3b3e #1a1b1e;
+}
+
+.dark-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.dark-scrollbar::-webkit-scrollbar-track {
+  background: #1a1b1e;
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb {
+  background: #3a3b3e;
+  border: 2px solid #1a1b1e;
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #5a5c61;
+}
+
+/* xterm owns its own scrollable viewport; keep the terminal scrollbar visible. */
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3b3e #0e1011;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: #0e1011;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #3a3b3e;
+  border: 2px solid #0e1011;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #5a5c61;
+}
 
 /* Sash drag: prevent xterm canvas from stealing pointer events */
 .sash-dragging .xterm-screen,
