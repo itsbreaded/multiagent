@@ -8,6 +8,15 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo Installing dependencies...
+npm install
+if %errorlevel% neq 0 (
+    echo npm install failed.
+    pause
+    exit /b %errorlevel%
+)
+
+echo.
 echo Building...
 npm run dist
 if %errorlevel% neq 0 (
