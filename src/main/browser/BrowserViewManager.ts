@@ -59,17 +59,19 @@ export class BrowserViewManager extends EventEmitter {
     return this.state
   }
 
-  async navigate(url: string): Promise<void> {
+  async navigate(url: string): Promise<{ url: string; title: string }> {
     const win = this._ensureWindow()
     win.show()
     this.state = 'agent-controlled'
     this.emit('state-changed', this.state)
     await win.webContents.loadURL(url)
+    return { url: win.webContents.getURL(), title: win.webContents.getTitle() }
   }
 
-  async click(selector: string): Promise<void> {
+  async click(selector: string): Promise<{ url: string; title: string }> {
     const wc = this.win?.webContents
-    if (!wc) return
+    if (!wc) return { url: '', title: '' }
+    const urlBefore = wc.getURL()
     const pos = await wc.executeJavaScript(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -84,6 +86,7 @@ export class BrowserViewManager extends EventEmitter {
     wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    return this._waitForNavigationIfStarted(urlBefore)
   }
 
   async type(selector: string, text: string): Promise<void> {
@@ -150,18 +153,20 @@ export class BrowserViewManager extends EventEmitter {
     return this.win?.webContents.getURL() ?? ''
   }
 
-  async goBack(): Promise<void> {
+  async goBack(): Promise<{ url: string; title: string }> {
     const wc = this.win?.webContents
     if (!wc?.canGoBack()) throw new Error('No previous page in history')
     wc.goBack()
     await this._waitForNavigation()
+    return { url: wc.getURL(), title: wc.getTitle() }
   }
 
-  async goForward(): Promise<void> {
+  async goForward(): Promise<{ url: string; title: string }> {
     const wc = this.win?.webContents
     if (!wc?.canGoForward()) throw new Error('No next page in history')
     wc.goForward()
     await this._waitForNavigation()
+    return { url: wc.getURL(), title: wc.getTitle() }
   }
 
   private _waitForNavigation(timeoutMs = 10000): Promise<void> {
@@ -175,6 +180,19 @@ export class BrowserViewManager extends EventEmitter {
       const onDone = () => { clearTimeout(timer); resolve() }
       wc.once('did-stop-loading', onDone)
     })
+  }
+
+  // After a click (sendInputEvent is async from the browser's perspective), wait
+  // briefly for navigation to start, then wait for it to finish if it did.
+  private async _waitForNavigationIfStarted(urlBefore: string): Promise<{ url: string; title: string }> {
+    const wc = this.win?.webContents
+    if (!wc) return { url: urlBefore, title: '' }
+    // 150ms gives Chromium time to process the input event and begin navigation
+    await new Promise<void>(r => setTimeout(r, 150))
+    if (wc.isLoading() || wc.getURL() !== urlBefore) {
+      await this.waitForLoad(10000)
+    }
+    return { url: wc.getURL(), title: wc.getTitle() }
   }
 
   async hover(selector: string): Promise<void> {
@@ -220,9 +238,10 @@ export class BrowserViewManager extends EventEmitter {
     `)
   }
 
-  async clickAt(x: number, y: number): Promise<void> {
+  async clickAt(x: number, y: number): Promise<{ url: string; title: string }> {
     const wc = this.win?.webContents
-    if (!wc) return
+    if (!wc) return { url: '', title: '' }
+    const urlBefore = wc.getURL()
     this.win!.focus()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 } as any)
@@ -234,43 +253,73 @@ export class BrowserViewManager extends EventEmitter {
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: ${x}, clientY: ${y} }));
       })()
     `)
+    return this._waitForNavigationIfStarted(urlBefore)
   }
 
-  async clickText(text: string, exact = false): Promise<void> {
+  async clickText(text: string, exact = false): Promise<{ url: string; title: string }> {
     const wc = this.win?.webContents
-    if (!wc) return
-    const pos = await wc.executeJavaScript(`
+    if (!wc) return { url: '', title: '' }
+    // Three-pass search: <a> first (preferred for navigation), then buttons, then
+    // structural containers — for containers, walk up to the nearest <a> ancestor.
+    // Returns coordinates + href so we can navigate directly for real links.
+    const found = await wc.executeJavaScript(`
       (() => {
         const exact = ${JSON.stringify(exact)};
         const needle = ${JSON.stringify(text)};
-        const all = document.querySelectorAll('a, button, [role="button"], [role="menuitem"], [role="option"], li, td, th, label, span, div, p');
-        for (const el of all) {
+        const matches = (el) => {
           const t = (el.innerText || el.textContent || '').trim();
-          if (exact ? t === needle : t.toLowerCase().includes(needle.toLowerCase())) {
-            const r = el.getBoundingClientRect();
-            if (r.width > 0 && r.height > 0) {
-              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+          return exact ? t === needle : t.toLowerCase().includes(needle.toLowerCase());
+        };
+        const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const toResult = (el) => {
+          const r = el.getBoundingClientRect();
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), href: el.href || null };
+        };
+        // Pass 1: <a> elements — exact link targets, preferred for navigation
+        for (const el of document.querySelectorAll('a')) {
+          if (matches(el) && visible(el)) return toResult(el);
+        }
+        // Pass 2: buttons and interactive ARIA roles
+        for (const el of document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="option"]')) {
+          if (matches(el) && visible(el)) return toResult(el);
+        }
+        // Pass 3: structural containers — walk up to nearest <a> ancestor so
+        // complex product cards (e.g. Amazon <li> wrapping a link) resolve correctly
+        for (const el of document.querySelectorAll('li, td, th, label, span, div, p')) {
+          if (matches(el) && visible(el)) {
+            let cur = el.parentElement;
+            while (cur && cur !== document.body) {
+              if (cur.tagName === 'A' && visible(cur)) return toResult(cur);
+              cur = cur.parentElement;
             }
+            return toResult(el);
           }
         }
         return null;
       })()
-    `, true) as { x: number; y: number } | null
-    if (!pos) throw new Error(`No visible element with text: ${JSON.stringify(text)}`)
+    `, true) as { x: number; y: number; href: string | null } | null
+    if (!found) throw new Error(`No visible element with text: ${JSON.stringify(text)}`)
+    // For real http(s) links, navigate directly — bypasses coordinate precision issues
+    // on deeply nested link structures and waits for the page to finish loading.
+    if (found.href && /^https?:/.test(found.href)) {
+      return this.navigate(found.href)
+    }
+    const urlBefore = wc.getURL()
     this.win!.focus()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    wc.sendInputEvent({ type: 'mouseDown', x: found.x, y: found.y, button: 'left', clickCount: 1 } as any)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    wc.sendInputEvent({ type: 'mouseUp', x: found.x, y: found.y, button: 'left', clickCount: 1 } as any)
     await wc.executeJavaScript(`
       (() => {
-        const el = document.elementFromPoint(${pos.x}, ${pos.y});
+        const el = document.elementFromPoint(${found.x}, ${found.y});
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       })()
-    `)
+    `, true)
+    return this._waitForNavigationIfStarted(urlBefore)
   }
 
-  async getElements(selector: string): Promise<Array<{ tag: string; text: string; value: string; id: string; classes: string; x: number; y: number; width: number; height: number; visible: boolean }>> {
+  async getElements(selector: string): Promise<Array<{ tag: string; text: string; value: string; id: string; classes: string; href: string; role: string; x: number; y: number; width: number; height: number; visible: boolean }>> {
     const wc = this.win?.webContents
     if (!wc) return []
     return await wc.executeJavaScript(`
@@ -283,6 +332,8 @@ export class BrowserViewManager extends EventEmitter {
             value: el.value || '',
             id: el.id || '',
             classes: el.className || '',
+            href: el.href || el.getAttribute('href') || '',
+            role: el.getAttribute('role') || '',
             x: Math.round(r.left),
             y: Math.round(r.top),
             width: Math.round(r.width),
@@ -291,7 +342,33 @@ export class BrowserViewManager extends EventEmitter {
           };
         });
       })()
-    `, true) as Array<{ tag: string; text: string; value: string; id: string; classes: string; x: number; y: number; width: number; height: number; visible: boolean }>
+    `, true) as Array<{ tag: string; text: string; value: string; id: string; classes: string; href: string; role: string; x: number; y: number; width: number; height: number; visible: boolean }>
+  }
+
+  async getLinks(textFilter?: string): Promise<Array<{ text: string; href: string; x: number; y: number }>> {
+    const wc = this.win?.webContents
+    if (!wc) return []
+    return await wc.executeJavaScript(`
+      (() => {
+        const filter = ${JSON.stringify(textFilter?.toLowerCase() ?? null)};
+        return [...document.querySelectorAll('a[href]')]
+          .filter(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) return false;
+            if (!filter) return true;
+            return (el.innerText || el.textContent || '').toLowerCase().includes(filter);
+          })
+          .map(el => {
+            const r = el.getBoundingClientRect();
+            return {
+              text: (el.innerText || el.textContent || '').trim().slice(0, 200),
+              href: el.href || el.getAttribute('href') || '',
+              x: Math.round(r.left + r.width / 2),
+              y: Math.round(r.top + r.height / 2),
+            };
+          });
+      })()
+    `, true) as Array<{ text: string; href: string; x: number; y: number }>
   }
 
   async waitForText(text: string, timeoutMs = 5000): Promise<void> {

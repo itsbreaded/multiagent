@@ -10,18 +10,19 @@ import {
 import type { BrowserViewManager } from '../browser/BrowserViewManager'
 
 export class BrowserMcpServer {
-  private server: Server
+  constructor(private browser: BrowserViewManager) {}
 
-  constructor(private browser: BrowserViewManager) {
-    this.server = new Server(
+  private _makeServer(): Server {
+    const server = new Server(
       { name: 'multiagent-browser', version: '1.0.0' },
       { capabilities: { tools: {} } }
     )
-    this._registerHandlers()
+    this._registerHandlers(server)
+    return server
   }
 
-  private _registerHandlers(): void {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  private _registerHandlers(server: Server): void {
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
           name: 'browser_navigate',
@@ -194,13 +195,23 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_get_elements',
-          description: 'Return all elements matching a CSS selector with their tag, visible text, value, id, classes, and bounding box (x/y/width/height). Use this to discover selectors, inspect the DOM, or find element coordinates before browser_click_at / browser_hover_at.',
+          description: 'Return all elements matching a CSS selector with their tag, text, value, id, classes, href, role, and bounding box (x/y/width/height). Use this to inspect the DOM or find coordinates before browser_click_at / browser_hover_at. For link navigation, prefer browser_get_links which is scoped to <a> elements.',
           inputSchema: {
             type: 'object' as const,
             properties: {
               selector: { type: 'string', description: 'CSS selector to query' },
             },
             required: ['selector'],
+          },
+        },
+        {
+          name: 'browser_get_links',
+          description: 'Return all visible <a> links on the page with their text and href URL. Use this when you need to navigate to a link — find the href here, then call browser_navigate with it directly. Much more reliable than browser_click_text for complex nested link structures. Optionally filter by text substring.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              text_filter: { type: 'string', description: 'Optional substring to filter links by their visible text (case-insensitive)' },
+            },
           },
         },
         {
@@ -245,17 +256,19 @@ export class BrowserMcpServer {
       ],
     }))
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params
       try {
         switch (name) {
-          case 'browser_navigate':
-            await this.browser.navigate(args!.url as string)
-            return { content: [{ type: 'text' as const, text: `Navigated to ${args!.url}` }] }
+          case 'browser_navigate': {
+            const nav = await this.browser.navigate(args!.url as string)
+            return { content: [{ type: 'text' as const, text: `Navigated to ${nav.url}\nTitle: ${nav.title}` }] }
+          }
 
-          case 'browser_click':
-            await this.browser.click(args!.selector as string)
-            return { content: [{ type: 'text' as const, text: `Clicked ${args!.selector}` }] }
+          case 'browser_click': {
+            const nav = await this.browser.click(args!.selector as string)
+            return { content: [{ type: 'text' as const, text: `Clicked ${args!.selector}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
+          }
 
           case 'browser_type':
             await this.browser.type(args!.selector as string, args!.text as string)
@@ -295,13 +308,15 @@ export class BrowserMcpServer {
               content: [{ type: 'text' as const, text: `Element found: ${args!.selector}` }],
             }
 
-          case 'browser_go_back':
-            await this.browser.goBack()
-            return { content: [{ type: 'text' as const, text: `Navigated back to ${this.browser.getCurrentUrl()}` }] }
+          case 'browser_go_back': {
+            const nav = await this.browser.goBack()
+            return { content: [{ type: 'text' as const, text: `Navigated back to ${nav.url}\nTitle: ${nav.title}` }] }
+          }
 
-          case 'browser_go_forward':
-            await this.browser.goForward()
-            return { content: [{ type: 'text' as const, text: `Navigated forward to ${this.browser.getCurrentUrl()}` }] }
+          case 'browser_go_forward': {
+            const nav = await this.browser.goForward()
+            return { content: [{ type: 'text' as const, text: `Navigated forward to ${nav.url}\nTitle: ${nav.title}` }] }
+          }
 
           case 'browser_hover':
             await this.browser.hover(args!.selector as string)
@@ -325,13 +340,15 @@ export class BrowserMcpServer {
           case 'browser_get_url':
             return { content: [{ type: 'text' as const, text: this.browser.getCurrentUrl() }] }
 
-          case 'browser_click_text':
-            await this.browser.clickText(args!.text as string, (args!.exact ?? false) as boolean)
-            return { content: [{ type: 'text' as const, text: `Clicked element with text: ${args!.text}` }] }
+          case 'browser_click_text': {
+            const nav = await this.browser.clickText(args!.text as string, (args!.exact ?? false) as boolean)
+            return { content: [{ type: 'text' as const, text: `Clicked element with text: ${args!.text}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
+          }
 
-          case 'browser_click_at':
-            await this.browser.clickAt(args!.x as number, args!.y as number)
-            return { content: [{ type: 'text' as const, text: `Clicked at (${args!.x}, ${args!.y})` }] }
+          case 'browser_click_at': {
+            const nav = await this.browser.clickAt(args!.x as number, args!.y as number)
+            return { content: [{ type: 'text' as const, text: `Clicked at (${args!.x}, ${args!.y})\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
+          }
 
           case 'browser_hover_at':
             await this.browser.hoverAt(args!.x as number, args!.y as number)
@@ -340,6 +357,11 @@ export class BrowserMcpServer {
           case 'browser_get_elements': {
             const elements = await this.browser.getElements(args!.selector as string)
             return { content: [{ type: 'text' as const, text: JSON.stringify(elements, null, 2) }] }
+          }
+
+          case 'browser_get_links': {
+            const links = await this.browser.getLinks(args?.text_filter as string | undefined)
+            return { content: [{ type: 'text' as const, text: JSON.stringify(links, null, 2) }] }
           }
 
           case 'browser_wait_for_text':
@@ -379,10 +401,11 @@ export class BrowserMcpServer {
         const url = new URL(req.url ?? '/', 'http://x')
 
         if (req.method === 'GET' && url.pathname === '/sse') {
+          const server = this._makeServer()
           const transport = new SSEServerTransport('/message', res)
           transports.set(transport.sessionId, transport)
           transport.onclose = () => transports.delete(transport.sessionId)
-          await this.server.connect(transport)
+          await server.connect(transport)
         } else if (req.method === 'POST' && url.pathname === '/message') {
           const sid = url.searchParams.get('sessionId') ?? ''
           const transport = transports.get(sid)
@@ -408,6 +431,6 @@ export class BrowserMcpServer {
   // Connect to a stdio transport (for running as a subprocess)
   async connectStdio(): Promise<void> {
     const transport = new StdioServerTransport()
-    await this.server.connect(transport)
+    await this._makeServer().connect(transport)
   }
 }

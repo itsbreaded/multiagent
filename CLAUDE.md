@@ -88,7 +88,8 @@ Available MCP tools (server name `multiagent-browser`):
 | `browser_screenshot` | Capture a base64 PNG of the current view |
 | `browser_get_content` | Get visible text content of the page |
 | `browser_get_url` | Get the current URL |
-| `browser_get_elements` | Query all elements matching a CSS selector; returns tag, text, value, id, classes, and bounding box `(x/y/width/height)`. Use to discover selectors or find coordinates before `browser_click_at` / `browser_hover_at`. |
+| `browser_get_elements` | Query all elements matching a CSS selector; returns tag, text, value, id, classes, **href**, **role**, and bounding box `(x/y/width/height)`. Use to inspect the DOM or find coordinates before `browser_click_at` / `browser_hover_at`. For link navigation, prefer `browser_get_links`. |
+| `browser_get_links` | Return all visible `<a>` links on the page with `text`, `href`, and center `(x, y)`. Accepts optional `text_filter` for substring match. **Preferred pattern for navigating to a link**: get href here, then call `browser_navigate` directly. |
 | `browser_evaluate` | Execute JavaScript and return the result |
 | `browser_wait_for` | Wait for a CSS selector to appear |
 | `browser_wait_for_text` | Wait for a text string to appear anywhere on the page (case-insensitive) |
@@ -99,7 +100,9 @@ All tools are neutral primitives — no decision-making is embedded. To override
 
 ### Recommended tool selection order
 
-1. **Know the text label** → `browser_click_text` (e.g. "Log Out", "Submit", "Accept")
-2. **Know a unique CSS selector** → `browser_click` / `browser_hover`
-3. **Selectors ambiguous or overlapping** → `browser_get_elements` to find coordinates, then `browser_click_at` / `browser_hover_at`
-4. **Need to inspect/debug the DOM** → `browser_get_elements` before reaching for `browser_evaluate`
+1. **Navigating to a link on the page** → `browser_get_links(text_filter: "...")` → pick `href` → `browser_navigate(href)`. Most reliable — bypasses coordinate precision and nested-element issues entirely.
+2. **Clicking a button or action** → `browser_click_text` (e.g. "Log Out", "Submit", "Accept"). Also works for links; for `http(s)` links it navigates directly via href instead of coordinate clicking.
+3. **Know a unique CSS selector** → `browser_click` / `browser_hover`
+4. **Selectors ambiguous or overlapping** → `browser_get_elements` to find coordinates, then `browser_click_at` / `browser_hover_at`
+5. **Need href/URL of an element without clicking** → `browser_evaluate` with `document.querySelector('a[...]').href`
+6. **Need to inspect/debug the DOM** → `browser_get_elements` before reaching for `browser_evaluate`
