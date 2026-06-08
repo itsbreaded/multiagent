@@ -9,7 +9,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Installing dependencies...
-npm install
+call npm install
 if %errorlevel% neq 0 (
     echo npm install failed.
     pause
@@ -18,7 +18,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Building...
-npm run dist
+call npm run dist
 if %errorlevel% neq 0 (
     echo Build failed.
     pause
