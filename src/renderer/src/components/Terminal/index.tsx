@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { HOTKEYS, hotkeyKey, eventKey } from '../../utils/hotkeys'
+import { agentLabel } from '../../utils/agents'
 
 const XTERM_THEME = {
   background: '#0e1011',
@@ -74,7 +75,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
   useEffect(() => {
     if (!containerRef.current) return
 
-    const theme = pane.paneType === 'claude'
+    const theme = pane.paneType === 'agent'
       ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
       : XTERM_THEME
 
@@ -83,7 +84,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
       fontSize: 13,
       lineHeight: 1.3,
-      cursorBlink: pane.paneType !== 'claude',
+      cursorBlink: pane.paneType !== 'agent',
       scrollback: 5000,
       allowTransparency: false,
     })
@@ -192,9 +193,9 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     const xterm = xtermRef.current
     if (!xterm || status === 'mounting') return
 
-    if (pane.paneType === 'claude' && !pane.ptyId) {
+    if (pane.paneType === 'agent' && !pane.ptyId) {
       xterm.clear()
-      xterm.write('\x1b[2m[Starting Claude Code session...]\x1b[0m\r\n')
+      xterm.write(`\x1b[2m[Starting ${agentLabel(pane.agentKind ?? 'claude')} session...]\x1b[0m\r\n`)
       setStatus('connecting')
       return
     }
@@ -290,7 +291,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
           backgroundColor: '#0e1011', zIndex: 1,
           color: '#4a4b4e', fontSize: 12, pointerEvents: 'none',
         }}>
-          {pane.paneType === 'claude' ? 'Starting session...' : 'Connecting...'}
+          {pane.paneType === 'agent' ? `Starting ${agentLabel(pane.agentKind ?? 'claude')} session...` : 'Connecting...'}
         </div>
       )}
       {status === 'error' && errorMsg && (

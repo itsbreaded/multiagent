@@ -6,7 +6,8 @@ interface DirPickerProps {
   initial?: string
   confirmLabel?: string
   skipLabel?: string
-  onConfirm: (dir: string) => void
+  nameField?: boolean
+  onConfirm: (dir: string, name?: string) => void
   onSkip: () => void
 }
 
@@ -16,15 +17,22 @@ export function DirPicker({
   initial = '',
   confirmLabel = 'Set',
   skipLabel = 'Skip',
+  nameField = false,
   onConfirm,
   onSkip,
 }: DirPickerProps): JSX.Element {
   const [value, setValue] = useState(initial)
+  const [name, setName] = useState('')
+  const nameRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    inputRef.current?.focus()
-    inputRef.current?.select()
+    if (nameField) {
+      nameRef.current?.focus()
+    } else {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
   }, [])
 
   useEffect(() => {
@@ -46,8 +54,9 @@ export function DirPicker({
   }
 
   function handleConfirm(): void {
-    const trimmed = value.trim()
-    if (trimmed) onConfirm(trimmed)
+    const trimmedDir = value.trim()
+    const trimmedName = name.trim() || undefined
+    onConfirm(trimmedDir, trimmedName)
   }
 
   return (
@@ -85,6 +94,35 @@ export function DirPicker({
             <div style={{ fontSize: 12, color: '#6b7280' }}>{description}</div>
           )}
         </div>
+
+        {/* Tab name input row (optional) */}
+        {nameField && (
+          <div style={{ padding: '14px 18px 0' }}>
+            <input
+              ref={nameRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); inputRef.current?.focus(); inputRef.current?.select() }
+              }}
+              placeholder="Tab name (optional)"
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                background: '#141517',
+                border: '1px solid #2a2b2e',
+                borderRadius: 5,
+                color: '#d4d4d4',
+                fontSize: 13,
+                padding: '7px 10px',
+                outline: 'none',
+                caretColor: '#4ade80',
+              }}
+              onFocus={(e) => { (e.currentTarget as HTMLInputElement).style.borderColor = '#4ade80' }}
+              onBlur={(e) => { (e.currentTarget as HTMLInputElement).style.borderColor = '#2a2b2e' }}
+            />
+          </div>
+        )}
 
         {/* Path input row */}
         <div style={{ padding: '14px 18px', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -158,15 +196,15 @@ export function DirPicker({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={!value.trim()}
+            disabled={!nameField && !value.trim()}
             style={{
               padding: '6px 16px',
               background: 'none',
-              border: `1px solid ${value.trim() ? '#4ade80' : '#2a2b2e'}`,
+              border: `1px solid ${nameField || value.trim() ? '#4ade80' : '#2a2b2e'}`,
               borderRadius: 5,
-              color: value.trim() ? '#4ade80' : '#3a3b3e',
+              color: nameField || value.trim() ? '#4ade80' : '#3a3b3e',
               fontSize: 12,
-              cursor: value.trim() ? 'pointer' : 'default',
+              cursor: nameField || value.trim() ? 'pointer' : 'default',
               fontWeight: 600,
               transition: 'border-color 0.1s, color 0.1s',
             }}

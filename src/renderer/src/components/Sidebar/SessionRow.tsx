@@ -3,6 +3,7 @@ import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
+import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
 
 interface SessionRowProps {
   session: Session
@@ -25,7 +26,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
   }
 
   function handleClick() {
-    resumeSession(session.sessionId, session.cwd)
+    resumeSession(session.agentKind, session.sessionId, session.cwd)
   }
 
   function closeMenu() {
@@ -67,6 +68,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Line 1: project name + relative time */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <AgentBadge session={session} />
             <span
               style={{
                 flex: 1,
@@ -170,6 +172,30 @@ function getStatusDot(session: Session): React.ReactNode {
   )
 }
 
+function AgentBadge({ session }: { session: Session }): JSX.Element {
+  return (
+    <span
+      title={agentLabel(session.agentKind)}
+      style={{
+        width: 14,
+        height: 14,
+        borderRadius: 3,
+        border: `1px solid ${agentAccent(session.agentKind)}`,
+        color: agentAccent(session.agentKind),
+        fontSize: 9,
+        fontWeight: 700,
+        fontFamily: 'monospace',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+      }}
+    >
+      {agentBadge(session.agentKind)}
+    </span>
+  )
+}
+
 interface ContextMenuProps {
   x: number
   y: number
@@ -184,7 +210,7 @@ function ContextMenu({ x, y, session, onClose }: ContextMenuProps): JSX.Element 
   const items = [
     {
       label: 'Resume in new split',
-      action: () => resumeSession(session.sessionId, session.cwd),
+      action: () => resumeSession(session.agentKind, session.sessionId, session.cwd),
     },
     {
       label: 'Open folder',
@@ -207,7 +233,7 @@ function ContextMenu({ x, y, session, onClose }: ContextMenuProps): JSX.Element 
     null, // divider
     {
       label: 'Delete',
-      action: () => deleteSession(session.sessionId),
+      action: () => deleteSession(session.agentKind, session.sessionId),
       danger: true,
     },
   ]

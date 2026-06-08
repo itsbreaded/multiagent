@@ -103,7 +103,10 @@ async function createWindow(): Promise<void> {
   const browserMcpServer = new BrowserMcpServer(browserViewManager)
   mcpInjector = new McpInjector()
   browserMcpServer.startHttp().then((port) => {
-    mcpInjector!.inject(`http://127.0.0.1:${port}/sse`)
+    mcpInjector!.inject(
+      `http://127.0.0.1:${port}/sse`,
+      `http://127.0.0.1:${port}/mcp`
+    )
     console.log(`[MultiAgent] Browser MCP server listening on port ${port}`)
   }).catch((err) => {
     console.error('[MultiAgent] Browser MCP server failed to start:', err)

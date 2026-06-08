@@ -238,9 +238,9 @@ export function TabBar(): JSX.Element {
     setRenamingTabId(null)
   }, [renamingTabId, renameValue, renameTab])
 
-  function hasClaudePane(tab: Tab): boolean {
+  function hasAgentPane(tab: Tab): boolean {
     if (!tab.rootNode) return false
-    return collectLeaves(tab.rootNode).some((l) => l.paneType === 'claude')
+    return collectLeaves(tab.rootNode).some((l) => l.paneType === 'agent')
   }
 
   return (
@@ -283,7 +283,7 @@ export function TabBar(): JSX.Element {
         {tabs.map((tab, idx) => {
           const isActive = tab.id === activeTabId
           const label = labels.get(tab.id) ?? 'Shell'
-          const live = hasClaudePane(tab)
+          const live = hasAgentPane(tab)
           const isRenaming = renamingTabId === tab.id
 
           return (
@@ -490,10 +490,13 @@ export function TabBar(): JSX.Element {
       {/* Directory picker — new tab flow */}
       {dirPickerState === 'new-tab' && (
         <DirPicker
-          title="Set default directory"
-          description="All new sessions and shells in this tab will start here."
-          onConfirm={(dir) => { addTab(dir); setDirPickerState(null) }}
-          onSkip={() => { addTab(); setDirPickerState(null) }}
+          title="New tab"
+          description="Name your workspace and optionally set a default directory."
+          nameField
+          confirmLabel="Create"
+          skipLabel="Cancel"
+          onConfirm={(dir, name) => { addTab(dir || undefined, name); setDirPickerState(null) }}
+          onSkip={() => setDirPickerState(null)}
         />
       )}
 

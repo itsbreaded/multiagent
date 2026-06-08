@@ -3,11 +3,14 @@ import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import * as readline from 'readline'
+import type { AgentKind } from '../../shared/types'
 
 export interface ScannedSession {
+  agentKind: AgentKind
   sessionId: string
   cwd: string
   projectName: string
+  displayName: string | null
   gitBranch: string | null
   firstMessage: string | null
   lastMessage: string | null
@@ -15,6 +18,7 @@ export interface ScannedSession {
   lastActivity: string | null
   messageCount: number
   filePath: string
+  transcriptPath: string
   mtimeMs: number
 }
 
@@ -236,9 +240,11 @@ export class TranscriptScanner {
     if (!sessionId || !cwd) return null
 
     const session: ScannedSession = {
+      agentKind: 'claude',
       sessionId,
       cwd,
       projectName: deriveProjectName(cwd),
+      displayName: null,
       gitBranch,
       firstMessage,
       lastMessage,
@@ -246,6 +252,7 @@ export class TranscriptScanner {
       lastActivity,
       messageCount,
       filePath,
+      transcriptPath: filePath,
       mtimeMs
     }
 

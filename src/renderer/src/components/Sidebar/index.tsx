@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useState, useLayoutEffect } from 'react'
-import type { SplitDirection } from '../../../../shared/types'
+import type { AgentKind, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import { SidebarHeader } from './SidebarHeader'
@@ -7,17 +7,19 @@ import { SidebarSection } from './SidebarSection'
 import { SessionRow } from './SessionRow'
 import { TabSections } from './TabSections'
 import { DirPicker } from '../DirPicker'
+import { agentLabel } from '../../utils/agents'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
 interface SpawnMenu {
-  type: 'claude' | 'shell'
+  type: 'agent' | 'shell'
   x: number
   y: number
 }
 
 interface DirPickerPending {
-  type: 'claude' | 'shell'
+  type: 'agent' | 'shell'
+  agentKind?: AgentKind
   direction: SplitDirection
 }
 
@@ -27,6 +29,7 @@ export function Sidebar(): JSX.Element {
   const setSidebarWidth = usePanesStore((s) => s.setSidebarWidth)
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
+  const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
@@ -73,8 +76,8 @@ export function Sidebar(): JSX.Element {
     [sidebarWidth, setSidebarWidth]
   )
 
-  function spawn(type: 'claude' | 'shell', direction: SplitDirection, cwd: string) {
-    if (type === 'claude') newSession(cwd, direction)
+  function spawn(type: 'agent' | 'shell', direction: SplitDirection, cwd: string, agentKind?: AgentKind) {
+    if (type === 'agent') newSession(cwd, direction, agentKind)
     else addShellPane(cwd, direction)
   }
 
@@ -101,10 +104,18 @@ export function Sidebar(): JSX.Element {
       <div style={{ padding: '8px 8px 6px', display: 'flex', gap: 5 }}>
         <SpawnButton
           label="+ Session"
-          onClick={(e) => setSpawnMenu({ type: 'claude', x: e.clientX, y: e.clientY })}
+          title={`Start ${agentLabel(lastAgentKind)} session`}
+          onClick={() => spawn('agent', 'vertical', smartCwd(), lastAgentKind)}
+        />
+        <SpawnButton
+          label="v"
+          title="Choose session agent"
+          compact
+          onClick={(e) => setSpawnMenu({ type: 'agent', x: e.clientX, y: e.clientY })}
         />
         <SpawnButton
           label="+ Shell"
+          title="Open shell"
           onClick={(e) => setSpawnMenu({ type: 'shell', x: e.clientX, y: e.clientY })}
         />
       </div>
@@ -122,7 +133,7 @@ export function Sidebar(): JSX.Element {
         {resumable.length > 0 && (
           <SidebarSection title="Recent" count={resumable.length} defaultOpen>
             {resumable.map((s) => (
-              <SessionRow key={s.sessionId} session={s} />
+              <SessionRow key={`${s.agentKind}:${s.sessionId}`} session={s} />
             ))}
           </SidebarSection>
         )}
@@ -130,7 +141,7 @@ export function Sidebar(): JSX.Element {
         {archived.length > 0 && (
           <SidebarSection title="Archived" count={archived.length} defaultOpen={false}>
             {archived.map((s) => (
-              <SessionRow key={s.sessionId} session={s} />
+              <SessionRow key={`${s.agentKind}:${s.sessionId}`} session={s} />
             ))}
           </SidebarSection>
         )}
@@ -157,12 +168,12 @@ export function Sidebar(): JSX.Element {
           y={spawnMenu.y}
           tabDefaultCwd={activeTab?.defaultCwd}
           onClose={() => setSpawnMenu(null)}
-          onSpawn={(direction) => {
-            spawn(spawnMenu.type, direction, smartCwd())
+          onSpawn={(direction, agentKind) => {
+            spawn(spawnMenu.type, direction, smartCwd(), agentKind)
             setSpawnMenu(null)
           }}
-          onSpawnIn={(direction) => {
-            setDirPickerPending({ type: spawnMenu.type, direction })
+          onSpawnIn={(direction, agentKind) => {
+            setDirPickerPending({ type: spawnMenu.type, direction, agentKind })
             setSpawnMenu(null)
           }}
         />
@@ -170,12 +181,12 @@ export function Sidebar(): JSX.Element {
 
       {dirPickerPending && (
         <DirPicker
-          title={`Start ${dirPickerPending.type === 'claude' ? 'session' : 'shell'} in...`}
+          title={`Start ${dirPickerPending.type === 'agent' ? `${agentLabel(dirPickerPending.agentKind ?? lastAgentKind)} session` : 'shell'} in...`}
           initial={smartCwd()}
           confirmLabel="Start"
           skipLabel="Cancel"
           onConfirm={(dir) => {
-            spawn(dirPickerPending.type, dirPickerPending.direction, dir)
+            spawn(dirPickerPending.type, dirPickerPending.direction, dir, dirPickerPending.agentKind)
             setDirPickerPending(null)
           }}
           onSkip={() => setDirPickerPending(null)}
@@ -189,16 +200,21 @@ export function Sidebar(): JSX.Element {
 
 function SpawnButton({
   label,
+  title,
+  compact = false,
   onClick,
 }: {
   label: string
+  title?: string
+  compact?: boolean
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
 }): JSX.Element {
   return (
     <button
       onClick={onClick}
+      title={title}
       style={{
-        flex: 1,
+        flex: compact ? '0 0 30px' : 1,
         padding: '6px 6px',
         backgroundColor: '#242528',
         border: '1px solid #2a2b2e',
@@ -228,13 +244,13 @@ function SpawnMenuPopover({
   onSpawn,
   onSpawnIn,
 }: {
-  type: 'claude' | 'shell'
+  type: 'agent' | 'shell'
   x: number
   y: number
   tabDefaultCwd?: string
   onClose: () => void
-  onSpawn: (direction: SplitDirection) => void
-  onSpawnIn: (direction: SplitDirection) => void
+  onSpawn: (direction: SplitDirection, agentKind?: AgentKind) => void
+  onSpawnIn: (direction: SplitDirection, agentKind?: AgentKind) => void
 }): JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; visible: boolean }>({
@@ -253,7 +269,7 @@ function SpawnMenuPopover({
     })
   }, [x, y])
 
-  const noun = type === 'claude' ? 'session' : 'shell'
+  const noun = type === 'agent' ? 'session' : 'shell'
 
   function row(
     label: string,
@@ -338,14 +354,42 @@ function SpawnMenuPopover({
         </div>
         <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '0 0 3px' }} />
 
-        {row(`Split right`, '→', () => onSpawn('vertical'))}
-        {row(`Split below`, '↓', () => onSpawn('horizontal'))}
+        {type === 'agent' && (
+          <>
+            <MenuLabel>Current Directory</MenuLabel>
+            {row('Claude Code', 'C', () => onSpawn('vertical', 'claude'))}
+            {row('Codex CLI', 'X', () => onSpawn('vertical', 'codex'))}
+            {sep()}
+            <MenuLabel>Choose Directory</MenuLabel>
+            {row('Claude Code...', 'C', () => onSpawnIn('vertical', 'claude'))}
+            {row('Codex CLI...', 'X', () => onSpawnIn('vertical', 'codex'))}
+          </>
+        )}
 
-        {sep()}
-
-        {row(`Split right in…`, '→', () => onSpawnIn('vertical'))}
-        {row(`Split below in…`, '↓', () => onSpawnIn('horizontal'))}
+        {type === 'shell' && (
+          <>
+            {row('Current Directory', '>', () => onSpawn('vertical'))}
+            {sep()}
+            {row('Choose Directory...', '>', () => onSpawnIn('vertical'))}
+          </>
+        )}
       </div>
     </>
+  )
+}
+
+function MenuLabel({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <div
+      style={{
+        padding: '5px 12px 3px',
+        fontSize: 10,
+        color: '#4a4b4e',
+        textTransform: 'uppercase',
+        letterSpacing: '0.08em',
+      }}
+    >
+      {children}
+    </div>
   )
 }

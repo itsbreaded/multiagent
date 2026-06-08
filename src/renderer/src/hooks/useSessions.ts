@@ -1,11 +1,15 @@
 import { useMemo } from 'react'
 import { useSessionsStore } from '../store/sessions'
 import { usePanesStore } from '../store/panes'
-import type { Session, PaneNode } from '../../../shared/types'
+import type { AgentKind, Session, PaneNode } from '../../../shared/types'
+
+function sessionKey(agentKind: AgentKind, sessionId: string): string {
+  return `${agentKind}:${sessionId}`
+}
 
 function collectSessionIds(node: PaneNode, ids: Set<string>): void {
   if (node.type === 'leaf') {
-    if (node.sessionId) ids.add(node.sessionId)
+    if (node.agentKind && node.sessionId) ids.add(sessionKey(node.agentKind, node.sessionId))
     return
   }
   collectSessionIds(node.first, ids)
@@ -29,7 +33,7 @@ export function useSessions() {
   const withLive = useMemo(
     () =>
       sessions.map((s) =>
-        liveIds.has(s.sessionId) ? { ...s, status: 'live-attached' as const } : s
+        liveIds.has(sessionKey(s.agentKind, s.sessionId)) ? { ...s, status: 'live-attached' as const } : s
       ),
     [sessions, liveIds]
   )
@@ -37,13 +41,15 @@ export function useSessions() {
   return {
     sessions: withLive,
     loading,
-    resumable: withLive.filter((s) => s.status === 'resumable' && !liveIds.has(s.sessionId)),
+    resumable: withLive.filter((s) => s.status === 'resumable' && !liveIds.has(sessionKey(s.agentKind, s.sessionId))),
     archived: withLive.filter((s) => s.status === 'archived'),
     search: (query: string): Session[] => {
       const q = query.toLowerCase()
       return withLive.filter(
         (s) =>
           s.projectName.toLowerCase().includes(q) ||
+          s.agentKind.toLowerCase().includes(q) ||
+          s.displayName?.toLowerCase().includes(q) ||
           s.firstMessage?.toLowerCase().includes(q) ||
           s.lastMessage?.toLowerCase().includes(q)
       )

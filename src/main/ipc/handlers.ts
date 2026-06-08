@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as fs from 'fs'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
+import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { defaultShell } from '../pty/shell'
@@ -26,9 +27,18 @@ function parseOsc7(data: string): string | null {
 
 export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<() => void> {
   const index = new SessionIndex()
-  const scanner = new TranscriptScanner()
+  const claudeScanner = new TranscriptScanner()
+  const codexScanner = new CodexSessionScanner()
   const ptyManager = new PtyManager()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
+
+  async function scanAllSessions() {
+    const [claudeSessions, codexSessions] = await Promise.all([
+      claudeScanner.scanAll(),
+      codexScanner.scanAll(),
+    ])
+    return [...claudeSessions, ...codexSessions]
+  }
 
   // Send current index state as soon as the renderer finishes loading.
   mainWindow.webContents.once('did-finish-load', () => {
@@ -36,7 +46,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   })
 
   // Initial full scan on startup.
-  scanner.scanAll().then((sessions) => {
+  scanAllSessions().then((sessions) => {
     sessions.forEach((s) => {
       try { index.upsert(s) } catch { /* skip malformed entries */ }
     })
@@ -53,7 +63,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   async function pollSessions(): Promise<void> {
     try {
-      const sessions = await scanner.scanAll()
+      const sessions = await scanAllSessions()
       for (const session of sessions) {
         index.upsert(session)
       }
@@ -88,12 +98,26 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   ipcMain.handle('sessions:search', (_e, query: string) => index.search(query))
 
-  ipcMain.handle('sessions:delete', (_e, sessionId: string) => index.delete(sessionId))
+  ipcMain.handle('sessions:delete', (_e, agentKind, sessionId: string) => index.delete(agentKind, sessionId))
 
-  ipcMain.handle('session:new', (_e, cwd: string) => spawner.spawnNew(cwd))
+  ipcMain.handle('sessions:latest-for-cwd', async (_e, agentKind, cwd: string) => {
+    const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+    const sessions = await scanner.scanAll()
+    const normalizedCwd = normalizePath(cwd)
+    const latest = sessions
+      .filter((session) => session.agentKind === agentKind && normalizePath(session.cwd) === normalizedCwd)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+    if (latest) {
+      index.upsert(latest)
+      return latest.sessionId
+    }
+    return null
+  })
 
-  ipcMain.handle('session:resume', (_e, sessionId: string, cwd: string) =>
-    spawner.spawnResume(sessionId, cwd)
+  ipcMain.handle('session:new', (_e, agentKind, cwd: string) => spawner.spawnNew(agentKind, cwd))
+
+  ipcMain.handle('session:resume', (_e, agentKind, sessionId: string, cwd: string) =>
+    spawner.spawnResume(agentKind, sessionId, cwd)
   )
 
   ipcMain.handle('pty:create', (_e, cwd: string) => ({
@@ -146,4 +170,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     index.close()
     ptyManager.destroy()
   }
+}
+
+function normalizePath(value: string): string {
+  const normalized = path.normalize(value)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }

@@ -1,12 +1,12 @@
 import { create } from 'zustand'
-import type { Session } from '../../../shared/types'
+import type { AgentKind, Session } from '../../../shared/types'
 
 interface SessionsStore {
   sessions: Session[]
   loading: boolean
   setSessions: (sessions: Session[]) => void
   searchSessions: (query: string) => Promise<Session[]>
-  deleteSession: (sessionId: string) => Promise<void>
+  deleteSession: (agentKind: AgentKind, sessionId: string) => Promise<void>
   getByProject: (cwd: string) => Session[]
 }
 
@@ -33,11 +33,11 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     )
   },
 
-  deleteSession: async (sessionId) => {
+  deleteSession: async (agentKind, sessionId) => {
     if (typeof window !== 'undefined' && window.ipc) {
-      await window.ipc.invoke('sessions:delete', sessionId)
+      await window.ipc.invoke('sessions:delete', agentKind, sessionId)
     }
-    set((s) => ({ sessions: s.sessions.filter((sess) => sess.sessionId !== sessionId) }))
+    set((s) => ({ sessions: s.sessions.filter((sess) => !(sess.agentKind === agentKind && sess.sessionId === sessionId)) }))
   },
 
   getByProject: (cwd) => get().sessions.filter((s) => s.cwd === cwd),

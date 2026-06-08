@@ -163,7 +163,7 @@ function PaneRow({
           transition: 'background-color 0.1s',
         }}
       >
-        {pane.paneType === 'claude' ? (
+        {pane.paneType === 'agent' ? (
           <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#4ade80', flexShrink: 0, display: 'inline-block' }} />
         ) : (
           <span style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #6b7280', flexShrink: 0, display: 'inline-block', opacity: 0.8 }} />

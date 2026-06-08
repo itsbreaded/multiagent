@@ -14,6 +14,7 @@ import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { defaultShell } from './shell'
+import type { AgentKind } from '../../shared/types'
 
 type WorkerMessage =
   | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
@@ -131,6 +132,11 @@ export class PtyManager extends EventEmitter {
 
   createClaude(cwd: string): string {
     return this.createDeferred(cwd, this._shellCmd(), { CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1' })
+  }
+
+  createAgent(cwd: string, agentKind: AgentKind): string {
+    if (agentKind === 'claude') return this.createClaude(cwd)
+    return this.createDeferred(cwd, this._shellCmd())
   }
 
   write(ptyId: string, data: string): void {

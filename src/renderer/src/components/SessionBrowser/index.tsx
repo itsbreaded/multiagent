@@ -3,6 +3,7 @@ import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
+import { agentBadge, agentLabel } from '../../utils/agents'
 
 function groupByProject(sessions: Session[]): Map<string, Session[]> {
   const map = new Map<string, Session[]>()
@@ -193,20 +194,20 @@ export function SessionBrowser(): JSX.Element {
                   {/* Session rows */}
                   {projSessions.map((s) => (
                     <SessionBrowserRow
-                      key={s.sessionId}
+                      key={`${s.agentKind}:${s.sessionId}`}
                       session={s}
-                      isExpanded={detailSession?.sessionId === s.sessionId}
+                      isExpanded={detailSession?.agentKind === s.agentKind && detailSession?.sessionId === s.sessionId}
                       onToggle={() =>
                         setDetailSession((prev) =>
-                          prev?.sessionId === s.sessionId ? null : s
+                          prev?.agentKind === s.agentKind && prev?.sessionId === s.sessionId ? null : s
                         )
                       }
                       onResumeSplit={() => {
-                        resumeSession(s.sessionId, s.cwd)
+                        resumeSession(s.agentKind, s.sessionId, s.cwd)
                         closeOverlays()
                       }}
                       onResumeNewTab={() => {
-                        resumeSessionInNewTab(s.sessionId, s.cwd)
+                        resumeSessionInNewTab(s.agentKind, s.sessionId, s.cwd)
                         closeOverlays()
                       }}
                     />
@@ -272,6 +273,9 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
           }}
         />
         <span style={{ fontSize: 11, color: '#6b7280', flexShrink: 0 }}>
+          {agentBadge(session.agentKind)}
+        </span>
+        <span style={{ fontSize: 11, color: '#4a4b4e', flexShrink: 0 }}>
           {formatRelativeTime(session.lastActivity)}
         </span>
         <span
@@ -296,6 +300,7 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
           }}
         >
           <Row label="CWD" value={session.cwd} />
+          <Row label="Agent" value={agentLabel(session.agentKind)} />
           {session.gitBranch && <Row label="Branch" value={session.gitBranch} />}
           {session.firstMessage && (
             <Row label="First message" value={session.firstMessage} />

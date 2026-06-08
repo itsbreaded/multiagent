@@ -1,11 +1,12 @@
 import React, { useState } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
-import type { PaneNode, PaneLeaf, PaneSplit } from '../../../../shared/types'
+import type { AgentKind, PaneNode, PaneLeaf, PaneSplit } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { PaneContainer } from './PaneContainer'
 import { PaneSplitDropTarget } from './PaneSplitDropTarget'
 import { DirPicker } from '../DirPicker'
+import { agentLabel } from '../../utils/agents'
 
 function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void): React.ReactNode {
   if (node.type === 'leaf') {
@@ -49,11 +50,12 @@ export function PaneGrid(): JSX.Element {
   const updatePaneRatio = usePanesStore((s) => s.updatePaneRatio)
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
+  const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
   const unzoom = usePanesStore((s) => s.unzoom)
   const findPane = usePanesStore((s) => s.findPane)
 
   const [isSashDragging, setIsSashDragging] = useState(false)
-  const [dirPickerFor, setDirPickerFor] = useState<'claude' | 'shell' | null>(null)
+  const [dirPickerFor, setDirPickerFor] = useState<AgentKind | 'shell' | null>(null)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
@@ -75,45 +77,75 @@ export function PaneGrid(): JSX.Element {
           <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.2 }}>[]</div>
           <div style={{ fontSize: 14, color: '#4a4b4e', marginBottom: 16 }}>No sessions open</div>
 
-          {/* New Claude Session row */}
-          <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 8, width: 300 }}>
             <button
-              onClick={() => newSession(cwdForNew)}
+              onClick={() => newSession(cwdForNew, 'vertical', 'claude')}
               style={{
                 flex: 1,
-                padding: '8px 20px',
-                backgroundColor: '#1e2022',
+                padding: '7px 14px',
+                backgroundColor: 'transparent',
                 border: '1px solid #2a2b2e',
                 borderRadius: 6,
-                color: '#c9cdd1',
-                fontSize: 13,
+                color: '#6b7280',
+                fontSize: 12,
                 cursor: 'pointer',
                 textAlign: 'left',
               }}
             >
-              + New Claude Session
+              Claude Code
             </button>
             <button
-              onClick={() => setDirPickerFor('claude')}
-              title="Start session in a different directory"
+              onClick={() => newSession(cwdForNew, 'vertical', 'codex')}
               style={{
-                padding: '8px 10px',
+                flex: 1,
+                padding: '7px 14px',
                 backgroundColor: 'transparent',
                 border: '1px solid #2a2b2e',
                 borderRadius: 6,
-                color: '#4a4b4e',
+                color: '#6b7280',
                 fontSize: 12,
                 cursor: 'pointer',
+                textAlign: 'left',
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#c9cdd1' }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
             >
-              ▸
+              Codex CLI
+            </button>
+            <button
+              onClick={() => setDirPickerFor('claude')}
+              style={{
+                flex: 1,
+                padding: '7px 14px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#6b7280',
+                fontSize: 12,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              Claude in...
+            </button>
+            <button
+              onClick={() => setDirPickerFor('codex')}
+              style={{
+                flex: 1,
+                padding: '7px 14px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#6b7280',
+                fontSize: 12,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              Codex in...
             </button>
           </div>
 
           {/* Open Shell row */}
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, width: 300 }}>
             <button
               onClick={() => addShellPane(cwdForNew)}
               style={{
@@ -145,7 +177,7 @@ export function PaneGrid(): JSX.Element {
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
             >
-              ▸
+              ...
             </button>
           </div>
 
@@ -159,12 +191,12 @@ export function PaneGrid(): JSX.Element {
 
         {dirPickerFor && (
           <DirPicker
-            title={dirPickerFor === 'claude' ? 'Start Claude session in...' : 'Start shell in...'}
+            title={dirPickerFor === 'shell' ? 'Start shell in...' : `Start ${agentLabel(dirPickerFor)} session in...`}
             initial={cwdForNew}
             confirmLabel="Start"
             skipLabel="Cancel"
             onConfirm={(dir) => {
-              if (dirPickerFor === 'claude') newSession(dir)
+              if (dirPickerFor !== 'shell') newSession(dir, 'vertical', dirPickerFor)
               else addShellPane(dir)
               setDirPickerFor(null)
             }}

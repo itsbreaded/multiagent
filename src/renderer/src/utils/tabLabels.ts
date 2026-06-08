@@ -1,4 +1,5 @@
 import type { Tab, PaneNode, PaneLeaf, Session } from '../../../shared/types'
+import { agentLabel } from './agents'
 
 export function findLeafById(node: PaneNode, id: string): PaneLeaf | null {
   if (node.type === 'leaf') return node.id === id ? node : null
@@ -18,12 +19,14 @@ export function collectLeaves(node: PaneNode): PaneLeaf[] {
 /** Formatted display label for a single pane: "[customName · ]directory" */
 export function paneLabelText(pane: PaneLeaf, sessions: Session[]): string {
   let base: string
-  if (pane.paneType === 'claude' && pane.sessionId) {
-    const session = sessions.find((s) => s.sessionId === pane.sessionId)
+  if (pane.paneType === 'agent') {
+    const session = pane.agentKind && pane.sessionId
+      ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
+      : null
     if (session) {
       base = session.projectName.split('/').pop() ?? session.projectName
     } else {
-      base = pane.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Claude'
+      base = pane.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop() || agentLabel(pane.agentKind ?? 'claude')
     }
   } else {
     base = pane.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Shell'
@@ -36,7 +39,9 @@ function baseLabel(tab: Tab, sessions: Session[]): string {
   const leaf = findLeafById(tab.rootNode, tab.focusedPaneId) ?? firstLeaf(tab.rootNode)
   if (!leaf) return 'Shell'
   if (leaf.sessionId) {
-    const session = sessions.find((s) => s.sessionId === leaf.sessionId)
+    const session = leaf.agentKind
+      ? sessions.find((s) => s.agentKind === leaf.agentKind && s.sessionId === leaf.sessionId)
+      : null
     if (session) return session.projectName.split('/').pop() ?? session.projectName
   }
   const segment = leaf.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop()

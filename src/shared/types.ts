@@ -1,29 +1,35 @@
 // Session status
 export type SessionStatus = 'live-attached' | 'resumable' | 'archived'
 
-// A Claude Code session as stored/displayed
+export type AgentKind = 'claude' | 'codex'
+
+// A CLI agent session as stored/displayed
 export interface Session {
+  agentKind: AgentKind
   sessionId: string           // UUID from JSONL
   cwd: string                 // actual project path e.g. C:\source\ecentria\core
   projectName: string         // derived: last 2 path segments e.g. "ecentria/core"
+  displayName: string | null
   gitBranch: string | null
   firstMessage: string | null // first real user-typed message (not slash commands)
   lastMessage: string | null  // last real user-typed message
   firstActivity: string | null // ISO timestamp
   lastActivity: string | null  // ISO timestamp
   messageCount: number
+  transcriptPath: string
   status: SessionStatus
 }
 
 // Pane tree - binary split layout (same model as tmux)
-export type PaneType = 'shell' | 'claude'
+export type PaneType = 'shell' | 'agent'
 
 export interface PaneLeaf {
   type: 'leaf'
   id: string
   paneType: PaneType
+  agentKind?: AgentKind  // set when paneType === 'agent'
   cwd: string
-  sessionId?: string    // set when paneType === 'claude'
+  sessionId?: string    // set when paneType === 'agent'
   ptyId?: string        // set once PTY is created
   title?: string        // programmatic display override (full)
   customName?: string   // user-set label prefix shown before the directory name
@@ -78,14 +84,14 @@ export interface IPCChannels {
   'sessions:search': (query: string) => Session[]
 
   // Renderer asks to delete a transcript
-  'sessions:delete': (sessionId: string) => void
+  'sessions:delete': (agentKind: AgentKind, sessionId: string) => void
 
   // --- Session actions ---
-  // Start a new claude session in a given cwd
-  'session:new': (cwd: string) => { ptyId: string; sessionId: string | null }
+  // Start a new agent session in a given cwd
+  'session:new': (agentKind: AgentKind, cwd: string) => { ptyId: string; sessionId: string | null }
 
   // Resume an existing session by ID
-  'session:resume': (sessionId: string, cwd: string) => { ptyId: string }
+  'session:resume': (agentKind: AgentKind, sessionId: string, cwd: string) => { ptyId: string }
 
   // --- PTY ---
   // Create a PTY (for shell panes)
@@ -118,8 +124,8 @@ export interface IPCChannels {
   'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
 
   // --- Session detection ---
-  // Main notifies renderer when a new claude session file is detected for a spawned PTY
-  'session:detected': (ptyId: string, sessionId: string) => void
+  // Main notifies renderer when a new agent session file is detected for a spawned PTY
+  'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
 
 }
 

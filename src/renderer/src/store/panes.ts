@@ -1,13 +1,19 @@
 import { create } from 'zustand'
-import type { Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
+import type { AgentKind, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 
 function uuid(): string {
   return crypto.randomUUID()
 }
 
-function makeLeaf(cwd: string, paneType: 'shell' | 'claude' = 'shell'): PaneLeaf {
-  return { type: 'leaf', id: uuid(), paneType, cwd }
+function makeLeaf(cwd: string, paneType: PaneType = 'shell', agentKind?: AgentKind): PaneLeaf {
+  return {
+    type: 'leaf',
+    id: uuid(),
+    paneType,
+    agentKind: paneType === 'agent' ? (agentKind ?? 'claude') : undefined,
+    cwd
+  }
 }
 
 function makeSplit(
@@ -86,12 +92,23 @@ function collectLeafIds(node: PaneNode): string[] {
   return [...collectLeafIds(node.first), ...collectLeafIds(node.second)]
 }
 
-/** Find a leaf by its sessionId */
-function findLeafBySessionId(node: PaneNode, sessionId: string): PaneLeaf | null {
+/** Find a leaf by its agent/session ID pair */
+function findLeafBySessionId(node: PaneNode, agentKind: AgentKind, sessionId: string): PaneLeaf | null {
   if (node.type === 'leaf') {
-    return node.sessionId === sessionId ? node : null
+    return node.agentKind === agentKind && node.sessionId === sessionId ? node : null
   }
-  return findLeafBySessionId(node.first, sessionId) ?? findLeafBySessionId(node.second, sessionId)
+  return findLeafBySessionId(node.first, agentKind, sessionId) ?? findLeafBySessionId(node.second, agentKind, sessionId)
+}
+
+function initialLastAgent(): AgentKind {
+  if (typeof localStorage === 'undefined') return 'claude'
+  return localStorage.getItem('multiagent:lastAgent') === 'codex' ? 'codex' : 'claude'
+}
+
+function rememberAgent(agentKind: AgentKind): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('multiagent:lastAgent', agentKind)
+  }
 }
 
 interface PanesStore {
@@ -102,9 +119,10 @@ interface PanesStore {
   sidebarWidth: number
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
+  lastAgentKind: AgentKind
 
   // Tab operations
-  addTab: (defaultCwd?: string) => void
+  addTab: (defaultCwd?: string, name?: string) => void
   setTabDefaultCwd: (tabId: string, cwd: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
@@ -115,7 +133,7 @@ interface PanesStore {
 
   // Pane operations
   focusPane: (paneId: string) => void
-  splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string) => Promise<void>
+  splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string, agentKind?: AgentKind) => Promise<void>
   closePane: (paneId: string) => void
   zoomPane: (paneId: string) => void
   unzoom: () => void
@@ -124,10 +142,11 @@ interface PanesStore {
   setSessionId: (paneId: string, sessionId: string) => void
 
   // Session / PTY actions (Phase 2)
-  resumeSession: (sessionId: string, cwd: string) => Promise<void>
-  resumeSessionInNewTab: (sessionId: string, cwd: string) => Promise<void>
-  newSession: (cwd: string, direction?: SplitDirection) => Promise<void>
+  resumeSession: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
+  resumeSessionInNewTab: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
+  newSession: (cwd: string, direction?: SplitDirection, agentKind?: AgentKind) => Promise<void>
   addShellPane: (cwd: string, direction?: SplitDirection) => Promise<void>
+  setLastAgentKind: (agentKind: AgentKind) => void
   setPaneCwd: (ptyId: string, cwd: string) => void
   setPaneCustomName: (paneId: string, name: string) => void
 
@@ -151,7 +170,7 @@ interface PanesStore {
   activeTab: () => Tab | undefined
   getFocusedPane: () => PaneLeaf | undefined
   findPane: (paneId: string) => PaneLeaf | undefined
-  findPaneBySessionId: (sessionId: string) => PaneLeaf | undefined
+  findPaneBySessionId: (agentKind: AgentKind, sessionId: string) => PaneLeaf | undefined
 }
 
 export const usePanesStore = create<PanesStore>((set, get) => ({
@@ -162,10 +181,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   sidebarWidth: 220,
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
+  lastAgentKind: initialLastAgent(),
   draggedPaneId: null,
 
-  addTab: (defaultCwd?: string) => {
-    const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined }
+  addTab: (defaultCwd?: string, name?: string) => {
+    const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined, customLabel: name || undefined }
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
   },
 
@@ -238,12 +258,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  splitPane: async (paneId, direction, paneType, cwdOverride?) => {
+  splitPane: async (paneId, direction, paneType, cwdOverride, agentKind) => {
     const existing = get().findPane(paneId)
     const tab = get().activeTab()
     const resolvedType: PaneType = paneType ?? existing?.paneType ?? 'shell'
+    const resolvedAgent = resolvedType === 'agent'
+      ? (agentKind ?? existing?.agentKind ?? get().lastAgentKind)
+      : undefined
     const cwd = cwdOverride ?? existing?.cwd ?? tab?.defaultCwd ?? 'C:\\'
-    const newLeaf = makeLeaf(cwd, resolvedType)
+    const newLeaf = makeLeaf(cwd, resolvedType, resolvedAgent)
 
     set((s) => {
       const tabs = s.tabs.map((t) => {
@@ -258,9 +281,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return { tabs }
     })
 
-    if (resolvedType === 'claude' && typeof window !== 'undefined' && window.ipc) {
+    if (resolvedType === 'agent' && resolvedAgent && typeof window !== 'undefined' && window.ipc) {
+      get().setLastAgentKind(resolvedAgent)
       try {
-        const result = await window.ipc.invoke('session:new', cwd) as { ptyId: string; sessionId: string | null }
+        const result = await window.ipc.invoke('session:new', resolvedAgent, cwd) as { ptyId: string; sessionId: string | null }
         if (result?.ptyId) get().setPtyId(newLeaf.id, result.ptyId)
         if (result?.sessionId) get().setSessionId(newLeaf.id, result.sessionId)
       } catch (err) {
@@ -278,25 +302,27 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
     }
     set((s) => {
-      const tabsToRemove = new Set<string>()
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
         if (!t.rootNode) return t
         const newRoot = removeLeaf(t.rootNode, paneId)
         if (!newRoot) {
-          tabsToRemove.add(t.id)
-          return t
+          // Preserve the tab's label by snapshotting the last pane's directory
+          // as customLabel so it doesn't fall back to "New Tab".
+          const closedLeaf = findLeaf(t.rootNode, paneId)
+          const lastSegment = closedLeaf?.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop()
+          const fallbackLabel = t.customLabel ?? lastSegment
+          return { ...t, rootNode: undefined, focusedPaneId: '', customLabel: fallbackLabel }
         }
         const leafIds = collectLeafIds(newRoot)
         const focusedPaneId =
           t.focusedPaneId === paneId ? (leafIds[0] ?? '') : t.focusedPaneId
         return { ...t, rootNode: newRoot, focusedPaneId }
       })
-      const survivingTabs = tabs.filter((t) => !tabsToRemove.has(t.id))
-      const activeTabId = survivingTabs.find((t) => t.id === s.activeTabId)
-        ? s.activeTabId
-        : (survivingTabs[survivingTabs.length - 1]?.id ?? '')
-      return { tabs: survivingTabs, activeTabId }
+      return {
+        tabs,
+        zoomedPaneId: s.zoomedPaneId === paneId ? null : s.zoomedPaneId,
+      }
     })
   },
 
@@ -350,8 +376,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }))
   },
 
-  resumeSession: async (sessionId, cwd) => {
-    const leaf = makeLeaf(cwd, 'claude')
+  setLastAgentKind: (agentKind) => {
+    rememberAgent(agentKind)
+    set({ lastAgentKind: agentKind })
+  },
+
+  resumeSession: async (agentKind, sessionId, cwd) => {
+    get().setLastAgentKind(agentKind)
+    const leaf = makeLeaf(cwd, 'agent', agentKind)
     leaf.sessionId = sessionId
     set((s) => {
       if (s.tabs.length === 0) {
@@ -368,7 +400,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        const result = (await window.ipc.invoke('session:resume', sessionId, cwd)) as { ptyId: string }
+        const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
         if (result?.ptyId) {
           get().setPtyId(leaf.id, result.ptyId)
         }
@@ -378,14 +410,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
-  resumeSessionInNewTab: async (sessionId, cwd) => {
-    const leaf = makeLeaf(cwd, 'claude')
+  resumeSessionInNewTab: async (agentKind, sessionId, cwd) => {
+    get().setLastAgentKind(agentKind)
+    const leaf = makeLeaf(cwd, 'agent', agentKind)
     leaf.sessionId = sessionId
     const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        const result = (await window.ipc.invoke('session:resume', sessionId, cwd)) as { ptyId: string }
+        const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
         if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
       } catch (err) {
         console.error('session:resume IPC failed', err)
@@ -393,8 +426,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
-  newSession: async (cwd, direction = 'vertical') => {
-    const leaf = makeLeaf(cwd, 'claude')
+  newSession: async (cwd, direction = 'vertical', agentKind) => {
+    const resolvedAgent = agentKind ?? get().lastAgentKind
+    get().setLastAgentKind(resolvedAgent)
+    const leaf = makeLeaf(cwd, 'agent', resolvedAgent)
     set((s) => {
       if (s.tabs.length === 0) {
         const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
@@ -410,7 +445,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        const result = (await window.ipc.invoke('session:new', cwd)) as { ptyId: string; sessionId: string | null }
+        const result = (await window.ipc.invoke('session:new', resolvedAgent, cwd)) as { ptyId: string; sessionId: string | null }
         if (result?.ptyId) {
           get().setPtyId(leaf.id, result.ptyId)
         }
@@ -452,19 +487,25 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   applyLayout: async (saved) => {
     try {
-      // Strip ptyIds and convert unresumable claude panes to shell panes up front.
-      // A claude pane with no sessionId means the session file was never detected
-      // before the layout saved — leaving it as-is would hang on "Starting session..."
+      // Strip ptyIds and convert unresumable agent panes to shell panes up front.
+      // A missing sessionId means the pane was never used (blank session), so
+      // convert it to a shell pane rather than guessing which session to restore.
       function sanitizeNode(node: PaneNode): PaneNode {
         if (node.type === 'leaf') {
-          if (node.paneType === 'claude' && !node.sessionId) {
-            return { ...node, paneType: 'shell', ptyId: undefined }
+          const legacy = node as PaneLeaf & { paneType: PaneType | 'claude' }
+          const migrated: PaneLeaf = legacy.paneType === 'claude'
+            ? { ...legacy, paneType: 'agent', agentKind: 'claude' }
+            : { ...node, agentKind: node.paneType === 'agent' ? (node.agentKind ?? 'claude') : undefined }
+          if (migrated.paneType === 'agent' && !migrated.sessionId) {
+            return { ...migrated, paneType: 'shell', agentKind: undefined, ptyId: undefined }
           }
-          return { ...node, ptyId: undefined }
+          return { ...migrated, ptyId: undefined }
         }
         return { ...node, first: sanitizeNode(node.first), second: sanitizeNode(node.second) }
       }
-      const tabs = saved.tabs.map((t) => t.rootNode ? { ...t, rootNode: sanitizeNode(t.rootNode) } : t)
+      const tabs = saved.tabs.map((t) => (
+        t.rootNode ? { ...t, rootNode: sanitizeNode(t.rootNode) } : t
+      ))
 
       set({
         tabs,
@@ -475,18 +516,18 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
       if (typeof window === 'undefined' || !window.ipc) return
 
-      // Auto-resume claude sessions that have a known sessionId
+      // Auto-resume agent sessions that have a known sessionId.
       for (const tab of tabs) {
         for (const leaf of (tab.rootNode ? collectLeaves(tab.rootNode) : [])) {
-          if (leaf.paneType === 'claude' && leaf.sessionId) {
+          if (leaf.paneType === 'agent' && leaf.agentKind && leaf.sessionId) {
             try {
-              const result = await window.ipc.invoke('session:resume', leaf.sessionId, leaf.cwd) as { ptyId: string }
+              const result = await window.ipc.invoke('session:resume', leaf.agentKind, leaf.sessionId, leaf.cwd) as { ptyId: string }
               if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
             } catch {
               // Session file deleted or corrupt — fall back to shell pane
               set((s) => ({
                 tabs: s.tabs.map((t) => t.rootNode
-                  ? { ...t, rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', sessionId: undefined }) }
+                  ? { ...t, rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', agentKind: undefined, sessionId: undefined }) }
                   : t
                 ),
               }))
@@ -589,11 +630,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     return findLeaf(tab.rootNode, paneId) ?? undefined
   },
 
-  findPaneBySessionId: (sessionId) => {
+  findPaneBySessionId: (agentKind, sessionId) => {
     const s = get()
     for (const tab of s.tabs) {
       if (!tab.rootNode) continue
-      const leaf = findLeafBySessionId(tab.rootNode, sessionId)
+      const leaf = findLeafBySessionId(tab.rootNode, agentKind, sessionId)
       if (leaf) return leaf
     }
     return undefined
@@ -608,16 +649,17 @@ if (typeof window !== 'undefined' && window.ipc) {
     }
   })
 
-  // When the main process detects a new claude session file, link it to the pane
+  // When the main process detects a new agent session file, link it to the pane
   // so the session can be persisted and auto-resumed on next launch.
-  window.ipc.on('session:detected', (ptyId: unknown, sessionId: unknown) => {
-    if (typeof ptyId !== 'string' || typeof sessionId !== 'string') return
+  window.ipc.on('session:detected', (ptyId: unknown, agentKind: unknown, sessionId: unknown) => {
+    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex') || typeof sessionId !== 'string') return
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
       if (!tab.rootNode) continue
       const leaves = collectLeaves(tab.rootNode)
       const pane = leaves.find((l) => l.ptyId === ptyId)
       if (pane) {
+        store.setLastAgentKind(agentKind)
         store.setSessionId(pane.id, sessionId)
         break
       }

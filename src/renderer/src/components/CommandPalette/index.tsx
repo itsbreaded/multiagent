@@ -4,6 +4,7 @@ import { useSessions } from '../../hooks/useSessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
 import { HOTKEYS } from '../../utils/hotkeys'
+import { agentBadge } from '../../utils/agents'
 
 interface SessionEntry {
   kind: 'session'
@@ -23,6 +24,7 @@ type Entry = SessionEntry | ActionEntry
 export function CommandPalette(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
   const addTab = usePanesStore((s) => s.addTab)
+  const newSession = usePanesStore((s) => s.newSession)
   const splitPane = usePanesStore((s) => s.splitPane)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
@@ -43,8 +45,23 @@ export function CommandPalette(): JSX.Element {
       kind: 'action',
       label: 'New Claude session',
       shortcut: HOTKEYS.newTab.display,
-      icon: '+',
-      run: () => { addTab(); closeOverlays() },
+      icon: 'C',
+      run: () => {
+        const pane = getFocusedPane()
+        newSession(pane?.cwd ?? window.homeDir ?? 'C:\\', 'vertical', 'claude')
+        closeOverlays()
+      },
+    },
+    {
+      kind: 'action',
+      label: 'New Codex session',
+      shortcut: HOTKEYS.newTab.display,
+      icon: 'X',
+      run: () => {
+        const pane = getFocusedPane()
+        newSession(pane?.cwd ?? window.homeDir ?? 'C:\\', 'vertical', 'codex')
+        closeOverlays()
+      },
     },
     {
       kind: 'action',
@@ -82,7 +99,7 @@ export function CommandPalette(): JSX.Element {
       icon: '≡',
       run: () => { toggleSidebar(); closeOverlays() },
     },
-  ], [addTab, closeOverlays, splitPane, getFocusedPane, toggleSidebar])
+  ], [addTab, closeOverlays, splitPane, getFocusedPane, toggleSidebar, newSession])
 
   const filteredSessions: Session[] = query ? search(query) : sessions.slice(0, 6)
   const filteredActions: ActionEntry[] = query
@@ -118,7 +135,7 @@ export function CommandPalette(): JSX.Element {
     if (entry.kind === 'action') {
       entry.run()
     } else {
-      resumeSession(entry.session.sessionId, entry.session.cwd)
+      resumeSession(entry.session.agentKind, entry.session.sessionId, entry.session.cwd)
       closeOverlays()
     }
   }
@@ -192,14 +209,14 @@ export function CommandPalette(): JSX.Element {
                 const idx = i
                 return (
                   <EntryRow
-                    key={s.sessionId}
+                    key={`${s.agentKind}:${s.sessionId}`}
                     isSelected={selectedIdx === idx}
                     onClick={() => executeEntry({ kind: 'session', session: s })}
                     onHover={() => setSelectedIdx(idx)}
                   >
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span style={{ fontSize: 13, color: '#d4d4d4' }}>
-                        {s.projectName.split('/').pop()}
+                        {agentBadge(s.agentKind)} {s.projectName.split('/').pop()}
                       </span>
                       <span style={{ fontSize: 11, color: '#4a4b4e' }}>
                         {formatRelativeTime(s.lastActivity)} ago

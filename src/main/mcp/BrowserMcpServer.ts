@@ -3,6 +3,7 @@ import type { AddressInfo } from 'net'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -411,12 +412,40 @@ export class BrowserMcpServer {
           const transport = transports.get(sid)
           if (!transport) { res.writeHead(404).end(); return }
           await transport.handlePostMessage(req, res)
+        } else if (url.pathname === '/mcp') {
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'content-type': 'application/json' }).end(JSON.stringify({
+              jsonrpc: '2.0',
+              error: { code: -32000, message: 'Method not allowed.' },
+              id: null,
+            }))
+            return
+          }
+
+          const server = this._makeServer()
+          const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+          await server.connect(transport)
+          await transport.handleRequest(req, res, await readJsonBody(req))
+          res.on('close', () => {
+            transport.close().catch(() => {})
+            server.close().catch(() => {})
+          })
         } else {
-          res.writeHead(404).end()
+          res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'Not found.' },
+            id: null,
+          }))
         }
       } catch (err) {
         console.error('[BrowserMcpServer] HTTP error:', err)
-        if (!res.headersSent) res.writeHead(500).end()
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null,
+          }))
+        }
       }
     })
 
@@ -433,4 +462,13 @@ export class BrowserMcpServer {
     const transport = new StdioServerTransport()
     await this._makeServer().connect(transport)
   }
+}
+
+async function readJsonBody(req: import('http').IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+  const raw = Buffer.concat(chunks).toString('utf8')
+  return raw ? JSON.parse(raw) : undefined
 }

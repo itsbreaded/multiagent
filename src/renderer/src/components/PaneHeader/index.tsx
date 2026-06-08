@@ -5,6 +5,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { paneLabelText } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
+import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -47,8 +48,11 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
 
   const label = paneLabelText(pane, sessions)
   const isZoomed = zoomedPaneId === pane.id
-  const icon = pane.paneType === 'claude' ? 'C' : '>'
-  const session = pane.sessionId ? sessions.find((s) => s.sessionId === pane.sessionId) : null
+  const isAgent = pane.paneType === 'agent'
+  const icon = isAgent ? agentBadge(pane.agentKind ?? 'claude') : '>'
+  const session = pane.agentKind && pane.sessionId
+    ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
+    : null
   const branch = session?.gitBranch ?? null
 
   return (
@@ -93,7 +97,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         style={{
           fontSize: 10,
           fontWeight: 700,
-          color: pane.paneType === 'claude' ? '#4ade80' : '#6b7280',
+          color: isAgent ? agentAccent(pane.agentKind ?? 'claude') : '#6b7280',
           flexShrink: 0,
           fontFamily: 'monospace',
           width: 14,
@@ -165,12 +169,12 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       <div style={{ flex: 1 }} />
 
       {/* Session ID — click to copy full ID */}
-      {pane.paneType === 'claude' && pane.sessionId && !renaming && (
+      {isAgent && pane.sessionId && !renaming && (
         <SessionIdBadge sessionId={pane.sessionId} />
       )}
 
-      {/* Status pill for claude panes */}
-      {pane.paneType === 'claude' && !renaming && (
+      {/* Status pill for agent panes */}
+      {isAgent && !renaming && (
         <span
           style={{
             fontSize: 10,
@@ -182,7 +186,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
             flexShrink: 0,
           }}
         >
-          waiting
+          {agentLabel(pane.agentKind ?? 'claude')}
         </span>
       )}
 
@@ -216,7 +220,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           y={splitMenu.y}
           tabDefaultCwd={activeTab?.defaultCwd}
           onClose={() => setSplitMenu(null)}
-          onSplit={(cwd) => { splitPane(pane.id, splitMenu.direction, pane.paneType, cwd); setSplitMenu(null) }}
+          onSplit={(cwd) => { splitPane(pane.id, splitMenu.direction, pane.paneType, cwd, pane.agentKind); setSplitMenu(null) }}
           onBrowse={() => { setDirPickerForSplit(splitMenu.direction); setSplitMenu(null) }}
         />
       )}
@@ -224,11 +228,11 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       {/* DirPicker for one-off split directory */}
       {dirPickerForSplit && (
         <DirPicker
-          title={`Start ${pane.paneType === 'claude' ? 'session' : 'shell'} in...`}
+          title={`Start ${isAgent ? `${agentLabel(pane.agentKind ?? 'claude')} session` : 'shell'} in...`}
           initial={activeTab?.defaultCwd ?? pane.cwd}
           confirmLabel="Split"
           skipLabel="Cancel"
-          onConfirm={(dir) => { splitPane(pane.id, dirPickerForSplit, pane.paneType, dir); setDirPickerForSplit(null) }}
+          onConfirm={(dir) => { splitPane(pane.id, dirPickerForSplit, pane.paneType, dir, pane.agentKind); setDirPickerForSplit(null) }}
           onSkip={() => setDirPickerForSplit(null)}
         />
       )}
