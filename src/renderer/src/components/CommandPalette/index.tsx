@@ -63,7 +63,7 @@ export function CommandPalette(): JSX.Element {
     },
     {
       kind: 'action',
-      label: 'Open shell pane',
+      label: 'New shell pane',
       icon: '>',
       run: () => {
         const pane = getFocusedPane()
