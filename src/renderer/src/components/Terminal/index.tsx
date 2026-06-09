@@ -164,8 +164,17 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
 
-    const ro = new ResizeObserver(() => {
+    let pendingFit: number | null = null
+    const fitTerminal = (): void => {
+      if (!containerRef.current) return
       try { fitAddon.fit() } catch { /* ignore */ }
+    }
+    const ro = new ResizeObserver(() => {
+      if (pendingFit !== null) cancelAnimationFrame(pendingFit)
+      pendingFit = requestAnimationFrame(() => {
+        pendingFit = null
+        fitTerminal()
+      })
     })
     ro.observe(containerRef.current)
 
@@ -182,6 +191,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     setStatus('connecting')
 
     return () => {
+      if (pendingFit !== null) cancelAnimationFrame(pendingFit)
       container.removeEventListener('paste', blockPaste, true)
       ro.disconnect()
       xterm.dispose()
@@ -205,6 +215,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     let cancelled = false
     let unsubData: (() => void) | undefined
     let dataDisposable: { dispose(): void } | undefined
+    let resizeDisposable: { dispose(): void } | undefined
 
     async function connect(): Promise<void> {
       let ptyId = pane.ptyId ?? null
@@ -240,15 +251,13 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         window.ipc.invoke('pty:write', ptyId, data).catch(() => {})
       })
 
-      const originalFit = fitAddonRef.current?.fit.bind(fitAddonRef.current)
-      if (fitAddonRef.current) {
-        fitAddonRef.current.fit = () => {
-          originalFit?.()
-          const { cols, rows } = xterm
-          window.ipc.invoke('pty:resize', ptyId, cols, rows).catch(() => {})
-        }
-        fitAddonRef.current.fit()
+      const sendResize = (): void => {
+        const { cols, rows } = xterm
+        window.ipc.invoke('pty:resize', ptyId, cols, rows).catch(() => {})
       }
+      resizeDisposable = xterm.onResize(sendResize)
+      try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+      sendResize()
     }
 
     connect()
@@ -257,6 +266,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       cancelled = true
       unsubData?.()
       dataDisposable?.dispose()
+      resizeDisposable?.dispose()
       // Do NOT kill the PTY here. Terminal unmounts whenever the pane tree
       // changes (e.g. a split), and killing here would destroy a live session.
       // PTYs are killed explicitly by closePane() in the panes store.
