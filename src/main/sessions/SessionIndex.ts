@@ -7,6 +7,10 @@ import type { ScannedSession } from './TranscriptScanner'
 
 const DB_PATH = path.join(app.getPath('userData'), 'session-index.db')
 
+function normalizeStatus(status: string | null | undefined): Session['status'] {
+  return status === 'live-attached' ? 'live-attached' : 'resumable'
+}
+
 function scannedToSession(row: DbRow): Session {
   return {
     agentKind: row.agentKind as AgentKind,
@@ -21,7 +25,7 @@ function scannedToSession(row: DbRow): Session {
     lastActivity: row.lastActivity ?? null,
     messageCount: row.messageCount,
     transcriptPath: row.filePath,
-    status: (row.status as Session['status']) ?? 'resumable',
+    status: normalizeStatus(row.status),
   }
 }
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import type { PaneLeaf, Session, Tab } from '../../../../shared/types'
-import { usePanesStore } from '../../store/panes'
+import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
@@ -9,10 +9,12 @@ import { DirPicker } from '../DirPicker'
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
   const sessions = useSessionsStore((s) => s.sessions)
   const closeTab = usePanesStore((s) => s.closeTab)
   const renameTab = usePanesStore((s) => s.renameTab)
   const setTabDefaultCwd = usePanesStore((s) => s.setTabDefaultCwd)
+  const setSidebarSectionOpen = usePanesStore((s) => s.setSidebarSectionOpen)
 
   const tabLabels = computeLabels(tabs, sessions)
 
@@ -42,13 +44,16 @@ export function TabSections(): JSX.Element {
         const leaves = tab.rootNode ? collectLeaves(tab.rootNode) : []
         const isActive = tab.id === activeTabId
         const isRenaming = renamingTabId === tab.id
+        const sectionId = tabSidebarSectionId(tab.id)
+        const open = sidebarSectionOpen[sectionId] ?? sidebarSectionOpen[tab.id] ?? isActive
 
         return (
           <SidebarSection
             key={tab.id}
             title={label}
             count={leaves.length > 1 ? leaves.length : undefined}
-            defaultOpen={isActive}
+            open={open}
+            onOpenChange={(next) => setSidebarSectionOpen(sectionId, next)}
             onContextMenu={(e) => {
               e.preventDefault()
               setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })

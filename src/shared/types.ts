@@ -1,5 +1,5 @@
 // Session status
-export type SessionStatus = 'live-attached' | 'resumable' | 'archived'
+export type SessionStatus = 'live-attached' | 'resumable'
 
 export type AgentKind = 'claude' | 'codex'
 
@@ -64,6 +64,7 @@ export interface AppState {
   sessions: Session[]
   sidebarOpen: boolean
   sidebarWidth: number   // px
+  sidebarSectionOpen: Record<string, boolean>
   zoomedPaneId: string | null
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
@@ -120,8 +121,8 @@ export interface IPCChannels {
   'dialog:pick-directory': (title?: string) => string | null
 
   // --- Layout persistence ---
-  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string) => void
-  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string } | null
+  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>) => void
+  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
 
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY

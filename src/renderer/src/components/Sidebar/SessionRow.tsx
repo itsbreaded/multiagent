@@ -156,7 +156,7 @@ function getStatusDot(session: Session): React.ReactNode {
       />
     )
   }
-  // resumable or archived
+  // resumable
   return (
     <span
       style={{
@@ -166,7 +166,7 @@ function getStatusDot(session: Session): React.ReactNode {
         border: '1.5px solid #6b7280',
         display: 'inline-block',
         flexShrink: 0,
-        opacity: session.status === 'archived' ? 0.4 : 0.8,
+        opacity: 0.8,
       }}
     />
   )

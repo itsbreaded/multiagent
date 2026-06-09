@@ -42,7 +42,6 @@ export function useSessions() {
     sessions: withLive,
     loading,
     resumable: withLive.filter((s) => s.status === 'resumable' && !liveIds.has(sessionKey(s.agentKind, s.sessionId))),
-    archived: withLive.filter((s) => s.status === 'archived'),
     search: (query: string): Session[] => {
       const q = query.toLowerCase()
       return withLive.filter(

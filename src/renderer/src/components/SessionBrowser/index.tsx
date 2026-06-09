@@ -41,14 +41,12 @@ export function SessionBrowser(): JSX.Element {
 
   function statusLabel(s: Session): string {
     if (s.status === 'live-attached') return 'LIVE'
-    if (s.status === 'resumable') return 'RESUMABLE'
-    return 'ARCHIVED'
+    return 'RESUMABLE'
   }
 
   function statusColor(s: Session): string {
     if (s.status === 'live-attached') return '#4ade80'
-    if (s.status === 'resumable') return '#6b7280'
-    return '#4a4b4e'
+    return '#6b7280'
   }
 
   return (
@@ -265,7 +263,7 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
             backgroundColor:
               session.status === 'live-attached' ? statusDotColor : 'transparent',
             border:
-              session.status === 'resumable' || session.status === 'archived'
+              session.status !== 'live-attached'
                 ? `1.5px solid ${statusDotColor}`
                 : 'none',
             flexShrink: 0,

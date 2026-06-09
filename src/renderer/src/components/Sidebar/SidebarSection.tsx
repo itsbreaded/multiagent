@@ -4,6 +4,8 @@ interface SidebarSectionProps {
   title: string
   count?: number
   defaultOpen?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   children: React.ReactNode
   onContextMenu?: React.MouseEventHandler<HTMLDivElement>
   renaming?: boolean
@@ -17,6 +19,8 @@ export function SidebarSection({
   title,
   count,
   defaultOpen = true,
+  open: controlledOpen,
+  onOpenChange,
   children,
   onContextMenu,
   renaming,
@@ -25,8 +29,15 @@ export function SidebarSection({
   onRenameCommit,
   onRenameCancel,
 }: SidebarSectionProps): JSX.Element {
-  const [open, setOpen] = useState(defaultOpen)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
+  const open = controlledOpen ?? uncontrolledOpen
   const inputRef = useRef<HTMLInputElement>(null)
+
+  function setOpen(next: boolean | ((current: boolean) => boolean)) {
+    const value = typeof next === 'function' ? next(open) : next
+    if (controlledOpen === undefined) setUncontrolledOpen(value)
+    onOpenChange?.(value)
+  }
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()

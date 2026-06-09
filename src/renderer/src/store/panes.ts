@@ -111,12 +111,19 @@ function rememberAgent(agentKind: AgentKind): void {
   }
 }
 
+export const RECENT_SECTION_ID = 'recent'
+
+export function tabSidebarSectionId(tabId: string): string {
+  return `tab:${tabId}`
+}
+
 interface PanesStore {
   tabs: Tab[]
   activeTabId: string
   zoomedPaneId: string | null
   sidebarOpen: boolean
   sidebarWidth: number
+  sidebarSectionOpen: Record<string, boolean>
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
   lastAgentKind: AgentKind
@@ -130,6 +137,7 @@ interface PanesStore {
   duplicateTab: (tabId: string) => void
   closeOtherTabs: (tabId: string) => void
   closeTabsToRight: (tabId: string) => void
+  setSidebarSectionOpen: (sectionId: string, open: boolean) => void
 
   // Pane operations
   focusPane: (paneId: string) => void
@@ -151,7 +159,7 @@ interface PanesStore {
   setPaneCustomName: (paneId: string, name: string) => void
 
   // Layout persistence
-  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string }) => Promise<void>
+  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> }) => Promise<void>
 
   // UI toggles
   toggleSidebar: () => void
@@ -179,6 +187,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   zoomedPaneId: null,
   sidebarOpen: true,
   sidebarWidth: 220,
+  sidebarSectionOpen: {
+    [RECENT_SECTION_ID]: true,
+  },
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
   lastAgentKind: initialLastAgent(),
@@ -186,7 +197,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   addTab: (defaultCwd?: string, name?: string) => {
     const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined, customLabel: name || undefined }
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true } }))
   },
 
   setTabDefaultCwd: (tabId, cwd) => {
@@ -200,7 +211,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const tabs = s.tabs.filter((t) => t.id !== tabId)
       const activeTabId =
         s.activeTabId === tabId ? (tabs[tabs.length - 1]?.id ?? '') : s.activeTabId
-      return { tabs, activeTabId }
+      const { [tabSidebarSectionId(tabId)]: _closed, [tabId]: _legacyClosed, ...sidebarSectionOpen } = s.sidebarSectionOpen
+      return { tabs, activeTabId, sidebarSectionOpen }
     })
   },
 
@@ -226,14 +238,22 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const newTab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
       const idx = s.tabs.findIndex((t) => t.id === tabId)
       const tabs = [...s.tabs.slice(0, idx + 1), newTab, ...s.tabs.slice(idx + 1)]
-      return { tabs, activeTabId: newTab.id }
+      return { tabs, activeTabId: newTab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(newTab.id)]: true } }
     })
   },
 
   closeOtherTabs: (tabId) => {
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id === tabId)
-      return { tabs, activeTabId: tabId }
+      const sectionId = tabSidebarSectionId(tabId)
+      return {
+        tabs,
+        activeTabId: tabId,
+        sidebarSectionOpen: {
+          [RECENT_SECTION_ID]: s.sidebarSectionOpen[RECENT_SECTION_ID] ?? true,
+          [sectionId]: s.sidebarSectionOpen[sectionId] ?? s.sidebarSectionOpen[tabId] ?? true,
+        },
+      }
     })
   },
 
@@ -245,8 +265,18 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const activeTabId = tabs.find((t) => t.id === s.activeTabId)
         ? s.activeTabId
         : tabId
-      return { tabs, activeTabId }
+      const kept = new Set(tabs.flatMap((t) => [tabSidebarSectionId(t.id), t.id]))
+      const sidebarSectionOpen = Object.fromEntries(
+        Object.entries(s.sidebarSectionOpen).filter(([id]) =>
+          id === RECENT_SECTION_ID || kept.has(id)
+        )
+      )
+      return { tabs, activeTabId, sidebarSectionOpen }
     })
+  },
+
+  setSidebarSectionOpen: (sectionId, open) => {
+    set((s) => ({ sidebarSectionOpen: { ...s.sidebarSectionOpen, [sectionId]: open } }))
   },
 
   focusPane: (paneId) => {
@@ -388,7 +418,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => {
       if (s.tabs.length === 0) {
         const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
-        return { tabs: [tab], activeTabId: tab.id }
+        return { tabs: [tab], activeTabId: tab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true } }
       }
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
@@ -415,7 +445,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const leaf = makeLeaf(cwd, 'agent', agentKind)
     leaf.sessionId = sessionId
     const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true } }))
     if (typeof window !== 'undefined' && window.ipc) {
       try {
         const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
@@ -433,7 +463,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => {
       if (s.tabs.length === 0) {
         const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
-        return { tabs: [tab], activeTabId: tab.id }
+        return { tabs: [tab], activeTabId: tab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true } }
       }
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
@@ -463,7 +493,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => {
       if (s.tabs.length === 0) {
         const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
-        return { tabs: [tab], activeTabId: tab.id }
+        return { tabs: [tab], activeTabId: tab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true } }
       }
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
@@ -516,12 +546,31 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const activeTabId = tabs.some((t) => t.id === savedActiveTabId)
         ? savedActiveTabId
         : (tabs.findLast((t) => t.rootNode)?.id ?? tabs[0]?.id ?? '')
+      const savedSectionOpen = saved.sidebarSectionOpen && typeof saved.sidebarSectionOpen === 'object'
+        ? saved.sidebarSectionOpen
+        : saved.tabSectionOpen && typeof saved.tabSectionOpen === 'object'
+          ? saved.tabSectionOpen
+          : {}
+      const sidebarSectionOpen: Record<string, boolean> = {
+        [RECENT_SECTION_ID]: typeof savedSectionOpen[RECENT_SECTION_ID] === 'boolean'
+          ? savedSectionOpen[RECENT_SECTION_ID]
+          : true,
+      }
+      for (const tab of tabs) {
+        const sectionId = tabSidebarSectionId(tab.id)
+        sidebarSectionOpen[sectionId] = typeof savedSectionOpen[sectionId] === 'boolean'
+          ? savedSectionOpen[sectionId]
+          : typeof savedSectionOpen[tab.id] === 'boolean'
+            ? savedSectionOpen[tab.id]
+            : tab.id === activeTabId
+      }
 
       set({
         tabs,
         activeTabId,
         sidebarWidth: saved.sidebarWidth ?? 220,
         sidebarOpen: saved.sidebarOpen ?? true,
+        sidebarSectionOpen,
       })
 
       if (typeof window === 'undefined' || !window.ipc) return
@@ -590,7 +639,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         ]
       }
 
-      return { tabs: updatedTabs, activeTabId: newTab.id }
+      return { tabs: updatedTabs, activeTabId: newTab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(newTab.id)]: true } }
     })
   },
 

@@ -76,6 +76,7 @@ export default function App(): JSX.Element {
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
+  const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
 
   // Restore the saved layout on startup without prompting.
   useEffect(() => {
@@ -83,7 +84,7 @@ export default function App(): JSX.Element {
     restoreStartedRef.current = true
 
     window.ipc.invoke('layout:load').then((saved) => {
-      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string } | null
+      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
       if (data?.tabs?.length) {
         void usePanesStore.getState().applyLayout(data)
       }
@@ -95,10 +96,10 @@ export default function App(): JSX.Element {
     if (!layoutReady) return
     if (!tabs.length) return
     const timer = setTimeout(() => {
-      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId).catch(() => {})
+      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [layoutReady, tabs, sidebarWidth, sidebarOpen, activeTabId])
+  }, [layoutReady, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen])
 
   return (
     <div

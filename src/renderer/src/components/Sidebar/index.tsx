@@ -1,6 +1,6 @@
 import React, { useRef, useCallback, useState, useLayoutEffect } from 'react'
 import type { AgentKind, SplitDirection } from '../../../../shared/types'
-import { usePanesStore } from '../../store/panes'
+import { RECENT_SECTION_ID, usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import { SidebarHeader } from './SidebarHeader'
 import { SidebarSection } from './SidebarSection'
@@ -33,7 +33,9 @@ export function Sidebar(): JSX.Element {
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
-  const { resumable, archived, loading } = useSessions()
+  const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
+  const setSidebarSectionOpen = usePanesStore((s) => s.setSidebarSectionOpen)
+  const { resumable, loading } = useSessions()
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
@@ -131,16 +133,13 @@ export function Sidebar(): JSX.Element {
         <TabSections />
 
         {resumable.length > 0 && (
-          <SidebarSection title="Recent" count={resumable.length} defaultOpen>
+          <SidebarSection
+            title="Recent"
+            count={resumable.length}
+            open={sidebarSectionOpen[RECENT_SECTION_ID] ?? true}
+            onOpenChange={(open) => setSidebarSectionOpen(RECENT_SECTION_ID, open)}
+          >
             {resumable.map((s) => (
-              <SessionRow key={`${s.agentKind}:${s.sessionId}`} session={s} />
-            ))}
-          </SidebarSection>
-        )}
-
-        {archived.length > 0 && (
-          <SidebarSection title="Archived" count={archived.length} defaultOpen={false}>
-            {archived.map((s) => (
               <SessionRow key={`${s.agentKind}:${s.sessionId}`} session={s} />
             ))}
           </SidebarSection>
