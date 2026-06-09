@@ -54,7 +54,8 @@
       "buildResources": "build"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "src/main/mcp/templates/**/*"
     ],
     "asarUnpack": [
       "**/*.node",

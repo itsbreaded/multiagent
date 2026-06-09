@@ -120,8 +120,8 @@ export interface IPCChannels {
   'dialog:pick-directory': (title?: string) => string | null
 
   // --- Layout persistence ---
-  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean) => void
-  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
+  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string) => void
+  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string } | null
 
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY

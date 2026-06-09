@@ -151,7 +151,7 @@ interface PanesStore {
   setPaneCustomName: (paneId: string, name: string) => void
 
   // Layout persistence
-  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean }) => Promise<void>
+  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string }) => Promise<void>
 
   // UI toggles
   toggleSidebar: () => void
@@ -503,37 +503,46 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         }
         return { ...node, first: sanitizeNode(node.first), second: sanitizeNode(node.second) }
       }
-      const tabs = saved.tabs.map((t) => (
-        t.rootNode ? { ...t, rootNode: sanitizeNode(t.rootNode) } : t
-      ))
+      const tabs = saved.tabs.map((t) => {
+        if (!t.rootNode) return { ...t, focusedPaneId: '' }
+        const rootNode = sanitizeNode(t.rootNode)
+        const focusedPaneId = findLeaf(rootNode, t.focusedPaneId)
+          ? t.focusedPaneId
+          : (collectLeafIds(rootNode)[0] ?? '')
+        return { ...t, rootNode, focusedPaneId }
+      })
+
+      const savedActiveTabId = typeof saved.activeTabId === 'string' ? saved.activeTabId : ''
+      const activeTabId = tabs.some((t) => t.id === savedActiveTabId)
+        ? savedActiveTabId
+        : (tabs.findLast((t) => t.rootNode)?.id ?? tabs[0]?.id ?? '')
 
       set({
         tabs,
-        activeTabId: tabs[0]?.id ?? '',
+        activeTabId,
         sidebarWidth: saved.sidebarWidth ?? 220,
         sidebarOpen: saved.sidebarOpen ?? true,
       })
 
       if (typeof window === 'undefined' || !window.ipc) return
 
-      // Auto-resume agent sessions that have a known sessionId.
-      for (const tab of tabs) {
-        for (const leaf of (tab.rootNode ? collectLeaves(tab.rootNode) : [])) {
-          if (leaf.paneType === 'agent' && leaf.agentKind && leaf.sessionId) {
-            try {
-              const result = await window.ipc.invoke('session:resume', leaf.agentKind, leaf.sessionId, leaf.cwd) as { ptyId: string }
-              if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
-            } catch {
-              // Session file deleted or corrupt — fall back to shell pane
-              set((s) => ({
-                tabs: s.tabs.map((t) => t.rootNode
-                  ? { ...t, rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', agentKind: undefined, sessionId: undefined }) }
-                  : t
-                ),
-              }))
-            }
-          }
-        }
+      const leaves = tabs.flatMap((tab) => tab.rootNode ? collectLeaves(tab.rootNode) : [])
+      for (const leaf of leaves) {
+        if (leaf.paneType !== 'agent' || !leaf.agentKind || !leaf.sessionId) continue
+
+        void window.ipc.invoke('session:resume', leaf.agentKind, leaf.sessionId, leaf.cwd)
+          .then((result) => {
+            const resume = result as { ptyId?: string } | null
+            if (resume?.ptyId) get().setPtyId(leaf.id, resume.ptyId)
+          })
+          .catch(() => {
+            set((s) => ({
+              tabs: s.tabs.map((t) => t.rootNode
+                ? { ...t, rootNode: updateLeaf(t.rootNode, leaf.id, { paneType: 'shell', agentKind: undefined, sessionId: undefined }) }
+                : t
+              ),
+            }))
+          })
       }
     } catch (err) {
       console.error('[MultiAgent] applyLayout failed:', err)

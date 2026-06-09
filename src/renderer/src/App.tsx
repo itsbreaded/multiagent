@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
@@ -67,31 +67,38 @@ function useGlobalKeyboard() {
 export default function App(): JSX.Element {
   useGlobalKeyboard()
 
+  const restoreStartedRef = useRef(false)
+  const [layoutReady, setLayoutReady] = useState(false)
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
 
   const tabs = usePanesStore((s) => s.tabs)
+  const activeTabId = usePanesStore((s) => s.activeTabId)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
 
   // Restore the saved layout on startup without prompting.
   useEffect(() => {
+    if (restoreStartedRef.current) return
+    restoreStartedRef.current = true
+
     window.ipc.invoke('layout:load').then((saved) => {
-      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
+      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string } | null
       if (data?.tabs?.length) {
         void usePanesStore.getState().applyLayout(data)
       }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => setLayoutReady(true))
   }, [])
 
   // Debounced layout save whenever tabs or sidebar state changes
   useEffect(() => {
+    if (!layoutReady) return
     if (!tabs.length) return
     const timer = setTimeout(() => {
-      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen).catch(() => {})
+      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [tabs, sidebarWidth, sidebarOpen])
+  }, [layoutReady, tabs, sidebarWidth, sidebarOpen, activeTabId])
 
   return (
     <div

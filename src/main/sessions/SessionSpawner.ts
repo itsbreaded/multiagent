@@ -6,6 +6,7 @@ import type { BrowserWindow } from 'electron'
 import type { PtyManager } from '../pty/PtyManager'
 import type { AgentKind } from '../../shared/types'
 import { CodexSessionScanner, codexSessionsDir } from './CodexSessionScanner'
+import { currentClaudeMcpConfigPath, currentCodexMcpUrl } from '../mcp/McpInjector'
 
 // --- Shared watcher state ---
 // One chokidar instance watches ~/.claude/projects/ for all sessions.
@@ -100,16 +101,13 @@ export class SessionSpawner {
     const ptyId = this.ptyManager.createAgent(cwd, agentKind)
     const startedAt = Date.now()
     this._watchForNewSession(agentKind, ptyId, cwd, startedAt)
-    this._writeWhenPromptReady(ptyId, `${agentKind === 'claude' ? 'claude' : 'codex'}\r`)
+    this._writeWhenPromptReady(ptyId, `${newSessionCommand(agentKind)}\r`)
     return { ptyId, sessionId: null }
   }
 
   async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string): Promise<{ ptyId: string }> {
     const ptyId = this.ptyManager.createAgent(cwd, agentKind)
-    const command = agentKind === 'claude'
-      ? `claude --resume ${shellArg(sessionId)}\r`
-      : `codex resume -C ${shellArg(cwd)} ${shellArg(sessionId)}\r`
-    this._writeWhenPromptReady(ptyId, command)
+    this._writeWhenPromptReady(ptyId, `${resumeSessionCommand(agentKind, sessionId, cwd)}\r`)
     return { ptyId }
   }
 
@@ -258,6 +256,39 @@ export class SessionSpawner {
 function shellArg(value: string): string {
   if (/^[A-Za-z0-9_\-.:\\/]+$/.test(value)) return value
   return `"${value.replace(/"/g, '\\"')}"`
+}
+
+function newSessionCommand(agentKind: AgentKind): string {
+  if (agentKind === 'claude') return `claude${claudeCliArgs()}`
+  return `codex${codexCliArgs()}`
+}
+
+function resumeSessionCommand(agentKind: AgentKind, sessionId: string, cwd: string): string {
+  if (agentKind === 'claude') return `claude${claudeCliArgs()} --resume ${shellArg(sessionId)}`
+  return `codex resume${codexCliArgs()} -C ${shellArg(cwd)} ${shellArg(sessionId)}`
+}
+
+function claudeCliArgs(): string {
+  const mcpConfigPath = currentClaudeMcpConfigPath()
+  return mcpConfigPath ? ` --mcp-config ${shellArg(mcpConfigPath)} --strict-mcp-config` : ''
+}
+
+function codexCliArgs(): string {
+  const args = ['--no-alt-screen', '-c', psSingleQuoted('tui.animations=false')]
+  const mcpUrl = currentCodexMcpUrl()
+  if (mcpUrl) {
+    args.push(
+      '-c',
+      psSingleQuoted(`mcp_servers.multiagent-browser.url=${JSON.stringify(mcpUrl)}`),
+      '-c',
+      psSingleQuoted('mcp_servers.multiagent-browser.enabled=true')
+    )
+  }
+  return ` ${args.join(' ')}`
+}
+
+function psSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 function normalizePath(value: string): string {
