@@ -1,10 +1,9 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
-import { RestorePrompt } from './components/RestorePrompt'
 import { usePanesStore } from './store/panes'
 import { HOTKEYS, hotkeyKey, eventKey } from './utils/hotkeys'
 import type { Tab } from '../../shared/types'
@@ -70,35 +69,19 @@ export default function App(): JSX.Element {
 
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
-  const [restoreData, setRestoreData] = useState<{
-    tabs: Tab[]
-    sidebarWidth: number
-    sidebarOpen: boolean
-  } | null>(null)
 
   const tabs = usePanesStore((s) => s.tabs)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
 
-  // Peek at saved layout on mount; show restore prompt if previous session exists
+  // Restore the saved layout on startup without prompting.
   useEffect(() => {
     window.ipc.invoke('layout:load').then((saved) => {
       const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
       if (data?.tabs?.length) {
-        setRestoreData(data)
+        void usePanesStore.getState().applyLayout(data)
       }
     }).catch(() => {})
-  }, [])
-
-  const handleRestore = useCallback(() => {
-    if (restoreData) {
-      usePanesStore.getState().applyLayout(restoreData)
-    }
-    setRestoreData(null)
-  }, [restoreData])
-
-  const handleDiscard = useCallback(() => {
-    setRestoreData(null)
   }, [])
 
   // Debounced layout save whenever tabs or sidebar state changes
@@ -152,15 +135,6 @@ export default function App(): JSX.Element {
       {/* Overlays */}
       {sessionBrowserOpen && <SessionBrowser />}
       {commandPaletteOpen && <CommandPalette />}
-
-      {/* Startup restore prompt - shown before any tabs load */}
-      {restoreData && (
-        <RestorePrompt
-          tabs={restoreData.tabs}
-          onRestore={handleRestore}
-          onDiscard={handleDiscard}
-        />
-      )}
     </div>
   )
 }

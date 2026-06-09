@@ -31,6 +31,8 @@ const XTERM_THEME = {
   brightWhite: '#e2e4e6',
 }
 
+const TERMINAL_SCROLLBACK_LINES = 250_000
+
 interface ContextMenu {
   x: number
   y: number
@@ -85,7 +87,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       fontSize: 13,
       lineHeight: 1.3,
       cursorBlink: pane.paneType !== 'agent',
-      scrollback: 5000,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
       allowTransparency: false,
     })
 
