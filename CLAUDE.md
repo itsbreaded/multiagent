@@ -86,7 +86,7 @@ The app must not mutate user or project agent config files. Do not write to `~/.
 - `claude-mcp.json` - JSON config for Claude Code, with `{port}` replaced at runtime.
 - `codex-mcp.toml` - TOML snippet for Codex CLI config overrides, with `{port}` replaced at runtime.
 
-`McpInjector` resolves these templates on startup. Claude Code on Windows requires a real file path for `--mcp-config`; inline JSON is unreliable and has been observed to be treated as a mangled file path. Therefore Claude uses a PID-scoped temp file under `%TEMP%`, passed as `--mcp-config <path> --strict-mcp-config`, and cleaned up by `McpInjector`.
+`McpInjector` resolves these templates on startup. Claude Code on Windows requires a real file path for `--mcp-config`; inline JSON is unreliable and has been observed to be treated as a mangled file path. Therefore Claude uses a PID-scoped temp file under `%TEMP%`, passed as `--mcp-config <path>` (no `--strict-mcp-config`), and cleaned up by `McpInjector`. Omitting `--strict-mcp-config` is intentional — it allows Claude to still load user-level and project-level MCP servers from its normal config locations alongside the injected browser server.
 
 Codex does not need a temp file. It receives the MCP server process-scoped through CLI `-c` overrides generated from the template, along with the TUI flags noted above.
 

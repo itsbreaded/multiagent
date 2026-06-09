@@ -270,7 +270,7 @@ function resumeSessionCommand(agentKind: AgentKind, sessionId: string, cwd: stri
 
 function claudeCliArgs(): string {
   const mcpConfigPath = currentClaudeMcpConfigPath()
-  return mcpConfigPath ? ` --mcp-config ${shellArg(mcpConfigPath)} --strict-mcp-config` : ''
+  return mcpConfigPath ? ` --mcp-config ${shellArg(mcpConfigPath)}` : ''
 }
 
 function codexCliArgs(): string {
