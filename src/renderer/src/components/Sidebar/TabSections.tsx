@@ -4,6 +4,7 @@ import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
+import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
 import { DirPicker } from '../DirPicker'
 
 export function TabSections(): JSX.Element {
@@ -168,8 +169,26 @@ function PaneRow({
           transition: 'background-color 0.1s',
         }}
       >
-        {pane.paneType === 'agent' ? (
-          <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#4ade80', flexShrink: 0, display: 'inline-block' }} />
+        {pane.paneType === 'agent' && pane.agentKind ? (
+          <span
+            title={agentLabel(pane.agentKind)}
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: 3,
+              border: `1px solid ${agentAccent(pane.agentKind)}`,
+              color: agentAccent(pane.agentKind),
+              fontSize: 9,
+              fontWeight: 700,
+              fontFamily: 'monospace',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            {agentBadge(pane.agentKind)}
+          </span>
         ) : (
           <span style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #6b7280', flexShrink: 0, display: 'inline-block', opacity: 0.8 }} />
         )}
