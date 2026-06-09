@@ -2,7 +2,6 @@ import React, { useRef, useCallback, useState, useLayoutEffect } from 'react'
 import type { AgentKind, SplitDirection } from '../../../../shared/types'
 import { RECENT_SECTION_ID, usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
-import { SidebarHeader } from './SidebarHeader'
 import { SidebarSection } from './SidebarSection'
 import { SessionRow } from './SessionRow'
 import { TabSections } from './TabSections'
@@ -100,8 +99,6 @@ export function Sidebar(): JSX.Element {
         position: 'relative',
       }}
     >
-      <SidebarHeader />
-
       {/* Action buttons */}
       <div style={{ padding: '8px 8px 6px', display: 'flex', gap: 5 }}>
         <SpawnButton
