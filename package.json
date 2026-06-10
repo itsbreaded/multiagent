@@ -65,7 +65,8 @@
     ],
     "npmRebuild": false,
     "win": {
-      "target": "dir"
+      "target": "dir",
+      "icon": "build/favicon.ico"
     },
     "mac": {
       "target": "dmg",
