@@ -67,6 +67,8 @@ IPC listeners are wired at module level after store creation (not inside compone
 
 Keep overlay surfaces visually aligned. Settings, Session Browser, and Command Palette should share the same application modal language: centered dark overlay, `#1a1b1e` panel, `#2a2b2e` borders, 10px radius, `0 24px 64px rgba(0,0,0,0.6)` shadow, muted section labels, and green `#4ade80` active accents. Do not introduce VS Code-specific colors or layout treatments in one overlay unless the rest of the app is intentionally updated to match.
 
+Renderer styling should start from `src/renderer/src/styles/theme.ts` for palette, borders, shadows, z-indexes, and reusable sidebar/menu/control style fragments. Add new shared tokens there when a value is meant to become a convention; avoid copying raw hex values or ad hoc menu/sidebar styles into new components.
+
 All non-terminal scrollable renderer surfaces should use the shared `dark-scrollbar` class from `src/renderer/src/assets/main.css`. Terminal scrollbars are styled separately through `.xterm .xterm-viewport`. When adding a reusable component that owns an internal scroll container, expose a className hook instead of forcing callers to accept an unstyled native scrollbar.
 
 ### Session Indexing

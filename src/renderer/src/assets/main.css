@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+:root {
+  --ui-bg-app: #0e1011;
+  --ui-bg-panel: #1a1b1e;
+  --ui-border: #2a2b2e;
+  --ui-scroll-thumb: #3a3b3e;
+  --ui-scroll-thumb-hover: #5a5c61;
+  --ui-text-strong: #e2e4e6;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
 }
@@ -18,8 +27,8 @@ html, body, #root {
 
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background-color: #0e1011;
-  color: #e2e4e6;
+  background-color: var(--ui-bg-app);
+  color: var(--ui-text-strong);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -29,7 +38,7 @@ body {
 
 .dark-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: #3a3b3e #1a1b1e;
+  scrollbar-color: var(--ui-scroll-thumb) var(--ui-bg-panel);
 }
 
 .dark-scrollbar::-webkit-scrollbar {
@@ -38,22 +47,22 @@ body {
 }
 
 .dark-scrollbar::-webkit-scrollbar-track {
-  background: #1a1b1e;
+  background: var(--ui-bg-panel);
 }
 
 .dark-scrollbar::-webkit-scrollbar-thumb {
-  background: #3a3b3e;
-  border: 2px solid #1a1b1e;
+  background: var(--ui-scroll-thumb);
+  border: 2px solid var(--ui-bg-panel);
 }
 
 .dark-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #5a5c61;
+  background: var(--ui-scroll-thumb-hover);
 }
 
 /* xterm owns its own scrollable viewport; keep the terminal scrollbar visible. */
 .xterm .xterm-viewport {
   scrollbar-width: thin;
-  scrollbar-color: #3a3b3e #0e1011;
+  scrollbar-color: var(--ui-scroll-thumb) var(--ui-bg-app);
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar {
@@ -61,16 +70,16 @@ body {
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-track {
-  background: #0e1011;
+  background: var(--ui-bg-app);
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-thumb {
-  background: #3a3b3e;
-  border: 2px solid #0e1011;
+  background: var(--ui-scroll-thumb);
+  border: 2px solid var(--ui-bg-app);
 }
 
 .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: #5a5c61;
+  background: var(--ui-scroll-thumb-hover);
 }
 
 /* Sash drag: prevent xterm canvas from stealing pointer events */

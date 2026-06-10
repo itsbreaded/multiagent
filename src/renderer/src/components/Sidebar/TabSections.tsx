@@ -9,6 +9,7 @@ import { displayGitBranch } from '../../utils/git'
 import { DirPicker } from '../DirPicker'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
+import { border, menuStyles, ui } from '../../styles/theme'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -222,7 +223,7 @@ function PaneRow({
           margin: '1px 4px',
           borderRadius: 4,
           cursor: renaming ? 'default' : 'pointer',
-          backgroundColor: isFocused ? '#242528' : hovered ? '#1e2022' : 'transparent',
+          backgroundColor: isFocused ? ui.color.control : hovered ? ui.color.panelRaised : 'transparent',
           transition: 'background-color 0.1s',
         }}
       >
@@ -247,7 +248,7 @@ function PaneRow({
             {agentBadge(pane.agentKind)}
           </span>
         ) : (
-          <span style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #6b7280', flexShrink: 0, display: 'inline-block', opacity: 0.8 }} />
+          <span style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${ui.color.textMuted}`, flexShrink: 0, display: 'inline-block', opacity: 0.8 }} />
         )}
         {renaming ? (
           <input
@@ -263,10 +264,10 @@ function PaneRow({
             placeholder="Label (optional)"
             style={{
               flex: 1,
-              background: '#141517',
-              border: '1px solid #4ade80',
+              background: ui.color.input,
+              border: border.accent,
               borderRadius: 3,
-              color: '#c9cdd1',
+              color: ui.color.text,
               fontSize: 12,
               padding: '1px 4px',
               outline: 'none',
@@ -275,7 +276,7 @@ function PaneRow({
           />
         ) : (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, color: isFocused ? '#c9cdd1' : '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ fontSize: 12, color: isFocused ? ui.color.text : ui.color.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {name}
             </div>
             {branch && (
@@ -283,9 +284,9 @@ function PaneRow({
                 <span
                   style={{
                     fontSize: 10,
-                    color: '#4a4b4e',
-                    backgroundColor: '#191a1d',
-                    border: '1px solid #2a2b2e',
+                    color: ui.color.textDim,
+                    backgroundColor: ui.color.badge,
+                    border: border.default,
                     borderRadius: 3,
                     padding: '0 4px',
                     lineHeight: '14px',
@@ -364,17 +365,17 @@ function PaneContextMenu({
 
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 100 }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
-      <div style={{ position: 'fixed', left: x, top: y, zIndex: 101, backgroundColor: '#1e2022', border: '1px solid #2a2b2e', borderRadius: 6, padding: '4px 0', minWidth: 180, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+      <div style={menuStyles.backdrop} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
+      <div style={{ ...menuStyles.panel, left: x, top: y, minWidth: 180 }}>
         {items.map((item, i) =>
           item === null ? (
-            <div key={i} style={{ height: 1, backgroundColor: '#2a2b2e', margin: '4px 0' }} />
+            <div key={i} style={{ ...menuStyles.separator, margin: '4px 0' }} />
           ) : (
             <button
               key={i}
               onClick={() => { item.action(); onClose() }}
-              style={{ display: 'block', width: '100%', padding: '6px 12px', background: 'none', border: 'none', textAlign: 'left', fontSize: 12, color: item.danger ? '#f87171' : '#c9cdd1', cursor: 'pointer' }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2a2b2e' }}
+              style={{ ...menuStyles.item, display: 'block', color: item.danger ? ui.color.danger : ui.color.text, cursor: 'pointer' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.border }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
             >
               {item.label}
@@ -416,8 +417,8 @@ function TabContextMenu({
     return (
       <button
         onClick={onClick}
-        style={{ display: 'block', width: '100%', padding: '6px 12px', background: 'none', border: 'none', textAlign: 'left', fontSize: 12, color: danger ? '#f87171' : '#c9cdd1', cursor: 'pointer' }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2a2b2e' }}
+        style={{ ...menuStyles.item, display: 'block', color: danger ? ui.color.danger : ui.color.text, cursor: 'pointer' }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.border }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >
         {label}
@@ -427,11 +428,11 @@ function TabContextMenu({
 
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 100 }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
-      <div style={{ position: 'fixed', left: x, top: y, zIndex: 101, backgroundColor: '#1e2022', border: '1px solid #2a2b2e', borderRadius: 6, padding: '4px 0', minWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+      <div style={menuStyles.backdrop} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
+      <div style={{ ...menuStyles.panel, left: x, top: y, minWidth: 200 }}>
         {btn('Rename', () => { onRename(tabId); onClose() })}
         {btn(defaultDirLabel, () => { onChangeDefaultDir(tabId); onClose() })}
-        <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '4px 0' }} />
+        <div style={{ ...menuStyles.separator, margin: '4px 0' }} />
         {btn('Close tab', () => onCloseTab(tabId), true)}
       </div>
     </>

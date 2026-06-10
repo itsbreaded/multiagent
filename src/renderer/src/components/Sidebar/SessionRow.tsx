@@ -5,6 +5,7 @@ import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
+import { border, menuStyles, ui } from '../../styles/theme'
 
 interface SessionRowProps {
   session: Session
@@ -58,7 +59,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
           cursor: 'pointer',
           borderRadius: 4,
           margin: '1px 4px',
-          backgroundColor: hovered ? '#242528' : 'transparent',
+          backgroundColor: hovered ? ui.color.control : 'transparent',
           transition: 'background-color 0.1s',
           position: 'relative',
         }}
@@ -75,7 +76,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
               style={{
                 flex: 1,
                 fontSize: 12,
-                color: '#c9cdd1',
+                color: ui.color.text,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -83,7 +84,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
             >
               {projectLabel}
             </span>
-            <span style={{ fontSize: 11, color: '#6b7280', flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: ui.color.textMuted, flexShrink: 0 }}>
               {formatRelativeTime(session.lastActivity)}
             </span>
           </div>
@@ -95,9 +96,9 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
                 <span
                   style={{
                     fontSize: 10,
-                    color: '#4a4b4e',
-                    backgroundColor: '#191a1d',
-                    border: '1px solid #2a2b2e',
+                    color: ui.color.textDim,
+                    backgroundColor: ui.color.badge,
+                    border: border.default,
                     borderRadius: 3,
                     padding: '0 4px',
                     lineHeight: '14px',
@@ -115,7 +116,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
                 <span
                   style={{
                     fontSize: 11,
-                    color: '#5a5c61',
+                    color: ui.color.textFaint,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -151,7 +152,7 @@ function getStatusDot(session: Session): React.ReactNode {
           width: 8,
           height: 8,
           borderRadius: '50%',
-          backgroundColor: '#4ade80',
+          backgroundColor: ui.color.accent,
           display: 'inline-block',
           flexShrink: 0,
         }}
@@ -165,7 +166,7 @@ function getStatusDot(session: Session): React.ReactNode {
         width: 8,
         height: 8,
         borderRadius: '50%',
-        border: '1.5px solid #6b7280',
+        border: `1.5px solid ${ui.color.textMuted}`,
         display: 'inline-block',
         flexShrink: 0,
         opacity: 0.8,
@@ -244,44 +245,33 @@ function ContextMenu({ x, y, session, onClose }: ContextMenuProps): JSX.Element 
     <>
       {/* Backdrop */}
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: 100 }}
+        style={menuStyles.backdrop}
         onClick={onClose}
         onContextMenu={(e) => { e.preventDefault(); onClose() }}
       />
       <div
         style={{
-          position: 'fixed',
+          ...menuStyles.panel,
           left: x,
           top: y,
-          zIndex: 101,
-          backgroundColor: '#1e2022',
-          border: '1px solid #2a2b2e',
-          borderRadius: 6,
-          padding: '4px 0',
           minWidth: 180,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
         }}
       >
         {items.map((item, i) =>
           item === null ? (
-            <div key={i} style={{ height: 1, backgroundColor: '#2a2b2e', margin: '4px 0' }} />
+            <div key={i} style={{ ...menuStyles.separator, margin: '4px 0' }} />
           ) : (
             <button
               key={i}
               onClick={() => { item.action(); onClose() }}
               style={{
+                ...menuStyles.item,
                 display: 'block',
-                width: '100%',
-                padding: '6px 12px',
-                background: 'none',
-                border: 'none',
-                textAlign: 'left',
-                fontSize: 12,
-                color: (item as { danger?: boolean }).danger ? '#f87171' : '#c9cdd1',
+                color: (item as { danger?: boolean }).danger ? ui.color.danger : ui.color.text,
                 cursor: 'pointer',
               }}
               onMouseEnter={(e) => {
-                ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2a2b2e'
+                ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.border
               }}
               onMouseLeave={(e) => {
                 ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'

@@ -7,6 +7,7 @@ import { SessionRow } from './SessionRow'
 import { TabSections } from './TabSections'
 import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
+import { controlStyles, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
@@ -122,20 +123,14 @@ export function Sidebar(): JSX.Element {
     <div
       ref={sidebarRef}
       style={{
+        ...sidebarStyles.root,
         width: sidebarWidth,
         minWidth: sidebarWidth,
         maxWidth: sidebarWidth,
-        backgroundColor: '#1a1b1e',
-        borderRight: '1px solid #2a2b2e',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        flexShrink: 0,
-        position: 'relative',
       }}
     >
       {/* Action buttons */}
-      <div style={{ padding: '8px 8px 6px', display: 'flex', gap: 5 }}>
+      <div style={sidebarStyles.actionRow}>
         <SpawnButton
           label="+ Session"
           title={`Start ${agentLabel(lastAgentKind)} session`}
@@ -155,9 +150,9 @@ export function Sidebar(): JSX.Element {
       </div>
 
       {/* Workspace sections */}
-      <div className="dark-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+      <div className={ui.className.darkScrollbar} style={sidebarStyles.scrollArea}>
         {loading && (
-          <div style={{ padding: '12px 16px', fontSize: 11, color: '#4a4b4e' }}>
+          <div style={{ padding: '12px 16px', fontSize: 11, color: ui.color.textDim }}>
             Scanning sessions...
           </div>
         )}
@@ -169,29 +164,16 @@ export function Sidebar(): JSX.Element {
       {resumable.length > 0 && (
         <div
           style={{
-            flexShrink: 0,
+            ...sidebarStyles.dock,
             height: recentOpen ? sidebarBottomHeight : 32,
             minHeight: recentOpen ? 96 : 32,
             maxHeight: recentOpen ? 'calc(100% - 64px)' : 32,
-            borderTop: '1px solid #2a2b2e',
-            backgroundColor: '#18191c',
-            position: 'relative',
-            display: 'flex',
-            flexDirection: 'column',
           }}
         >
           {recentOpen && (
             <div
               onMouseDown={onBottomResizeMouseDown}
-              style={{
-                position: 'absolute',
-                top: -3,
-                left: 0,
-                right: 0,
-                height: 6,
-                cursor: 'row-resize',
-                zIndex: 11,
-              }}
+              style={sidebarStyles.resizeHandleHorizontal}
             />
           )}
           <SidebarSection
@@ -200,7 +182,7 @@ export function Sidebar(): JSX.Element {
             open={recentOpen}
             onOpenChange={(open) => setSidebarSectionOpen(RECENT_SECTION_ID, open)}
             style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}
-            contentClassName="dark-scrollbar"
+            contentClassName={ui.className.darkScrollbar}
             contentStyle={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}
           >
             {resumable.map((s) => (
@@ -213,15 +195,7 @@ export function Sidebar(): JSX.Element {
       {/* Resize handle */}
       <div
         onMouseDown={onMouseDown}
-        style={{
-          position: 'absolute',
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: 4,
-          cursor: 'col-resize',
-          zIndex: 10,
-        }}
+        style={sidebarStyles.resizeHandleVertical}
       />
 
       {spawnMenu && (
@@ -278,18 +252,10 @@ function SpawnButton({
       title={title}
       style={{
         flex: compact ? '0 0 30px' : 1,
-        padding: '6px 6px',
-        backgroundColor: '#242528',
-        border: '1px solid #2a2b2e',
-        borderRadius: 5,
-        color: '#c9cdd1',
-        fontSize: 12,
-        cursor: 'pointer',
-        fontWeight: 500,
-        textAlign: 'center',
+        ...controlStyles.sidebarButton,
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2e2f33' }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#242528' }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control }}
     >
       {label}
     </button>
@@ -344,20 +310,11 @@ function SpawnMenuPopover({
       <button
         onClick={dimmed ? undefined : onClick}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          width: '100%',
-          padding: '7px 12px',
-          background: 'none',
-          border: 'none',
-          textAlign: 'left',
-          fontSize: 12,
-          color: dimmed ? '#3a3b3e' : '#c9cdd1',
+          ...menuStyles.item,
+          color: dimmed ? ui.color.textFaint : ui.color.text,
           cursor: dimmed ? 'default' : 'pointer',
-          gap: 12,
         }}
-        onMouseEnter={(e) => { if (!dimmed) (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#242528' }}
+        onMouseEnter={(e) => { if (!dimmed) (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >
         <span>{label}</span>
@@ -367,7 +324,7 @@ function SpawnMenuPopover({
   }
 
   function sep(): JSX.Element {
-    return <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '3px 0' }} />
+    return <div style={menuStyles.separator} />
   }
 
   const dirHint = tabDefaultCwd
@@ -377,23 +334,16 @@ function SpawnMenuPopover({
   return (
     <>
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: 200 }}
+        style={menuStyles.backdrop}
         onClick={onClose}
         onContextMenu={(e) => { e.preventDefault(); onClose() }}
       />
       <div
         ref={menuRef}
         style={{
-          position: 'fixed',
+          ...menuStyles.panel,
           left: pos.left,
           top: pos.top,
-          zIndex: 201,
-          backgroundColor: '#1a1b1e',
-          border: '1px solid #2a2b2e',
-          borderRadius: 6,
-          padding: '4px 0',
-          minWidth: 200,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
           visibility: pos.visible ? 'visible' : 'hidden',
         }}
       >
@@ -401,7 +351,7 @@ function SpawnMenuPopover({
         <div style={{
           padding: '4px 12px 5px',
           fontSize: 10,
-          color: '#4a4b4e',
+          color: ui.color.textDim,
           textTransform: 'uppercase',
           letterSpacing: '0.08em',
           display: 'flex',
@@ -415,7 +365,7 @@ function SpawnMenuPopover({
             </span>
           )}
         </div>
-        <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '0 0 3px' }} />
+        <div style={{ ...menuStyles.separator, margin: '0 0 3px' }} />
 
         {type === 'agent' && (
           <>
@@ -444,13 +394,7 @@ function SpawnMenuPopover({
 function MenuLabel({ children }: { children: React.ReactNode }): JSX.Element {
   return (
     <div
-      style={{
-        padding: '5px 12px 3px',
-        fontSize: 10,
-        color: '#4a4b4e',
-        textTransform: 'uppercase',
-        letterSpacing: '0.08em',
-      }}
+      style={menuStyles.label}
     >
       {children}
     </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { border, sidebarStyles, ui } from '../../styles/theme'
 
 interface SidebarSectionProps {
   title: string
@@ -65,26 +66,15 @@ export function SidebarSection({
         onDragLeave={onHeaderDragLeave}
         onDrop={onHeaderDrop}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          width: '100%',
-          padding: '6px 12px',
-          color: '#6b7280',
-          fontSize: 11,
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          userSelect: 'none',
-          boxSizing: 'border-box',
-          outline: headerDropActive ? '1px solid #4ade80' : 'none',
+          ...sidebarStyles.sectionHeader,
+          outline: headerDropActive ? border.accent : 'none',
           outlineOffset: -1,
-          backgroundColor: headerDropActive ? '#1e2022' : 'transparent',
+          backgroundColor: headerDropActive ? ui.color.panelRaised : 'transparent',
         }}
       >
         <button
           onClick={() => !renaming && setOpen((o) => !o)}
-          style={{ background: 'none', border: 'none', padding: 0, cursor: renaming ? 'default' : 'pointer', color: 'inherit', flexShrink: 0, display: 'flex', alignItems: 'center' }}
+          style={{ ...sidebarStyles.sectionToggle, cursor: renaming ? 'default' : 'pointer' }}
         >
           <span style={{ fontSize: 9, transition: 'transform 0.15s', display: 'inline-block', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>
             ▶
@@ -106,9 +96,9 @@ export function SidebarSection({
               flex: 1,
               background: 'none',
               border: 'none',
-              outline: '1px solid #4ade80',
-              borderRadius: 2,
-              color: '#c9cdd1',
+              outline: border.accent,
+              borderRadius: ui.radius.xs,
+              color: ui.color.text,
               fontSize: 11,
               fontWeight: 600,
               letterSpacing: '0.08em',
@@ -120,7 +110,7 @@ export function SidebarSection({
         ) : (
           <button
             onClick={() => setOpen((o) => !o)}
-            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1, textAlign: 'left' }}
+            style={sidebarStyles.sectionTitleButton}
           >
             {title}
           </button>
@@ -128,15 +118,7 @@ export function SidebarSection({
 
         {count !== undefined && !renaming && (
           <span
-            style={{
-              marginLeft: 'auto',
-              fontSize: 11,
-              color: '#4a4b4e',
-              fontWeight: 400,
-              textTransform: 'none',
-              letterSpacing: 0,
-              flexShrink: 0,
-            }}
+            style={sidebarStyles.sectionCount}
           >
             {count}
           </span>
