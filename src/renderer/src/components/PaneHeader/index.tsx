@@ -10,6 +10,8 @@ import { displayGitBranch } from '../../utils/git'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import vsCodeIcon from '../../assets/vscode.png'
+import splitRightIcon from '../../assets/splitright.png'
+import splitDownIcon from '../../assets/splitdown.png'
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -186,12 +188,23 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       )}
 
       {/* Action buttons */}
+      {!renaming && (
+        <HeaderButton
+          title="Open in folder"
+          onClick={() => window.ipc.invoke('shell:open-folder', pane.cwd).catch(() => {})}
+        >
+          <svg width="15" height="13" viewBox="0 0 13 11" fill="currentColor" style={{ display: 'block' }}>
+            <rect x="0" y="2.5" width="13" height="8" rx="1.5" />
+            <rect x="0" y="0" width="6" height="4" rx="1.5" />
+          </svg>
+        </HeaderButton>
+      )}
       {vsCodeAvailable && !renaming && (
         <HeaderButton
           title="Open in VS Code"
           onClick={() => window.ipc.invoke('shell:open-vscode', pane.cwd).catch(() => {})}
         >
-          <img src={vsCodeIcon} alt="VS Code" style={{ width: 12, height: 12, display: 'block' }} />
+          <img src={vsCodeIcon} alt="VS Code" style={{ width: 21, height: 21, display: 'block' }} />
         </HeaderButton>
       )}
       {!isZoomed && (
@@ -199,11 +212,15 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           <HeaderButton
             title={`Split vertical (${HOTKEYS.splitVertical.display})`}
             onClick={(e) => setSplitMenu({ direction: 'vertical', x: e.clientX, y: e.clientY })}
-          >◫</HeaderButton>
+          >
+            <img src={splitRightIcon} alt="Split right" style={{ width: 15, height: 15, display: 'block' }} />
+          </HeaderButton>
           <HeaderButton
             title={`Split horizontal (${HOTKEYS.splitHorizontal.display})`}
             onClick={(e) => setSplitMenu({ direction: 'horizontal', x: e.clientX, y: e.clientY })}
-          >⊟</HeaderButton>
+          >
+            <img src={splitDownIcon} alt="Split down" style={{ width: 15, height: 15, display: 'block' }} />
+          </HeaderButton>
         </>
       )}
       <HeaderButton
