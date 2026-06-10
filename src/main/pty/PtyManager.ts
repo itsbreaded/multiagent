@@ -4,7 +4,7 @@
  * Delegates all PTY spawning to a child process (ptyWorker) so that node-pty
  * never runs inside Electron's main process. Electron holds open Chromium IPC
  * handles that would otherwise be inherited through ConPTY into claude (a Bun
- * binary) and crash it. VS Code uses the same isolation pattern for its PTY host.
+ * binary) and crash it. Isolating node-pty in a child process avoids this entirely.
  */
 
 import { EventEmitter } from 'events'
@@ -20,6 +20,8 @@ type WorkerMessage =
   | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
+  | { type: 'pause'; id: string }
+  | { type: 'resume'; id: string }
   | { type: 'kill'; id: string }
 
 type ParentMessage =
@@ -152,6 +154,14 @@ export class PtyManager extends EventEmitter {
     this._send({ type: 'resize', id: ptyId, cols, rows })
   }
 
+  pause(ptyId: string): void {
+    this._send({ type: 'pause', id: ptyId })
+  }
+
+  resume(ptyId: string): void {
+    this._send({ type: 'resume', id: ptyId })
+  }
+
   kill(ptyId: string): void {
     this.pendingResizes.delete(ptyId)
     this.readyIds.delete(ptyId)
@@ -171,10 +181,11 @@ function buildEnv(extraVars?: Record<string, string>): Record<string, string> {
 
   if (env['ANTHROPIC_API_KEY'] === '') delete env['ANTHROPIC_API_KEY']
 
-  if (process.platform !== 'win32') {
-    env['TERM'] = 'xterm-256color'
-    env['COLORTERM'] = 'truecolor'
-  }
+  env['TERM'] = 'xterm-256color'
+  env['COLORTERM'] = 'truecolor'
+
+  // Some terminal apps adjust input/rendering based on TERM_PROGRAM.
+  env['TERM_PROGRAM'] = 'vscode'
 
   // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
   // works correctly inside our ConPTY. The DISABLE_* flags suppress alternate-

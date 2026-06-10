@@ -34,9 +34,7 @@ const XTERM_THEME = {
 
 const TERMINAL_SCROLLBACK_LINES = 250_000
 const RESIZE_COL_DEBOUNCE_MS = 100
-const WRITE_FLUSH_DELAY_MS = 16
-const CURSOR_SHOW_SEQUENCE = '\x1b[?25h'
-const CURSOR_HIDE_SEQUENCE = '\x1b[?25l'
+const IS_WINDOWS = navigator.userAgent.includes('Windows')
 
 interface ContextMenu {
   x: number
@@ -106,6 +104,12 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     const fitAddon = new FitAddon()
     xterm.loadAddon(fitAddon)
     xterm.open(containerRef.current)
+    // Tell xterm we're running under ConPTY so it applies the right
+    // rendering workarounds for the detected build number.
+    if (IS_WINDOWS) {
+      const buildNumber = parseInt(window.osRelease?.split('.')[2] ?? '0', 10)
+      xterm.options.windowsPty = { backend: 'conpty', buildNumber }
+    }
     let webglAddon: WebglAddon | null = null
     try {
       webglAddon = new WebglAddon()
@@ -245,11 +249,14 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     }
 
     let cancelled = false
+    let connectedPtyId: string | null = null
     let unsubData: (() => void) | undefined
     let dataDisposable: { dispose(): void } | undefined
     let resizeDisposable: { dispose(): void } | undefined
-    let pendingWrite = ''
-    let pendingWriteTimer: ReturnType<typeof setTimeout> | null = null
+    let conptyDa1Handler: { dispose(): void } | undefined
+    const activeWriteSeqs = new Set<number>()
+    let pendingInput = ''
+    let inputWriteInFlight = false
     let lastResize: { cols: number; rows: number } | null = null
     let pendingResizeCols: number | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
@@ -276,35 +283,58 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       if (!ptyId || cancelled) return
 
       ptyIdRef.current = ptyId
+      connectedPtyId = ptyId
       setStatus('ready')
 
-      const flushPendingWrite = (): void => {
-        pendingWriteTimer = null
-        if (!pendingWrite || cancelled) return
-        if (hasOpenSynchronizedOutput(pendingWrite)) {
-          pendingWriteTimer = setTimeout(flushPendingWrite, WRITE_FLUSH_DELAY_MS)
-          return
-        }
-        const chunk = pane.paneType === 'agent' ? keepAgentCursorHidden(pendingWrite) : pendingWrite
-        pendingWrite = ''
-        xterm.write(chunk)
+      const writePtyData = (seq: number, data: string): void => {
+        if (cancelled) return
+        activeWriteSeqs.add(seq)
+        xterm.write(data, () => {
+          window.ipc.send('pty:data-ack', ptyId, seq)
+          activeWriteSeqs.delete(seq)
+        })
       }
 
-      const queueWrite = (data: string): void => {
-        pendingWrite += data
-        if (pendingWriteTimer !== null) return
-        pendingWriteTimer = setTimeout(flushPendingWrite, WRITE_FLUSH_DELAY_MS)
-      }
-
-      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
-        if (receivedId === ptyId && typeof data === 'string') {
-          queueWrite(data)
+      unsubData = window.ipc.on('pty:data', (receivedId: unknown, seq: unknown, data: unknown) => {
+        if (receivedId === ptyId && Number.isInteger(seq) && typeof data === 'string') {
+          writePtyData(seq as number, data)
         }
       })
+      window.ipc.send('pty:attach', ptyId)
+
+      const flushInput = async (): Promise<void> => {
+        if (inputWriteInFlight) return
+        inputWriteInFlight = true
+        try {
+          while (!cancelled && pendingInput) {
+            const data = pendingInput
+            pendingInput = ''
+            await window.ipc.invoke('pty:write', ptyId, data)
+            xterm.scrollToBottom()
+          }
+        } catch {
+          // Input errors are surfaced by PTY exit/error handling.
+        } finally {
+          inputWriteInFlight = false
+          if (!cancelled && pendingInput) void flushInput()
+        }
+      }
 
       dataDisposable = xterm.onData((data) => {
-        window.ipc.invoke('pty:write', ptyId, data).catch(() => {})
+        pendingInput += data
+        void flushInput()
       })
+
+      conptyDa1Handler = IS_WINDOWS
+        ? xterm.parser.registerCsiHandler({ final: 'c' }, (params) => {
+            if (params.length === 0 || (params.length === 1 && params[0] === 0)) {
+              pendingInput += '\x1b[?61;4c'
+              void flushInput()
+              return true
+            }
+            return false
+          })
+        : undefined
 
       const sendResize = (cols: number, rows: number): void => {
         if (lastResize?.cols === cols && lastResize.rows === rows) return
@@ -344,10 +374,17 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
 
     return () => {
       cancelled = true
-      if (pendingWriteTimer) clearTimeout(pendingWriteTimer)
+      const lastActiveWriteSeq = activeWriteSeqs.size > 0 ? Math.max(...activeWriteSeqs) : null
+      const currentPtyId = connectedPtyId
+      if (currentPtyId) {
+        if (lastActiveWriteSeq !== null) window.ipc.send('pty:data-ack', currentPtyId, lastActiveWriteSeq)
+        window.ipc.send('pty:detach', currentPtyId)
+      }
+      pendingInput = ''
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       dataDisposable?.dispose()
+      conptyDa1Handler?.dispose()
       resizeDisposable?.dispose()
       // Do NOT kill the PTY here. Terminal unmounts whenever the pane tree
       // changes (e.g. a split), and killing here would destroy a live session.
@@ -446,18 +483,4 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       )}
     </div>
   )
-}
-
-function hasOpenSynchronizedOutput(data: string): boolean {
-  const open = data.lastIndexOf('\x1b[?2026h')
-  const close = data.lastIndexOf('\x1b[?2026l')
-  return open !== -1 && open > close
-}
-
-function keepAgentCursorHidden(data: string): string {
-  // Agent TUIs repaint whole screen regions and sometimes briefly show the
-  // hardware cursor at an intermediate far-right position before moving it back.
-  // The pane-level visual cursor is intentionally hidden for agents, so normalize
-  // cursor-show controls to cursor-hide controls before xterm renders them.
-  return data.replaceAll(CURSOR_SHOW_SEQUENCE, CURSOR_HIDE_SEQUENCE)
 }

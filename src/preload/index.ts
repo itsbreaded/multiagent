@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import * as os from 'os'
-import type { InvokeChannels, EventChannels } from '../shared/types'
+import type { InvokeChannels, EventChannels, SendChannels } from '../shared/types'
 
 // Expose typed IPC bridge to renderer
 contextBridge.exposeInMainWorld('ipc', {
@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('ipc', {
     }
   },
 
-  send(channel: string, ...args: unknown[]): void {
+  send(channel: SendChannels, ...args: unknown[]): void {
     ipcRenderer.send(channel, ...args)
   }
 })
@@ -28,16 +28,21 @@ contextBridge.exposeInMainWorld('ipc', {
 // is not available in contextIsolation mode)
 contextBridge.exposeInMainWorld('homeDir', os.homedir())
 
+// Expose OS release string (e.g. "10.0.22621") so the renderer can extract
+// the Windows build number for xterm's windowsPty ConPTY workaround selection.
+contextBridge.exposeInMainWorld('osRelease', os.release())
+
 // Type augmentation for window.ipc — consumed by renderer TypeScript
 export interface IpcBridge {
   invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
   on(channel: EventChannels, handler: (...args: unknown[]) => void): () => void
-  send(channel: string, ...args: unknown[]): void
+  send(channel: SendChannels, ...args: unknown[]): void
 }
 
 declare global {
   interface Window {
     ipc: IpcBridge
     homeDir: string
+    osRelease: string
   }
 }

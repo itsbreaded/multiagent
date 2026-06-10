@@ -42,6 +42,8 @@ On Windows, shell and agent panes use `-EncodedCommand` (UTF-16LE base64) to inj
 
 Codex panes pass `--no-alt-screen` and `-c tui.animations=false` to reduce cursor redraw/flicker in xterm panes. Keep those flags unless verified against current Codex behavior.
 
+PTY output flow control uses a sequence-numbered ack model: main process queues chunks with monotone sequence numbers, sends up to `MAX_IN_FLIGHT_PTY_BYTES` before waiting for renderer acks, and pauses/resumes node-pty around high/low byte watermarks. Before entering the queue, raw PTY data is coalesced over a 5ms window per PTY so rapid bursts reach xterm as fewer, larger writes — the xterm RAF render debouncer then coalesces dirty rows into a single frame rather than painting each chunk separately. The coalesce buffer is flushed explicitly on PTY exit and before every resize. Terminal behavior and flow control design draw on the microsoft/vscode GitHub repository as a reference.
+
 ### Pane Layout Model
 
 The layout is a binary tree of `PaneNode = PaneLeaf | PaneSplit` (same model as tmux). Each `Tab` has a `rootNode` and a `focusedPaneId`. `PaneLeaf` holds `paneType` (`'shell'|'agent'`), optional `agentKind` (`'claude'|'codex'`), `cwd`, optional `ptyId`, optional `sessionId`, and optional `customName` (user-set label prefix).

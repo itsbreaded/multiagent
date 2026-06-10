@@ -108,7 +108,16 @@ export interface IPCChannels {
   'pty:kill': (ptyId: string) => void
 
   // Main pushes PTY output to renderer
-  'pty:data': (ptyId: string, data: string) => void
+  'pty:data': (ptyId: string, seq: number, data: string) => void
+
+  // Renderer acknowledges PTY output after xterm has parsed it
+  'pty:data-ack': (ptyId: string, seq: number) => void
+
+  // Renderer is ready to receive PTY output for a mounted terminal
+  'pty:attach': (ptyId: string) => void
+
+  // Renderer terminal was unmounted; stop waiting on outstanding acks
+  'pty:detach': (ptyId: string) => void
 
   // Main pushes CWD changes to renderer (parsed from OSC 7 sequences)
   'pty:cwd': (ptyId: string, cwd: string) => void
@@ -152,3 +161,8 @@ export type EventChannels =
   | 'pty:data'
   | 'pty:cwd'
   | 'session:detected'
+
+export type SendChannels =
+  | 'pty:data-ack'
+  | 'pty:attach'
+  | 'pty:detach'
