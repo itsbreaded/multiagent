@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -111,19 +110,10 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       const buildNumber = parseInt(window.osRelease?.split('.')[2] ?? '0', 10)
       xterm.options.windowsPty = { backend: 'conpty', buildNumber }
     }
-    let webglAddon: WebglAddon | null = null
-    try {
-      webglAddon = new WebglAddon()
-      xterm.loadAddon(webglAddon)
-      webglAddon.onContextLoss(() => {
-        webglAddon?.dispose()
-        webglAddon = null
-      })
-    } catch {
-      webglAddon?.dispose()
-      webglAddon = null
-    }
     fitAddon.fit()
+    // No WebGL or Canvas addon — xterm DOM renderer is used. It is leaner on
+    // low-powered / software-rasterised GPUs where WebGL (via SwiftShader/WARP)
+    // produces ~50-60% CPU for a single keystroke echo.
 
     // Intercept keyboard shortcuts before xterm sees them.
     // xterm only calls stopPropagation when it processes a key (return true).
@@ -231,7 +221,6 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
       container.removeEventListener('paste', blockPaste, true)
       ro.disconnect()
-      webglAddon?.dispose()
       xterm.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
