@@ -72,7 +72,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     const ptyId = ptyIdRef.current
     if (!ptyId) return
     navigator.clipboard.readText().then((text) => {
-      if (text) window.ipc.invoke('pty:write', ptyId, text).catch(() => {})
+      if (text) window.ipc.send('pty:write', ptyId, text)
     }).catch(() => {})
     setContextMenu(null)
   }, [])
@@ -136,7 +136,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         if (pane.agentKind !== 'codex' && pane.agentKind !== 'claude') return true
         if (e.type === 'keydown') {
           const ptyId = ptyIdRef.current
-          if (ptyId) window.ipc.invoke('pty:write', ptyId, ALT_ENTER_SEQUENCE).catch(() => {})
+          if (ptyId) window.ipc.send('pty:write', ptyId, ALT_ENTER_SEQUENCE)
         }
         e.stopPropagation()
         e.preventDefault()
@@ -161,7 +161,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         const ptyId = ptyIdRef.current
         if (ptyId) {
           navigator.clipboard.readText().then((text) => {
-            if (text) window.ipc.invoke('pty:write', ptyId, text).catch(() => {})
+            if (text) window.ipc.send('pty:write', ptyId, text)
           }).catch(() => {})
         }
         return stop()
@@ -258,8 +258,6 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     let resizeDisposable: { dispose(): void } | undefined
     let conptyDa1Handler: { dispose(): void } | undefined
     const activeWriteSeqs = new Set<number>()
-    let pendingInput = ''
-    let inputWriteInFlight = false
     let lastResize: { cols: number; rows: number } | null = null
     let pendingResizeCols: number | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
@@ -305,34 +303,14 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       })
       window.ipc.send('pty:attach', ptyId)
 
-      const flushInput = async (): Promise<void> => {
-        if (inputWriteInFlight) return
-        inputWriteInFlight = true
-        try {
-          while (!cancelled && pendingInput) {
-            const data = pendingInput
-            pendingInput = ''
-            await window.ipc.invoke('pty:write', ptyId, data)
-            terminal.scrollToBottom()
-          }
-        } catch {
-          // Input errors are surfaced by PTY exit/error handling.
-        } finally {
-          inputWriteInFlight = false
-          if (!cancelled && pendingInput) void flushInput()
-        }
-      }
-
       dataDisposable = terminal.onData((data) => {
-        pendingInput += data
-        void flushInput()
+        if (!cancelled) window.ipc.send('pty:write', ptyId, data)
       })
 
       conptyDa1Handler = IS_WINDOWS
         ? terminal.parser.registerCsiHandler({ final: 'c' }, (params) => {
             if (params.length === 0 || (params.length === 1 && params[0] === 0)) {
-              pendingInput += '\x1b[?61;4c'
-              void flushInput()
+              if (!cancelled) window.ipc.send('pty:write', ptyId, '\x1b[?61;4c')
               return true
             }
             return false
@@ -383,7 +361,6 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         if (lastActiveWriteSeq !== null) window.ipc.send('pty:data-ack', currentPtyId, lastActiveWriteSeq)
         window.ipc.send('pty:detach', currentPtyId)
       }
-      pendingInput = ''
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       dataDisposable?.dispose()

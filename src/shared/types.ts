@@ -153,7 +153,6 @@ export type InvokeChannels =
   | 'session:new'
   | 'session:resume'
   | 'pty:create'
-  | 'pty:write'
   | 'pty:resize'
   | 'pty:kill'
   | 'shell:open-folder'
@@ -172,6 +171,7 @@ export type EventChannels =
   | 'session:detected'
 
 export type SendChannels =
+  | 'pty:write'
   | 'pty:data-ack'
   | 'pty:attach'
   | 'pty:detach'

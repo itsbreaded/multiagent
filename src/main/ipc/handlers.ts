@@ -33,6 +33,7 @@ interface QueuedPtyData {
 interface PtyOutputState {
   nextSeq: number
   queued: QueuedPtyData[]
+  queuedBytes: number
   inFlight: QueuedPtyData[]
   inFlightBytes: number
   ackTimer: NodeJS.Timeout | null
@@ -127,6 +128,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
       state = {
         nextSeq: 1,
         queued: [],
+        queuedBytes: 0,
         inFlight: [],
         inFlightBytes: 0,
         ackTimer: null,
@@ -164,6 +166,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     ) {
       const item = state.queued.shift()
       if (!item) break
+      state.queuedBytes = Math.max(0, state.queuedBytes - item.bytes)
       state.inFlight.push(item)
       state.inFlightBytes += item.bytes
       mainWindow.webContents.send('pty:data', ptyId, item.seq, item.data)
@@ -175,11 +178,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   function enqueuePtyOutput(ptyId: string, data: string): void {
     const state = outputState(ptyId)
-    state.queued.push({
-      seq: state.nextSeq++,
-      data,
-      bytes: Buffer.byteLength(data),
-    })
+    const bytes = Buffer.byteLength(data)
+    state.queued.push({ seq: state.nextSeq++, data, bytes })
+    state.queuedBytes += bytes
     pumpPtyOutput(ptyId)
   }
 
@@ -202,7 +203,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   }
 
   function bufferedPtyBytes(state: PtyOutputState): number {
-    return state.inFlightBytes + state.queued.reduce((total, item) => total + item.bytes, 0)
+    return state.inFlightBytes + state.queuedBytes
   }
 
   function updatePtyFlow(ptyId: string, state: PtyOutputState): void {
@@ -342,8 +343,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   // debouncer coalesce more dirty rows into a single frame.
   ptyManager.on('data', (ptyId: string, data: string) => {
     coalesePtyOutput(ptyId, data)
-    const cwd = parseOsc7(data)
-    if (cwd) mainWindow.webContents.send('pty:cwd', ptyId, cwd)
+    if (data.includes('\x1b]7;')) {
+      const cwd = parseOsc7(data)
+      if (cwd) mainWindow.webContents.send('pty:cwd', ptyId, cwd)
+    }
   })
 
   ptyManager.on('exit', (ptyId: string, exitCode: number) => {
@@ -389,7 +392,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     ptyId: ptyManager.createShell(cwd)
   }))
 
-  ipcMain.handle('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
+  ipcMain.on('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
 
   ipcMain.handle('pty:resize', (_e, ptyId: string, cols: number, rows: number) => {
     flushCoalesceEntry(ptyId)
