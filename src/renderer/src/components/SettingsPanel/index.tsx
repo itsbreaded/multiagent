@@ -1,23 +1,109 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
+import {
+  DEFAULT_HOTKEYS,
+  buildHotkeys,
+  hotkeyKey,
+  type HotkeyId,
+  type HotkeyOverride,
+} from '../../utils/hotkeys'
 
-type SettingsSection = 'general' | 'appearance'
+type SettingsSection = 'appearance' | 'hotkeys' | 'general'
+
+// Terminal-only shortcuts shown read-only for visibility
+const TERMINAL_SHORTCUTS = [
+  { label: 'Copy selection',              display: 'Ctrl+Shift+C' },
+  { label: 'Paste from clipboard',        display: 'Ctrl+Shift+V' },
+  { label: 'Insert newline (agent panes)', display: 'Shift+Enter'  },
+]
+
+const HOTKEY_ORDER: HotkeyId[] = [
+  'newTab', 'closeTab', 'splitVertical', 'splitHorizontal',
+  'closePane', 'zoomPane', 'toggleSidebar', 'commandPalette', 'sessionBrowser',
+]
 
 export function SettingsPanel(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
   const setShowGitBranchBadges = useSettingsStore((s) => s.setShowGitBranchBadges)
+  const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
+  const setHotkeyOverride = useSettingsStore((s) => s.setHotkeyOverride)
+  const resetHotkeyOverride = useSettingsStore((s) => s.resetHotkeyOverride)
+  const resetAllHotkeyOverrides = useSettingsStore((s) => s.resetAllHotkeyOverrides)
+
   const [activeSection, setActiveSection] = useState<SettingsSection>('appearance')
   const [query, setQuery] = useState('')
+  const [recording, setRecording] = useState<HotkeyId | null>(null)
+  const [conflictLabel, setConflictLabel] = useState<string | null>(null)
 
+  const customizedCount = Object.keys(hotkeyOverrides).length
   const sections = useMemo(() => [
     { id: 'appearance' as const, label: 'Appearance', count: 1 },
-    { id: 'general' as const, label: 'General', count: 0 },
-  ], [])
+    { id: 'hotkeys' as const,    label: 'Hotkeys',    count: customizedCount },
+    { id: 'general' as const,    label: 'General',    count: 0 },
+  ], [customizedCount])
+
+  // Listen for key recording
+  useEffect(() => {
+    const recordingId = recording
+    if (!recordingId) return
+
+    function onKeyDown(e: KeyboardEvent): void {
+      if (!recordingId) return  // narrows type inside this closure
+      // Escape cancels recording
+      if (!e.ctrlKey && !e.metaKey) {
+        if (e.key === 'Escape') { setRecording(null); setConflictLabel(null) }
+        return
+      }
+      // Skip bare modifier presses
+      if (['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const newBinding: HotkeyOverride = { code: e.code, shift: e.shiftKey }
+      const newKey = hotkeyKey(newBinding)
+
+      // Conflict check against current effective hotkeys
+      const hotkeys = buildHotkeys(hotkeyOverrides)
+      const conflict = (Object.entries(hotkeys) as [HotkeyId, (typeof hotkeys)[HotkeyId]][])
+        .find(([id, h]) => id !== recordingId && hotkeyKey(h) === newKey)
+      if (conflict) {
+        setConflictLabel(DEFAULT_HOTKEYS[conflict[0]].label)
+        return
+      }
+
+      // If same as default, clear any override instead of storing a no-op
+      const def = DEFAULT_HOTKEYS[recordingId]
+      if (def.code === newBinding.code && def.shift === newBinding.shift) {
+        resetHotkeyOverride(recordingId)
+      } else {
+        setHotkeyOverride(recordingId, newBinding)
+      }
+      setRecording(null)
+      setConflictLabel(null)
+    }
+
+    // Capture phase so we intercept before global app handler
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [recording, hotkeyOverrides, setHotkeyOverride, resetHotkeyOverride])
+
+  // Clear conflict message after a short delay
+  useEffect(() => {
+    if (!conflictLabel) return
+    const t = setTimeout(() => setConflictLabel(null), 2000)
+    return () => clearTimeout(t)
+  }, [conflictLabel])
 
   const normalizedQuery = query.trim().toLowerCase()
   const showBranchSetting = !normalizedQuery || 'git branch badges tabs panes'.includes(normalizedQuery)
+
+  const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
+  const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
+    !normalizedQuery || DEFAULT_HOTKEYS[id].label.toLowerCase().includes(normalizedQuery)
+  )
 
   return (
     <div
@@ -30,7 +116,7 @@ export function SettingsPanel(): JSX.Element {
         alignItems: 'center',
         justifyContent: 'center',
       }}
-      onClick={closeOverlays}
+      onClick={() => { setRecording(null); setConflictLabel(null); closeOverlays() }}
     >
       <div
         role="dialog"
@@ -48,6 +134,7 @@ export function SettingsPanel(): JSX.Element {
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Sidebar nav */}
         <aside
           style={{
             width: 200,
@@ -64,7 +151,7 @@ export function SettingsPanel(): JSX.Element {
             return (
               <button
                 key={section.id}
-                onClick={() => setActiveSection(section.id)}
+                onClick={() => { setActiveSection(section.id); setRecording(null); setConflictLabel(null) }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -87,6 +174,7 @@ export function SettingsPanel(): JSX.Element {
           })}
         </aside>
 
+        {/* Main content */}
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <div
             style={{
@@ -130,39 +218,231 @@ export function SettingsPanel(): JSX.Element {
           </div>
 
           <div className="dark-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
-            <SectionLabel>{activeSection === 'appearance' ? 'Appearance' : 'General'}</SectionLabel>
 
-            {activeSection === 'appearance' && showBranchSetting && (
-              <SettingRow
-                title="Git branch badges"
-                description="Show the current branch beside tab default directories and pane directories."
-              >
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                  <input
-                    type="checkbox"
-                    checked={showGitBranchBadges}
-                    onChange={(e) => setShowGitBranchBadges(e.target.checked)}
-                  />
-                  Enabled
-                </label>
-              </SettingRow>
+            {/* Appearance section */}
+            {activeSection === 'appearance' && (
+              <>
+                <SectionLabel>Appearance</SectionLabel>
+                {showBranchSetting ? (
+                  <SettingRow
+                    title="Git branch badges"
+                    description="Show the current branch beside tab default directories and pane directories."
+                  >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={showGitBranchBadges}
+                        onChange={(e) => setShowGitBranchBadges(e.target.checked)}
+                      />
+                      Enabled
+                    </label>
+                  </SettingRow>
+                ) : (
+                  <EmptyMessage>No settings match your search.</EmptyMessage>
+                )}
+              </>
             )}
 
+            {/* Hotkeys section */}
+            {activeSection === 'hotkeys' && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <SectionLabel>Keyboard Shortcuts</SectionLabel>
+                  {customizedCount > 0 && (
+                    <button
+                      onClick={resetAllHotkeyOverrides}
+                      style={{
+                        background: 'none',
+                        border: '1px solid #3a3b3e',
+                        borderRadius: 4,
+                        color: '#6b7280',
+                        fontSize: 11,
+                        cursor: 'pointer',
+                        padding: '2px 8px',
+                        marginRight: 12,
+                        marginBottom: 3,
+                      }}
+                    >
+                      Reset all
+                    </button>
+                  )}
+                </div>
+
+                {conflictLabel && (
+                  <div style={{
+                    background: '#2a1a1a',
+                    border: '1px solid #5a2020',
+                    borderRadius: 5,
+                    color: '#f87171',
+                    fontSize: 12,
+                    padding: '6px 10px',
+                    marginBottom: 8,
+                  }}>
+                    Already assigned to <strong>{conflictLabel}</strong>
+                  </div>
+                )}
+
+                {recording && (
+                  <div style={{
+                    background: '#1a2a1a',
+                    border: '1px solid #205a20',
+                    borderRadius: 5,
+                    color: '#4ade80',
+                    fontSize: 12,
+                    padding: '6px 10px',
+                    marginBottom: 8,
+                  }}>
+                    Press a Ctrl+key combination — Escape to cancel
+                  </div>
+                )}
+
+                {visibleHotkeys.length > 0 ? (
+                  visibleHotkeys.map((id) => {
+                    const effective = effectiveHotkeys[id]
+                    const isCustomized = !!hotkeyOverrides[id]
+                    const isRecording = recording === id
+                    return (
+                      <HotkeyRow
+                        key={id}
+                        label={DEFAULT_HOTKEYS[id].label}
+                        display={effective.display}
+                        isCustomized={isCustomized}
+                        isRecording={isRecording}
+                        onStartRecording={() => { setRecording(id); setConflictLabel(null) }}
+                        onReset={() => { resetHotkeyOverride(id); if (recording === id) setRecording(null) }}
+                      />
+                    )
+                  })
+                ) : (
+                  <EmptyMessage>No hotkeys match your search.</EmptyMessage>
+                )}
+
+                {!normalizedQuery && (
+                  <>
+                    <div style={{ margin: '16px 0 4px', borderTop: '1px solid #2a2b2e', paddingTop: 12 }}>
+                      <SectionLabel>Terminal shortcuts (fixed)</SectionLabel>
+                    </div>
+                    {TERMINAL_SHORTCUTS.map((s) => (
+                      <div
+                        key={s.label}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '7px 12px',
+                          marginBottom: 2,
+                          border: '1px solid #222326',
+                          borderRadius: 5,
+                          backgroundColor: '#141517',
+                        }}
+                      >
+                        <span style={{ color: '#6b7280', fontSize: 12 }}>{s.label}</span>
+                        <KeyBadge muted>{s.display}</KeyBadge>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
+            )}
+
+            {/* General section */}
             {activeSection === 'general' && (
-              <div style={{ color: '#4a4b4e', fontSize: 12, padding: '14px' }}>
-                No general settings yet.
-              </div>
-            )}
-
-            {activeSection === 'appearance' && !showBranchSetting && (
-              <div style={{ color: '#4a4b4e', fontSize: 12, padding: '14px' }}>
-                No settings match your search.
-              </div>
+              <>
+                <SectionLabel>General</SectionLabel>
+                <EmptyMessage>No general settings yet.</EmptyMessage>
+              </>
             )}
           </div>
         </main>
       </div>
     </div>
+  )
+}
+
+function HotkeyRow({
+  label,
+  display,
+  isCustomized,
+  isRecording,
+  onStartRecording,
+  onReset,
+}: {
+  label: string
+  display: string
+  isCustomized: boolean
+  isRecording: boolean
+  onStartRecording: () => void
+  onReset: () => void
+}): JSX.Element {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '7px 12px',
+        marginBottom: 2,
+        border: `1px solid ${isRecording ? '#2a4a2a' : '#2a2b2e'}`,
+        borderRadius: 5,
+        backgroundColor: isRecording ? '#141e14' : '#141517',
+        gap: 12,
+      }}
+    >
+      <span style={{ color: '#c9cdd1', fontSize: 12, flex: 1 }}>{label}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <button
+          onClick={onStartRecording}
+          title="Click to rebind"
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
+          }}
+        >
+          <KeyBadge active={isRecording}>
+            {isRecording ? 'Press keys…' : display}
+          </KeyBadge>
+        </button>
+        {isCustomized && (
+          <button
+            onClick={onReset}
+            title="Reset to default"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#4a4b4e',
+              fontSize: 13,
+              cursor: 'pointer',
+              padding: '0 2px',
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function KeyBadge({ children, active, muted }: { children: React.ReactNode; active?: boolean; muted?: boolean }): JSX.Element {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        background: active ? '#1a3a1a' : '#1e1f22',
+        border: `1px solid ${active ? '#4ade80' : muted ? '#222326' : '#3a3b3e'}`,
+        borderRadius: 4,
+        color: active ? '#4ade80' : muted ? '#4a4b4e' : '#a0a4a8',
+        fontSize: 11,
+        fontFamily: 'monospace',
+        padding: '2px 7px',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </span>
   )
 }
 
@@ -180,6 +460,12 @@ function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element 
     >
       {children}
     </div>
+  )
+}
+
+function EmptyMessage({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <div style={{ color: '#4a4b4e', fontSize: 12, padding: '14px' }}>{children}</div>
   )
 }
 

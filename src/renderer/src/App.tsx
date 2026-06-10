@@ -6,7 +6,8 @@ import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
 import { SettingsPanel } from './components/SettingsPanel'
 import { usePanesStore } from './store/panes'
-import { HOTKEYS, hotkeyKey, eventKey } from './utils/hotkeys'
+import { useSettingsStore } from './store/settings'
+import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import type { Tab } from '../../shared/types'
 
 function useGlobalKeyboard() {
@@ -23,18 +24,20 @@ function useGlobalKeyboard() {
   const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
+  const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
 
   useEffect(() => {
+    const hotkeys = buildHotkeys(hotkeyOverrides)
     const dispatch: Record<string, () => void> = {
-      [hotkeyKey(HOTKEYS.newTab)]:          () => addTab(),
-      [hotkeyKey(HOTKEYS.closeTab)]:        () => { if (activeTabId) closeTab(activeTabId) },
-      [hotkeyKey(HOTKEYS.splitVertical)]:   () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'vertical') },
-      [hotkeyKey(HOTKEYS.splitHorizontal)]: () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'horizontal') },
-      [hotkeyKey(HOTKEYS.closePane)]:       () => { const p = getFocusedPane(); if (p) closePane(p.id) },
-      [hotkeyKey(HOTKEYS.zoomPane)]:        () => { if (zoomedPaneId) { unzoom() } else { const p = getFocusedPane(); if (p) zoomPane(p.id) } },
-      [hotkeyKey(HOTKEYS.toggleSidebar)]:   () => toggleSidebar(),
-      [hotkeyKey(HOTKEYS.commandPalette)]:  () => toggleCommandPalette(),
-      [hotkeyKey(HOTKEYS.sessionBrowser)]:  () => toggleSessionBrowser(),
+      [hotkeyKey(hotkeys.newTab)]:          () => addTab(),
+      [hotkeyKey(hotkeys.closeTab)]:        () => { if (activeTabId) closeTab(activeTabId) },
+      [hotkeyKey(hotkeys.splitVertical)]:   () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'vertical') },
+      [hotkeyKey(hotkeys.splitHorizontal)]: () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'horizontal') },
+      [hotkeyKey(hotkeys.closePane)]:       () => { const p = getFocusedPane(); if (p) closePane(p.id) },
+      [hotkeyKey(hotkeys.zoomPane)]:        () => { if (zoomedPaneId) { unzoom() } else { const p = getFocusedPane(); if (p) zoomPane(p.id) } },
+      [hotkeyKey(hotkeys.toggleSidebar)]:   () => toggleSidebar(),
+      [hotkeyKey(hotkeys.commandPalette)]:  () => toggleCommandPalette(),
+      [hotkeyKey(hotkeys.sessionBrowser)]:  () => toggleSessionBrowser(),
     }
 
     function handler(e: KeyboardEvent) {
@@ -62,6 +65,7 @@ function useGlobalKeyboard() {
     toggleSessionBrowser,
     closeOverlays,
     getFocusedPane,
+    hotkeyOverrides,
   ])
 }
 

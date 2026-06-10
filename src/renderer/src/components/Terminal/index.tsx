@@ -4,7 +4,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
-import { HOTKEYS, hotkeyKey, eventKey } from '../../utils/hotkeys'
+import { useSettingsStore } from '../../store/settings'
+import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
 import { agentLabel } from '../../utils/agents'
 
 const XTERM_THEME = {
@@ -157,18 +158,19 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         return stop()
       }
 
-      // Global app shortcuts
+      // Global app shortcuts — read overrides at call time so rebinds take effect immediately
       if (mod) {
+        const hotkeys = buildHotkeys(useSettingsStore.getState().hotkeyOverrides)
         const dispatch: Record<string, () => void> = {
-          [hotkeyKey(HOTKEYS.splitVertical)]:   () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical') },
-          [hotkeyKey(HOTKEYS.splitHorizontal)]: () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal') },
-          [hotkeyKey(HOTKEYS.commandPalette)]:  () => store.toggleCommandPalette(),
-          [hotkeyKey(HOTKEYS.sessionBrowser)]:  () => store.toggleSessionBrowser(),
-          [hotkeyKey(HOTKEYS.closePane)]:       () => { const p = store.getFocusedPane(); if (p) store.closePane(p.id) },
-          [hotkeyKey(HOTKEYS.zoomPane)]:        () => { if (store.zoomedPaneId) { store.unzoom() } else { const p = store.getFocusedPane(); if (p) store.zoomPane(p.id) } },
-          [hotkeyKey(HOTKEYS.newTab)]:          () => store.addTab(),
-          [hotkeyKey(HOTKEYS.closeTab)]:        () => { if (store.activeTabId) store.closeTab(store.activeTabId) },
-          [hotkeyKey(HOTKEYS.toggleSidebar)]:   () => store.toggleSidebar(),
+          [hotkeyKey(hotkeys.splitVertical)]:   () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical') },
+          [hotkeyKey(hotkeys.splitHorizontal)]: () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal') },
+          [hotkeyKey(hotkeys.commandPalette)]:  () => store.toggleCommandPalette(),
+          [hotkeyKey(hotkeys.sessionBrowser)]:  () => store.toggleSessionBrowser(),
+          [hotkeyKey(hotkeys.closePane)]:       () => { const p = store.getFocusedPane(); if (p) store.closePane(p.id) },
+          [hotkeyKey(hotkeys.zoomPane)]:        () => { if (store.zoomedPaneId) { store.unzoom() } else { const p = store.getFocusedPane(); if (p) store.zoomPane(p.id) } },
+          [hotkeyKey(hotkeys.newTab)]:          () => store.addTab(),
+          [hotkeyKey(hotkeys.closeTab)]:        () => { if (store.activeTabId) store.closeTab(store.activeTabId) },
+          [hotkeyKey(hotkeys.toggleSidebar)]:   () => store.toggleSidebar(),
         }
         const fn = dispatch[eventKey(e)]
         if (fn) { fn(); return stop() }
