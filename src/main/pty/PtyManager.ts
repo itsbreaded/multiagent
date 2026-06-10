@@ -184,7 +184,9 @@ function buildEnv(extraVars?: Record<string, string>): Record<string, string> {
   env['TERM'] = 'xterm-256color'
   env['COLORTERM'] = 'truecolor'
 
-  // Some terminal apps adjust input/rendering based on TERM_PROGRAM.
+  // Claude Code keys its embedded-terminal rendering path on TERM_PROGRAM=vscode.
+  // Changing this value causes Claude to fall back to a rendering mode that does
+  // not behave correctly inside xterm.js.
   env['TERM_PROGRAM'] = 'vscode'
 
   // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
