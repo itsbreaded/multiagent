@@ -133,6 +133,7 @@ interface PanesStore {
   setVsCodeAvailable: (available: boolean) => void
   cwdGitBranches: Record<string, { status: 'loading' | 'ready'; branch: string | null }>
   requestGitBranch: (cwd: string) => void
+  refreshGitBranch: (cwd: string) => void
 
   // Tab operations
   addTab: (defaultCwd?: string, name?: string) => void
@@ -213,10 +214,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (!cwd || typeof window === 'undefined' || !window.ipc) return
     const key = normalizeCwdKey(cwd)
     if (get().cwdGitBranches[key]) return
+    get().refreshGitBranch(cwd)
+  },
+  refreshGitBranch: (cwd) => {
+    if (!cwd || typeof window === 'undefined' || !window.ipc) return
+    const key = normalizeCwdKey(cwd)
     set((s) => ({
       cwdGitBranches: {
         ...s.cwdGitBranches,
-        [key]: { status: 'loading', branch: null },
+        [key]: { status: 'loading', branch: s.cwdGitBranches[key]?.branch ?? null },
       },
     }))
     void window.ipc.invoke('git:branch', cwd)

@@ -147,6 +147,7 @@ function PaneRow({
   sessions: Session[]
 }): JSX.Element {
   const [hovered, setHovered] = useState(false)
+  const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
@@ -166,7 +167,7 @@ function PaneRow({
   const session = pane.agentKind && pane.sessionId
     ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
     : null
-  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges)
+  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges, isFocused)
   const branch = showGitBranchBadges ? displayGitBranch(session?.gitBranch) ?? displayGitBranch(cwdBranch) : null
   const isOnlyPane = !tab.rootNode || collectLeaves(tab.rootNode).length <= 1
 
@@ -200,16 +201,21 @@ function PaneRow({
           if (!draggedPaneId || draggedPaneId === pane.id) return
           e.preventDefault()
           e.stopPropagation()
+          setDropActive(true)
           setHovered(true)
         }}
         onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) setHovered(false)
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDropActive(false)
+            setHovered(false)
+          }
         }}
         onDrop={(e) => {
           if (!draggedPaneId || draggedPaneId === pane.id) return
           e.preventDefault()
           e.stopPropagation()
           movePaneToSplit(draggedPaneId, pane.id, 'vertical', false)
+          setDropActive(false)
           setHovered(false)
         }}
         onClick={() => { if (!renaming) { setActiveTab(tab.id); focusPane(pane.id) } }}
@@ -227,6 +233,9 @@ function PaneRow({
           borderRadius: 4,
           cursor: renaming ? 'default' : 'pointer',
           backgroundColor: isFocused ? ui.color.control : hovered ? ui.color.panelRaised : 'transparent',
+          outline: dropActive ? border.accent : 'none',
+          outlineOffset: -1,
+          boxShadow: dropActive ? `inset -3px 0 0 ${ui.color.accent}` : 'none',
           transition: 'background-color 0.1s',
         }}
       >
