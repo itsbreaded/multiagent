@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -32,6 +33,10 @@ const XTERM_THEME = {
 }
 
 const TERMINAL_SCROLLBACK_LINES = 250_000
+const RESIZE_COL_DEBOUNCE_MS = 100
+const WRITE_FLUSH_DELAY_MS = 16
+const CURSOR_SHOW_SEQUENCE = '\x1b[?25h'
+const CURSOR_HIDE_SEQUENCE = '\x1b[?25l'
 
 interface ContextMenu {
   x: number
@@ -82,18 +87,37 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       : XTERM_THEME
 
     const xterm = new XTerm({
+      allowProposedApi: true,
       theme,
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
       fontSize: 13,
       lineHeight: 1.3,
       cursorBlink: pane.paneType !== 'agent',
       scrollback: TERMINAL_SCROLLBACK_LINES,
+      scrollOnEraseInDisplay: true,
       allowTransparency: false,
+      windowOptions: {
+        getWinSizePixels: true,
+        getCellSizePixels: true,
+        getWinSizeChars: true,
+      },
     })
 
     const fitAddon = new FitAddon()
     xterm.loadAddon(fitAddon)
     xterm.open(containerRef.current)
+    let webglAddon: WebglAddon | null = null
+    try {
+      webglAddon = new WebglAddon()
+      xterm.loadAddon(webglAddon)
+      webglAddon.onContextLoss(() => {
+        webglAddon?.dispose()
+        webglAddon = null
+      })
+    } catch {
+      webglAddon?.dispose()
+      webglAddon = null
+    }
     fitAddon.fit()
 
     // Intercept keyboard shortcuts before xterm sees them.
@@ -165,8 +189,15 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     fitAddonRef.current = fitAddon
 
     let pendingFit: number | null = null
+    let lastFitSize: { width: number; height: number } | null = null
     const fitTerminal = (): void => {
-      if (!containerRef.current) return
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const width = Math.round(rect.width)
+      const height = Math.round(rect.height)
+      if (lastFitSize?.width === width && lastFitSize.height === height) return
+      lastFitSize = { width, height }
       try { fitAddon.fit() } catch { /* ignore */ }
     }
     const ro = new ResizeObserver(() => {
@@ -194,6 +225,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
       container.removeEventListener('paste', blockPaste, true)
       ro.disconnect()
+      webglAddon?.dispose()
       xterm.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
@@ -216,6 +248,11 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     let unsubData: (() => void) | undefined
     let dataDisposable: { dispose(): void } | undefined
     let resizeDisposable: { dispose(): void } | undefined
+    let pendingWrite = ''
+    let pendingWriteTimer: ReturnType<typeof setTimeout> | null = null
+    let lastResize: { cols: number; rows: number } | null = null
+    let pendingResizeCols: number | null = null
+    let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
 
     async function connect(): Promise<void> {
       let ptyId = pane.ptyId ?? null
@@ -241,9 +278,27 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       ptyIdRef.current = ptyId
       setStatus('ready')
 
+      const flushPendingWrite = (): void => {
+        pendingWriteTimer = null
+        if (!pendingWrite || cancelled) return
+        if (hasOpenSynchronizedOutput(pendingWrite)) {
+          pendingWriteTimer = setTimeout(flushPendingWrite, WRITE_FLUSH_DELAY_MS)
+          return
+        }
+        const chunk = pane.paneType === 'agent' ? keepAgentCursorHidden(pendingWrite) : pendingWrite
+        pendingWrite = ''
+        xterm.write(chunk)
+      }
+
+      const queueWrite = (data: string): void => {
+        pendingWrite += data
+        if (pendingWriteTimer !== null) return
+        pendingWriteTimer = setTimeout(flushPendingWrite, WRITE_FLUSH_DELAY_MS)
+      }
+
       unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
         if (receivedId === ptyId && typeof data === 'string') {
-          xterm.write(data)
+          queueWrite(data)
         }
       })
 
@@ -251,19 +306,46 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         window.ipc.invoke('pty:write', ptyId, data).catch(() => {})
       })
 
-      const sendResize = (): void => {
-        const { cols, rows } = xterm
+      const sendResize = (cols: number, rows: number): void => {
+        if (lastResize?.cols === cols && lastResize.rows === rows) return
+        lastResize = { cols, rows }
         window.ipc.invoke('pty:resize', ptyId, cols, rows).catch(() => {})
       }
-      resizeDisposable = xterm.onResize(sendResize)
+
+      const flushPendingResize = (): void => {
+        pendingResizeTimer = null
+        if (pendingResizeCols === null) return
+        sendResize(pendingResizeCols, xterm.rows)
+        pendingResizeCols = null
+      }
+
+      const queueResize = ({ cols, rows }: { cols: number; rows: number }): void => {
+        if (lastResize?.cols === cols && lastResize.rows === rows) return
+        if (lastResize && lastResize.rows !== rows) {
+          if (pendingResizeTimer) {
+            clearTimeout(pendingResizeTimer)
+            pendingResizeTimer = null
+            pendingResizeCols = null
+          }
+          sendResize(cols, rows)
+          return
+        }
+
+        pendingResizeCols = cols
+        if (pendingResizeTimer) return
+        pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
+      }
+      resizeDisposable = xterm.onResize(queueResize)
       try { fitAddonRef.current?.fit() } catch { /* ignore */ }
-      sendResize()
+      sendResize(xterm.cols, xterm.rows)
     }
 
     connect()
 
     return () => {
       cancelled = true
+      if (pendingWriteTimer) clearTimeout(pendingWriteTimer)
+      if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       dataDisposable?.dispose()
       resizeDisposable?.dispose()
@@ -364,4 +446,18 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       )}
     </div>
   )
+}
+
+function hasOpenSynchronizedOutput(data: string): boolean {
+  const open = data.lastIndexOf('\x1b[?2026h')
+  const close = data.lastIndexOf('\x1b[?2026l')
+  return open !== -1 && open > close
+}
+
+function keepAgentCursorHidden(data: string): string {
+  // Agent TUIs repaint whole screen regions and sometimes briefly show the
+  // hardware cursor at an intermediate far-right position before moving it back.
+  // The pane-level visual cursor is intentionally hidden for agents, so normalize
+  // cursor-show controls to cursor-hide controls before xterm renders them.
+  return data.replaceAll(CURSOR_SHOW_SEQUENCE, CURSOR_HIDE_SEQUENCE)
 }

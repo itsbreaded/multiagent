@@ -274,7 +274,15 @@ function claudeCliArgs(): string {
 }
 
 function codexCliArgs(): string {
-  const args = ['--no-alt-screen', '-c', psSingleQuoted('tui.animations=false')]
+  const args = [
+    '--no-alt-screen',
+    '-c',
+    psSingleQuoted('tui.animations=false'),
+    '-c',
+    psSingleQuoted('tui.status_line=[]'),
+    '-c',
+    psSingleQuoted('tui.terminal_title=[]'),
+  ]
   const mcpUrl = currentCodexMcpUrl()
   if (mcpUrl) {
     args.push(
