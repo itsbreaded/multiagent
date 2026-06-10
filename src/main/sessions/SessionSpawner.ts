@@ -279,8 +279,6 @@ function codexCliArgs(): string {
     '-c',
     psSingleQuoted('tui.animations=false'),
     '-c',
-    psSingleQuoted('tui.status_line=[]'),
-    '-c',
     psSingleQuoted('tui.terminal_title=[]'),
   ]
   const mcpUrl = currentCodexMcpUrl()
