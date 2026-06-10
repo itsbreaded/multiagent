@@ -17,29 +17,8 @@ try {
   vsCodeAvailable = false
 }
 
-const MAX_IN_FLIGHT_PTY_BYTES = 1024 * 1024
-const PAUSE_PTY_BUFFER_BYTES = 2 * 1024 * 1024
-const RESUME_PTY_BUFFER_BYTES = 512 * 1024
-const PTY_DATA_ACK_TIMEOUT_MS = 1000
 const COALESCE_DELAY_MS = 5
 const GIT_BRANCH_CACHE_MS = 10_000
-
-interface QueuedPtyData {
-  seq: number
-  data: string
-  bytes: number
-}
-
-interface PtyOutputState {
-  nextSeq: number
-  queued: QueuedPtyData[]
-  queuedBytes: number
-  inFlight: QueuedPtyData[]
-  inFlightBytes: number
-  ackTimer: NodeJS.Timeout | null
-  paused: boolean
-  attached: boolean
-}
 
 interface CoalesceEntry {
   data: string
@@ -75,7 +54,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   const codexScanner = new CodexSessionScanner()
   const ptyManager = new PtyManager()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
-  const ptyOutput = new Map<string, PtyOutputState>()
   const coalesceBuffer = new Map<string, CoalesceEntry>()
 
   function coalesePtyOutput(ptyId: string, chunk: string): void {
@@ -88,7 +66,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
       data: chunk,
       timer: setTimeout(() => {
         coalesceBuffer.delete(ptyId)
-        enqueuePtyOutput(ptyId, newEntry.data)
+        mainWindow.webContents.send('pty:data', ptyId, newEntry.data)
       }, COALESCE_DELAY_MS),
     }
     coalesceBuffer.set(ptyId, newEntry)
@@ -99,147 +77,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     if (!entry) return
     clearTimeout(entry.timer)
     coalesceBuffer.delete(ptyId)
-    enqueuePtyOutput(ptyId, entry.data)
+    mainWindow.webContents.send('pty:data', ptyId, entry.data)
   }
 
-  function dropCoalesceEntry(ptyId: string): void {
-    const entry = coalesceBuffer.get(ptyId)
-    if (!entry) return
-    clearTimeout(entry.timer)
-    coalesceBuffer.delete(ptyId)
-  }
-
-  const onPtyDataAck = (_e: Electron.IpcMainEvent, ptyId: string, seq: number): void => {
-    if (typeof ptyId === 'string' && Number.isInteger(seq)) acknowledgePtyOutput(ptyId, seq)
-  }
-  const onPtyAttach = (_e: Electron.IpcMainEvent, ptyId: string): void => {
-    if (typeof ptyId !== 'string') return
-    const state = outputState(ptyId)
-    state.attached = true
-    pumpPtyOutput(ptyId)
-  }
-  const onPtyDetach = (_e: Electron.IpcMainEvent, ptyId: string): void => {
-    if (typeof ptyId === 'string') detachPtyOutput(ptyId)
-  }
-
-  function outputState(ptyId: string): PtyOutputState {
-    let state = ptyOutput.get(ptyId)
-    if (!state) {
-      state = {
-        nextSeq: 1,
-        queued: [],
-        queuedBytes: 0,
-        inFlight: [],
-        inFlightBytes: 0,
-        ackTimer: null,
-        paused: false,
-        attached: false,
-      }
-      ptyOutput.set(ptyId, state)
-    }
-    return state
-  }
-
-  function scheduleAckTimeout(ptyId: string, state: PtyOutputState): void {
-    if (state.ackTimer || state.inFlight.length === 0) return
-    state.ackTimer = setTimeout(() => {
-      state.ackTimer = null
-      const expired = state.inFlight.shift()
-      if (expired) {
-        state.inFlightBytes = Math.max(0, state.inFlightBytes - expired.bytes)
-      }
-      pumpPtyOutput(ptyId)
-    }, PTY_DATA_ACK_TIMEOUT_MS)
-  }
-
-  function pumpPtyOutput(ptyId: string): void {
-    const state = ptyOutput.get(ptyId)
-    if (!state) return
-    if (!state.attached) {
-      updatePtyFlow(ptyId, state)
-      return
-    }
-
-    while (
-      state.queued.length > 0 &&
-      (state.inFlightBytes < MAX_IN_FLIGHT_PTY_BYTES || state.inFlight.length === 0)
-    ) {
-      const item = state.queued.shift()
-      if (!item) break
-      state.queuedBytes = Math.max(0, state.queuedBytes - item.bytes)
-      state.inFlight.push(item)
-      state.inFlightBytes += item.bytes
-      mainWindow.webContents.send('pty:data', ptyId, item.seq, item.data)
-    }
-
-    scheduleAckTimeout(ptyId, state)
-    updatePtyFlow(ptyId, state)
-  }
-
-  function enqueuePtyOutput(ptyId: string, data: string): void {
-    const state = outputState(ptyId)
-    const bytes = Buffer.byteLength(data)
-    state.queued.push({ seq: state.nextSeq++, data, bytes })
-    state.queuedBytes += bytes
-    pumpPtyOutput(ptyId)
-  }
-
-  function acknowledgePtyOutput(ptyId: string, seq: number): void {
-    const state = ptyOutput.get(ptyId)
-    if (!state) return
-
-    let ackedBytes = 0
-    while (state.inFlight.length > 0 && state.inFlight[0].seq <= seq) {
-      ackedBytes += state.inFlight.shift()?.bytes ?? 0
-    }
-    state.inFlightBytes = Math.max(0, state.inFlightBytes - ackedBytes)
-
-    if (state.inFlight.length === 0 && state.ackTimer) {
-      clearTimeout(state.ackTimer)
-      state.ackTimer = null
-    }
-    updatePtyFlow(ptyId, state)
-    pumpPtyOutput(ptyId)
-  }
-
-  function bufferedPtyBytes(state: PtyOutputState): number {
-    return state.inFlightBytes + state.queuedBytes
-  }
-
-  function updatePtyFlow(ptyId: string, state: PtyOutputState): void {
-    const bufferedBytes = bufferedPtyBytes(state)
-    if (!state.paused && bufferedBytes >= PAUSE_PTY_BUFFER_BYTES) {
-      state.paused = true
-      ptyManager.pause(ptyId)
-      return
-    }
-    if (state.paused && bufferedBytes <= RESUME_PTY_BUFFER_BYTES) {
-      state.paused = false
-      ptyManager.resume(ptyId)
-    }
-  }
-
-  function clearPtyOutput(ptyId: string): void {
-    dropCoalesceEntry(ptyId)
-    const state = ptyOutput.get(ptyId)
-    if (!state) return
-    if (state.ackTimer) clearTimeout(state.ackTimer)
-    if (state.paused) ptyManager.resume(ptyId)
-    ptyOutput.delete(ptyId)
-  }
-
-  function detachPtyOutput(ptyId: string): void {
-    const state = ptyOutput.get(ptyId)
-    if (!state) return
-    state.attached = false
-    state.inFlight = []
-    state.inFlightBytes = 0
-    if (state.ackTimer) {
-      clearTimeout(state.ackTimer)
-      state.ackTimer = null
-    }
-    updatePtyFlow(ptyId, state)
-  }
 
   async function scanAllSessions() {
     const [claudeSessions, codexSessions] = await Promise.all([
@@ -350,15 +190,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   })
 
   ptyManager.on('exit', (ptyId: string, exitCode: number) => {
-    // Flush any data held in the 5ms coalesce window before the PTY state
-    // is torn down, so the last output reaches the renderer.
     flushCoalesceEntry(ptyId)
     if (exitCode !== 0) {
       const msg = `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`
-      enqueuePtyOutput(ptyId, msg)
-      setTimeout(() => clearPtyOutput(ptyId), PTY_DATA_ACK_TIMEOUT_MS * 2)
-    } else {
-      clearPtyOutput(ptyId)
+      mainWindow.webContents.send('pty:data', ptyId, msg)
     }
   })
 
@@ -400,10 +235,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   })
 
   ipcMain.handle('pty:kill', (_e, ptyId: string) => ptyManager.kill(ptyId))
-
-  ipcMain.on('pty:data-ack', onPtyDataAck)
-  ipcMain.on('pty:attach', onPtyAttach)
-  ipcMain.on('pty:detach', onPtyDetach)
 
   ipcMain.handle('shell:open-folder', (_e, folderPath: string) => shell.openPath(folderPath))
 
@@ -452,14 +283,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   return () => {
     clearInterval(contentTimer)
-    for (const ptyId of ptyOutput.keys()) clearPtyOutput(ptyId)
-    // clearPtyOutput calls dropCoalesceEntry, but cover any entries whose ptyId
-    // isn't in ptyOutput yet (data arrived but 5ms timer hasn't fired).
     for (const entry of coalesceBuffer.values()) clearTimeout(entry.timer)
     coalesceBuffer.clear()
-    ipcMain.removeListener('pty:data-ack', onPtyDataAck)
-    ipcMain.removeListener('pty:attach', onPtyAttach)
-    ipcMain.removeListener('pty:detach', onPtyDetach)
     index.close()
     ptyManager.destroy()
   }

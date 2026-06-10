@@ -252,12 +252,10 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     }
 
     let cancelled = false
-    let connectedPtyId: string | null = null
     let unsubData: (() => void) | undefined
     let dataDisposable: { dispose(): void } | undefined
     let resizeDisposable: { dispose(): void } | undefined
     let conptyDa1Handler: { dispose(): void } | undefined
-    const activeWriteSeqs = new Set<number>()
     let lastResize: { cols: number; rows: number } | null = null
     let pendingResizeCols: number | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
@@ -284,24 +282,13 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       if (!ptyId || cancelled) return
 
       ptyIdRef.current = ptyId
-      connectedPtyId = ptyId
       setStatus('ready')
 
-      const writePtyData = (seq: number, data: string): void => {
-        if (cancelled) return
-        activeWriteSeqs.add(seq)
-        terminal.write(data, () => {
-          window.ipc.send('pty:data-ack', ptyId, seq)
-          activeWriteSeqs.delete(seq)
-        })
-      }
-
-      unsubData = window.ipc.on('pty:data', (receivedId: unknown, seq: unknown, data: unknown) => {
-        if (receivedId === ptyId && Number.isInteger(seq) && typeof data === 'string') {
-          writePtyData(seq as number, data)
+      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
+        if (receivedId === ptyId && typeof data === 'string' && !cancelled) {
+          terminal.write(data)
         }
       })
-      window.ipc.send('pty:attach', ptyId)
 
       dataDisposable = terminal.onData((data) => {
         if (!cancelled) window.ipc.send('pty:write', ptyId, data)
@@ -355,12 +342,6 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
 
     return () => {
       cancelled = true
-      const lastActiveWriteSeq = activeWriteSeqs.size > 0 ? Math.max(...activeWriteSeqs) : null
-      const currentPtyId = connectedPtyId
-      if (currentPtyId) {
-        if (lastActiveWriteSeq !== null) window.ipc.send('pty:data-ack', currentPtyId, lastActiveWriteSeq)
-        window.ipc.send('pty:detach', currentPtyId)
-      }
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       dataDisposable?.dispose()
