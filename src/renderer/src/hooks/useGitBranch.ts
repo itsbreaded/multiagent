@@ -15,5 +15,5 @@ export function useGitBranch(cwd: string | undefined, enabled = true, isFocused 
     if (enabled && cwd && isFocused) refreshGitBranch(cwd)
   }, [isFocused, cwd, enabled, refreshGitBranch])
 
-  return branchEntry?.status === 'ready' ? branchEntry.branch : null
+  return branchEntry?.branch ?? null
 }
