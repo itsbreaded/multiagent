@@ -4,6 +4,7 @@ import { TabBar } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
+import { SettingsPanel } from './components/SettingsPanel'
 import { usePanesStore } from './store/panes'
 import { HOTKEYS, hotkeyKey, eventKey } from './utils/hotkeys'
 import type { Tab } from '../../shared/types'
@@ -71,6 +72,7 @@ export default function App(): JSX.Element {
   const [layoutReady, setLayoutReady] = useState(false)
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
+  const settingsOpen = usePanesStore((s) => s.settingsOpen)
 
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
@@ -151,6 +153,7 @@ export default function App(): JSX.Element {
       {/* Overlays */}
       {sessionBrowserOpen && <SessionBrowser />}
       {commandPaletteOpen && <CommandPalette />}
+      {settingsOpen && <SettingsPanel />}
     </div>
   )
 }

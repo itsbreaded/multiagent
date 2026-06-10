@@ -126,9 +126,12 @@ interface PanesStore {
   sidebarSectionOpen: Record<string, boolean>
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
+  settingsOpen: boolean
   lastAgentKind: AgentKind
   vsCodeAvailable: boolean
   setVsCodeAvailable: (available: boolean) => void
+  cwdGitBranches: Record<string, { status: 'loading' | 'ready'; branch: string | null }>
+  requestGitBranch: (cwd: string) => void
 
   // Tab operations
   addTab: (defaultCwd?: string, name?: string) => void
@@ -168,6 +171,7 @@ interface PanesStore {
   setSidebarWidth: (width: number) => void
   toggleSessionBrowser: () => void
   toggleCommandPalette: () => void
+  toggleSettings: () => void
   closeOverlays: () => void
 
   // Drag state (pane rearrangement)
@@ -194,9 +198,39 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
+  settingsOpen: false,
   lastAgentKind: initialLastAgent(),
   vsCodeAvailable: false,
   setVsCodeAvailable: (available: boolean) => set({ vsCodeAvailable: available }),
+  cwdGitBranches: {},
+  requestGitBranch: (cwd) => {
+    if (!cwd || typeof window === 'undefined' || !window.ipc) return
+    const key = normalizeCwdKey(cwd)
+    if (get().cwdGitBranches[key]) return
+    set((s) => ({
+      cwdGitBranches: {
+        ...s.cwdGitBranches,
+        [key]: { status: 'loading', branch: null },
+      },
+    }))
+    void window.ipc.invoke('git:branch', cwd)
+      .then((branch) => {
+        set((s) => ({
+          cwdGitBranches: {
+            ...s.cwdGitBranches,
+            [key]: { status: 'ready', branch: typeof branch === 'string' && branch.trim() ? branch : null },
+          },
+        }))
+      })
+      .catch(() => {
+        set((s) => ({
+          cwdGitBranches: {
+            ...s.cwdGitBranches,
+            [key]: { status: 'ready', branch: null },
+          },
+        }))
+      })
+  },
   draggedPaneId: null,
 
   addTab: (defaultCwd?: string, name?: string) => {
@@ -669,9 +703,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
-  toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false })),
-  toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen, sessionBrowserOpen: false })),
-  closeOverlays: () => set({ sessionBrowserOpen: false, commandPaletteOpen: false }),
+  toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false, settingsOpen: false })),
+  toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen, sessionBrowserOpen: false, settingsOpen: false })),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, sessionBrowserOpen: false, commandPaletteOpen: false })),
+  closeOverlays: () => set({ sessionBrowserOpen: false, commandPaletteOpen: false, settingsOpen: false }),
 
   activeTab: () => {
     const s = get()
@@ -702,6 +737,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     return undefined
   },
 }))
+
+export function normalizeCwdKey(cwd: string): string {
+  return cwd.replace(/\//g, '\\').toLowerCase()
+}
 
 // Wire up the pty:cwd event once at module load so CWD changes update pane headers.
 if (typeof window !== 'undefined' && window.ipc) {

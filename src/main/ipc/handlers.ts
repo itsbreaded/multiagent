@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, shell, clipboard, app, dialog } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import { execFileSync } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
@@ -23,6 +23,7 @@ const PAUSE_PTY_BUFFER_BYTES = 2 * 1024 * 1024
 const RESUME_PTY_BUFFER_BYTES = 512 * 1024
 const PTY_DATA_ACK_TIMEOUT_MS = 1000
 const COALESCE_DELAY_MS = 5
+const GIT_BRANCH_CACHE_MS = 10_000
 
 interface QueuedPtyData {
   seq: number
@@ -44,6 +45,13 @@ interface CoalesceEntry {
   data: string
   timer: NodeJS.Timeout
 }
+
+interface GitBranchCacheEntry {
+  branch: string | null
+  expiresAt: number
+}
+
+const gitBranchCache = new Map<string, GitBranchCacheEntry>()
 
 /**
  * Parse an OSC 7 CWD escape sequence from PTY output.
@@ -241,6 +249,53 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     return [...claudeSessions, ...codexSessions]
   }
 
+  function execGit(args: string[], cwd: string, timeout = 1500): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execFile('git', args, { cwd, timeout, windowsHide: true }, (error, stdout) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(stdout.toString().trim())
+      })
+    })
+  }
+
+  async function resolveGitBranch(cwd: string): Promise<string | null> {
+    if (typeof cwd !== 'string' || !cwd.trim()) return null
+    const normalizedCwd = normalizePath(cwd)
+    const cached = gitBranchCache.get(normalizedCwd)
+    if (cached && cached.expiresAt > Date.now()) return cached.branch
+
+    let branch: string | null = null
+    try {
+      const inside = await execGit(['rev-parse', '--is-inside-work-tree'], cwd)
+      if (inside !== 'true') {
+        gitBranchCache.set(normalizedCwd, {
+          branch: null,
+          expiresAt: Date.now() + GIT_BRANCH_CACHE_MS,
+        })
+        return null
+      }
+
+      const current = await execGit(['branch', '--show-current'], cwd)
+      if (current) {
+        branch = current
+      } else {
+        const head = await execGit(['rev-parse', '--short', 'HEAD'], cwd)
+        branch = head ? `detached@${head}` : null
+      }
+    } catch {
+      branch = null
+    }
+
+    gitBranchCache.set(normalizedCwd, {
+      branch,
+      expiresAt: Date.now() + GIT_BRANCH_CACHE_MS,
+    })
+    return branch
+  }
+
   // Send current index state as soon as the renderer finishes loading.
   mainWindow.webContents.once('did-finish-load', () => {
     mainWindow.webContents.send('sessions:updated', index.getAll())
@@ -355,6 +410,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   })
 
   ipcMain.handle('shell:vscode-available', () => vsCodeAvailable)
+
+  ipcMain.handle('git:branch', (_e, cwd: string) => resolveGitBranch(cwd))
 
   ipcMain.handle('shell:open-vscode', (_e, cwd: string) => {
     // shell.openExternal goes through ShellExecuteEx which properly transfers

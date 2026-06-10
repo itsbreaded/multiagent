@@ -128,6 +128,9 @@ export interface IPCChannels {
   'shell:open-vscode': (cwd: string) => void
   'shell:vscode-available': () => boolean
 
+  // --- Git ---
+  'git:branch': (cwd: string) => string | null
+
   // --- Dialogs ---
   'dialog:pick-directory': (title?: string) => string | null
 
@@ -156,6 +159,7 @@ export type InvokeChannels =
   | 'shell:copy-to-clipboard'
   | 'shell:open-vscode'
   | 'shell:vscode-available'
+  | 'git:branch'
   | 'layout:save'
   | 'layout:load'
   | 'dialog:pick-directory'

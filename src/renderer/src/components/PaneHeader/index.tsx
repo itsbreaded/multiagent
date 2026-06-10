@@ -6,6 +6,9 @@ import { paneLabelText } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
+import { displayGitBranch } from '../../utils/git'
+import { useGitBranch } from '../../hooks/useGitBranch'
+import { useSettingsStore } from '../../store/settings'
 import vsCodeIcon from '../../assets/vscode.png'
 
 interface PaneHeaderProps {
@@ -23,6 +26,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
   const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
   const sessions = useSessionsStore((s) => s.sessions)
+  const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const activeTab = usePanesStore((s) => s.activeTab())
 
@@ -55,7 +59,8 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const session = pane.agentKind && pane.sessionId
     ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
     : null
-  const branch = session?.gitBranch ?? null
+  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges)
+  const branch = showGitBranchBadges ? displayGitBranch(session?.gitBranch) ?? displayGitBranch(cwdBranch) : null
 
   return (
     <div

@@ -5,6 +5,8 @@ import type { Tab } from '../../../../shared/types'
 import { computeLabels, collectLeaves } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
+import { useGitBranch } from '../../hooks/useGitBranch'
+import { useSettingsStore } from '../../store/settings'
 
 // --- Sub-components ---
 
@@ -164,8 +166,10 @@ export function TabBar(): JSX.Element {
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
   const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
   const toggleCommandPalette = usePanesStore((s) => s.toggleCommandPalette)
+  const toggleSettings = usePanesStore((s) => s.toggleSettings)
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
+  const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const sessions = useSessionsStore((s) => s.sessions)
 
   const labels = computeLabels(tabs, sessions)
@@ -389,16 +393,19 @@ export function TabBar(): JSX.Element {
                   }}
                 />
               ) : (
-                <span
-                  style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    maxWidth: 120,
-                  }}
-                >
-                  {label}
-                </span>
+                <>
+                  <span
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: 120,
+                    }}
+                  >
+                    {label}
+                  </span>
+                  <TabBranchBadge cwd={tab.defaultCwd} />
+                </>
               )}
 
               <button
@@ -469,6 +476,13 @@ export function TabBar(): JSX.Element {
       >
         &gt;
       </BarButton>
+      <BarButton
+        onClick={toggleSettings}
+        title="Settings"
+        active={settingsOpen}
+      >
+        {'\u2699'}
+      </BarButton>
 
       {/* Context menu (rendered outside tab strip to avoid overflow clipping) */}
       {contextMenu && (
@@ -513,5 +527,33 @@ export function TabBar(): JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+function TabBranchBadge({ cwd }: { cwd?: string }): JSX.Element | null {
+  const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
+  const branch = useGitBranch(cwd, showGitBranchBadges && !!cwd)
+  if (!showGitBranchBadges || !cwd || !branch) return null
+
+  return (
+    <span
+      title={`${cwd}\n${branch}`}
+      style={{
+        fontSize: 10,
+        color: '#8a8a8a',
+        backgroundColor: '#191a1d',
+        border: '1px solid #2a2b2e',
+        borderRadius: 3,
+        padding: '0 4px',
+        lineHeight: '14px',
+        maxWidth: 72,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        flexShrink: 1,
+      }}
+    >
+      {branch}
+    </span>
   )
 }

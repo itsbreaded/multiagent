@@ -4,6 +4,7 @@ import { useSessions } from '../../hooks/useSessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
 import { agentBadge, agentLabel } from '../../utils/agents'
+import { displayGitBranch } from '../../utils/git'
 
 function groupByProject(sessions: Session[]): Map<string, Session[]> {
   const map = new Map<string, Session[]>()
@@ -230,6 +231,7 @@ interface SessionBrowserRowProps {
 
 function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onResumeNewTab }: SessionBrowserRowProps): JSX.Element {
   const statusDotColor = session.status === 'live-attached' ? '#4ade80' : '#6b7280'
+  const gitBranch = displayGitBranch(session.gitBranch)
 
   return (
     <div
@@ -299,7 +301,7 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
         >
           <Row label="CWD" value={session.cwd} />
           <Row label="Agent" value={agentLabel(session.agentKind)} />
-          {session.gitBranch && <Row label="Branch" value={session.gitBranch} />}
+          {gitBranch && <Row label="Branch" value={gitBranch} />}
           {session.firstMessage && (
             <Row label="First message" value={session.firstMessage} />
           )}

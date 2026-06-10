@@ -4,6 +4,7 @@ import { formatRelativeTime } from '../../utils/time'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
+import { displayGitBranch } from '../../utils/git'
 
 interface SessionRowProps {
   session: Session
@@ -35,6 +36,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
 
   const statusDot = getStatusDot(session)
   const projectLabel = session.projectName.split('/').pop() ?? session.projectName
+  const gitBranch = displayGitBranch(session.gitBranch)
   const preview = session.firstMessage
     ? session.firstMessage.replace(/^\/\w+\s*/, '').trim().slice(0, 55) || null
     : null
@@ -87,9 +89,9 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
           </div>
 
           {/* Line 2: git branch badge + first message preview */}
-          {(session.gitBranch || preview) && (
+          {(gitBranch || preview) && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-              {session.gitBranch && (
+              {gitBranch && (
                 <span
                   style={{
                     fontSize: 10,
@@ -106,7 +108,7 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {session.gitBranch}
+                  {gitBranch}
                 </span>
               )}
               {preview && (

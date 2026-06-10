@@ -5,7 +5,10 @@ import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
 import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
+import { displayGitBranch } from '../../utils/git'
 import { DirPicker } from '../DirPicker'
+import { useGitBranch } from '../../hooks/useGitBranch'
+import { useSettingsStore } from '../../store/settings'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -130,8 +133,14 @@ function PaneRow({
   const closePane = usePanesStore((s) => s.closePane)
   const movePaneToNewTab = usePanesStore((s) => s.movePaneToNewTab)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
+  const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const name = paneLabelText(pane, sessions)
+  const session = pane.agentKind && pane.sessionId
+    ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
+    : null
+  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges)
+  const branch = showGitBranchBadges ? displayGitBranch(session?.gitBranch) ?? displayGitBranch(cwdBranch) : null
   const isOnlyPane = !tab.rootNode || collectLeaves(tab.rootNode).length <= 1
 
   React.useEffect(() => {
@@ -217,9 +226,32 @@ function PaneRow({
             }}
           />
         ) : (
-          <span style={{ flex: 1, fontSize: 12, color: isFocused ? '#c9cdd1' : '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {name}
-          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: isFocused ? '#c9cdd1' : '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {name}
+            </div>
+            {branch && (
+              <div style={{ display: 'flex', marginTop: 2 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: '#4a4b4e',
+                    backgroundColor: '#191a1d',
+                    border: '1px solid #2a2b2e',
+                    borderRadius: 3,
+                    padding: '0 4px',
+                    lineHeight: '14px',
+                    maxWidth: 88,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {branch}
+                </span>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
