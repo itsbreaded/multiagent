@@ -133,7 +133,10 @@ export class PtyManager extends EventEmitter {
   }
 
   createClaude(cwd: string): string {
-    return this.createDeferred(cwd, this._shellCmd(), { CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1' })
+    return this.createDeferred(cwd, this._shellCmd(), {
+      CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1',
+      CLAUDE_CODE_NO_FLICKER: '1',
+    })
   }
 
   createAgent(cwd: string, agentKind: AgentKind): string {
@@ -195,6 +198,7 @@ function buildEnv(extraVars?: Record<string, string>): Record<string, string> {
   env['CLAUDECODE'] = '1'
   env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'] = '1'
   env['CLAUDE_CODE_DISABLE_MOUSE'] = '1'
+  env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
 
   if (process.platform === 'win32') {
     const appData = process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming')
