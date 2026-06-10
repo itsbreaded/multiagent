@@ -123,6 +123,7 @@ interface PanesStore {
   zoomedPaneId: string | null
   sidebarOpen: boolean
   sidebarWidth: number
+  sidebarBottomHeight: number
   sidebarSectionOpen: Record<string, boolean>
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
@@ -164,11 +165,12 @@ interface PanesStore {
   setPaneCustomName: (paneId: string, name: string) => void
 
   // Layout persistence
-  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> }) => Promise<void>
+  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> }) => Promise<void>
 
   // UI toggles
   toggleSidebar: () => void
   setSidebarWidth: (width: number) => void
+  setSidebarBottomHeight: (height: number) => void
   toggleSessionBrowser: () => void
   toggleCommandPalette: () => void
   toggleSettings: () => void
@@ -178,6 +180,7 @@ interface PanesStore {
   draggedPaneId: string | null
   setDraggedPane: (paneId: string | null) => void
   movePaneToSplit: (sourcePaneId: string, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean) => void
+  movePaneToTab: (sourcePaneId: string, targetTabId: string) => void
   movePaneToNewTab: (paneId: string) => void
 
   // Getters
@@ -193,6 +196,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   zoomedPaneId: null,
   sidebarOpen: true,
   sidebarWidth: 220,
+  sidebarBottomHeight: 220,
   sidebarSectionOpen: {
     [RECENT_SECTION_ID]: true,
   },
@@ -607,6 +611,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         tabs,
         activeTabId,
         sidebarWidth: saved.sidebarWidth ?? 220,
+        sidebarBottomHeight: typeof (saved as { sidebarBottomHeight?: unknown }).sidebarBottomHeight === 'number'
+          ? (saved as { sidebarBottomHeight: number }).sidebarBottomHeight
+          : 220,
         sidebarOpen: saved.sidebarOpen ?? true,
         sidebarSectionOpen,
       })
@@ -681,28 +688,136 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
+  movePaneToTab: (sourcePaneId, targetTabId) => {
+    set((s) => {
+      let sourceTabIdx = -1
+      let sourceLeaf: PaneLeaf | undefined
+      for (let i = 0; i < s.tabs.length; i++) {
+        const tab = s.tabs[i]
+        if (!tab.rootNode) continue
+        const leaf = findLeaf(tab.rootNode, sourcePaneId)
+        if (leaf) { sourceTabIdx = i; sourceLeaf = leaf; break }
+      }
+
+      const targetTabIdx = s.tabs.findIndex((t) => t.id === targetTabId)
+      if (sourceTabIdx === -1 || targetTabIdx === -1 || !sourceLeaf) return s
+      if (s.tabs[sourceTabIdx].id === targetTabId) return s
+
+      const updatedTabs = s.tabs.map((tab, idx) => {
+        if (idx === sourceTabIdx) {
+          const newRoot = removeLeaf(tab.rootNode!, sourcePaneId)
+          if (!newRoot) return { ...tab, rootNode: undefined, focusedPaneId: '' }
+          const leafIds = collectLeafIds(newRoot)
+          return {
+            ...tab,
+            rootNode: newRoot,
+            focusedPaneId: tab.focusedPaneId === sourcePaneId ? (leafIds[0] ?? '') : tab.focusedPaneId,
+          }
+        }
+
+        if (idx === targetTabIdx) {
+          if (!tab.rootNode) return { ...tab, rootNode: sourceLeaf, focusedPaneId: sourceLeaf.id }
+          return {
+            ...tab,
+            rootNode: makeSplit('vertical', tab.rootNode, sourceLeaf),
+            focusedPaneId: sourceLeaf.id,
+          }
+        }
+
+        return tab
+      })
+
+      return {
+        tabs: updatedTabs,
+        activeTabId: targetTabId,
+        zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
+        sidebarSectionOpen: {
+          ...s.sidebarSectionOpen,
+          [tabSidebarSectionId(targetTabId)]: true,
+        },
+      }
+    })
+  },
+
   movePaneToSplit: (sourcePaneId, targetPaneId, direction, sourceBefore) => {
     if (sourcePaneId === targetPaneId) return
     set((s) => {
-      const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId || !t.rootNode) return t
-        const sourceLeaf = findLeaf(t.rootNode, sourcePaneId)
-        if (!sourceLeaf) return t
-        const treeWithoutSource = removeLeaf(t.rootNode, sourcePaneId)
-        if (!treeWithoutSource) return t
-        if (!findLeaf(treeWithoutSource, targetPaneId)) return t
-        const newSplit = sourceBefore
-          ? makeSplit(direction, sourceLeaf, findLeaf(treeWithoutSource, targetPaneId)!)
-          : makeSplit(direction, findLeaf(treeWithoutSource, targetPaneId)!, sourceLeaf)
-        const newRoot = replaceNode(treeWithoutSource, targetPaneId, newSplit)
-        return { ...t, rootNode: newRoot, focusedPaneId: sourcePaneId }
+      let sourceTabIdx = -1
+      let targetTabIdx = -1
+      let sourceLeaf: PaneLeaf | undefined
+
+      for (let i = 0; i < s.tabs.length; i++) {
+        const tab = s.tabs[i]
+        if (!tab.rootNode) continue
+        if (!sourceLeaf) {
+          const leaf = findLeaf(tab.rootNode, sourcePaneId)
+          if (leaf) { sourceTabIdx = i; sourceLeaf = leaf }
+        }
+        if (findLeaf(tab.rootNode, targetPaneId)) targetTabIdx = i
+      }
+
+      if (sourceTabIdx === -1 || targetTabIdx === -1 || !sourceLeaf) return s
+
+      const updatedTabs = s.tabs.map((tab, idx) => {
+        if (!tab.rootNode) return tab
+
+        if (idx === sourceTabIdx && idx === targetTabIdx) {
+          const treeWithoutSource = removeLeaf(tab.rootNode, sourcePaneId)
+          if (!treeWithoutSource || !findLeaf(treeWithoutSource, targetPaneId)) return tab
+          const targetLeaf = findLeaf(treeWithoutSource, targetPaneId)!
+          const newSplit = sourceBefore
+            ? makeSplit(direction, sourceLeaf!, targetLeaf)
+            : makeSplit(direction, targetLeaf, sourceLeaf!)
+          return {
+            ...tab,
+            rootNode: replaceNode(treeWithoutSource, targetPaneId, newSplit),
+            focusedPaneId: sourcePaneId,
+          }
+        }
+
+        if (idx === sourceTabIdx) {
+          const newRoot = removeLeaf(tab.rootNode, sourcePaneId)
+          if (!newRoot) return { ...tab, rootNode: undefined, focusedPaneId: '' }
+          const leafIds = collectLeafIds(newRoot)
+          return {
+            ...tab,
+            rootNode: newRoot,
+            focusedPaneId: tab.focusedPaneId === sourcePaneId ? (leafIds[0] ?? '') : tab.focusedPaneId,
+          }
+        }
+
+        if (idx === targetTabIdx) {
+          const targetLeaf = findLeaf(tab.rootNode, targetPaneId)
+          if (!targetLeaf) return tab
+          const newSplit = sourceBefore
+            ? makeSplit(direction, sourceLeaf!, targetLeaf)
+            : makeSplit(direction, targetLeaf, sourceLeaf!)
+          return {
+            ...tab,
+            rootNode: replaceNode(tab.rootNode, targetPaneId, newSplit),
+            focusedPaneId: sourcePaneId,
+          }
+        }
+
+        return tab
       })
-      return { tabs }
+
+      const targetTabId = s.tabs[targetTabIdx].id
+      return {
+        tabs: updatedTabs,
+        activeTabId: targetTabId,
+        zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
+        sidebarSectionOpen: {
+          ...s.sidebarSectionOpen,
+          [tabSidebarSectionId(targetTabId)]: true,
+        },
+      }
     })
   },
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
+  setSidebarBottomHeight: (height) => set({ sidebarBottomHeight: height }),
   toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false, settingsOpen: false })),
   toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen, sessionBrowserOpen: false, settingsOpen: false })),
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, sessionBrowserOpen: false, commandPaletteOpen: false })),

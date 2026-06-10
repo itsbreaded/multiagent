@@ -63,6 +63,12 @@ Two Zustand stores:
 
 IPC listeners are wired at module level after store creation (not inside components) to avoid multiple registrations.
 
+### UI Consistency
+
+Keep overlay surfaces visually aligned. Settings, Session Browser, and Command Palette should share the same application modal language: centered dark overlay, `#1a1b1e` panel, `#2a2b2e` borders, 10px radius, `0 24px 64px rgba(0,0,0,0.6)` shadow, muted section labels, and green `#4ade80` active accents. Do not introduce VS Code-specific colors or layout treatments in one overlay unless the rest of the app is intentionally updated to match.
+
+All non-terminal scrollable renderer surfaces should use the shared `dark-scrollbar` class from `src/renderer/src/assets/main.css`. Terminal scrollbars are styled separately through `.xterm .xterm-viewport`. When adding a reusable component that owns an internal scroll container, expose a className hook instead of forcing callers to accept an unstyled native scrollbar.
+
 ### Session Indexing
 
 `SessionIndex` wraps better-sqlite3 with FTS5 for full-text search over session transcripts. `TranscriptScanner` reads `~/.claude/projects/**/*.jsonl` and extracts metadata. Sessions are polled every 5 seconds and pushed to the renderer on change.

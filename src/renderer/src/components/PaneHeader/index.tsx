@@ -81,7 +81,12 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       {/* Drag handle */}
       <span
         draggable
-        onDragStart={(e) => { e.stopPropagation(); setDraggedPane(pane.id) }}
+        onDragStart={(e) => {
+          e.stopPropagation()
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('text/plain', pane.id)
+          setDraggedPane(pane.id)
+        }}
         onDragEnd={() => setDraggedPane(null)}
         title="Drag to rearrange pane"
         style={{

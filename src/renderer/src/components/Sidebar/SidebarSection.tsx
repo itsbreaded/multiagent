@@ -13,6 +13,13 @@ interface SidebarSectionProps {
   onRenameChange?: (v: string) => void
   onRenameCommit?: () => void
   onRenameCancel?: () => void
+  onHeaderDragOver?: React.DragEventHandler<HTMLDivElement>
+  onHeaderDragLeave?: React.DragEventHandler<HTMLDivElement>
+  onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
+  headerDropActive?: boolean
+  style?: React.CSSProperties
+  contentStyle?: React.CSSProperties
+  contentClassName?: string
 }
 
 export function SidebarSection({
@@ -28,6 +35,13 @@ export function SidebarSection({
   onRenameChange,
   onRenameCommit,
   onRenameCancel,
+  onHeaderDragOver,
+  onHeaderDragLeave,
+  onHeaderDrop,
+  headerDropActive,
+  style,
+  contentStyle,
+  contentClassName,
 }: SidebarSectionProps): JSX.Element {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
   const open = controlledOpen ?? uncontrolledOpen
@@ -44,9 +58,12 @@ export function SidebarSection({
   }, [renaming])
 
   return (
-    <div style={{ flexShrink: 0 }}>
+    <div style={{ flexShrink: 0, ...style }}>
       <div
         onContextMenu={onContextMenu}
+        onDragOver={onHeaderDragOver}
+        onDragLeave={onHeaderDragLeave}
+        onDrop={onHeaderDrop}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -60,6 +77,9 @@ export function SidebarSection({
           letterSpacing: '0.08em',
           userSelect: 'none',
           boxSizing: 'border-box',
+          outline: headerDropActive ? '1px solid #4ade80' : 'none',
+          outlineOffset: -1,
+          backgroundColor: headerDropActive ? '#1e2022' : 'transparent',
         }}
       >
         <button
@@ -122,7 +142,7 @@ export function SidebarSection({
           </span>
         )}
       </div>
-      {open && <div>{children}</div>}
+      {open && <div className={contentClassName} style={contentStyle}>{children}</div>}
     </div>
   )
 }

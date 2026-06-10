@@ -440,9 +440,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     }
   })
 
-  ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown) => {
+  ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarBottomHeight: unknown) => {
     try {
-      fs.writeFileSync(layoutPath, JSON.stringify({ tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen }))
+      fs.writeFileSync(layoutPath, JSON.stringify({ tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarBottomHeight }))
     } catch (err) {
       console.error('[MultiAgent] layout:save failed:', err)
     }

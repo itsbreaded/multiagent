@@ -64,6 +64,7 @@ export interface AppState {
   sessions: Session[]
   sidebarOpen: boolean
   sidebarWidth: number   // px
+  sidebarBottomHeight?: number // px
   sidebarSectionOpen: Record<string, boolean>
   zoomedPaneId: string | null
   sessionBrowserOpen: boolean
@@ -135,8 +136,8 @@ export interface IPCChannels {
   'dialog:pick-directory': (title?: string) => string | null
 
   // --- Layout persistence ---
-  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>) => void
-  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
+  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarBottomHeight?: number) => void
+  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
 
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY

@@ -53,9 +53,12 @@ export function PaneGrid(): JSX.Element {
   const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
   const unzoom = usePanesStore((s) => s.unzoom)
   const findPane = usePanesStore((s) => s.findPane)
+  const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
+  const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
 
   const [isSashDragging, setIsSashDragging] = useState(false)
   const [dirPickerFor, setDirPickerFor] = useState<AgentKind | 'shell' | null>(null)
+  const [emptyDropActive, setEmptyDropActive] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
@@ -70,14 +73,32 @@ export function PaneGrid(): JSX.Element {
       {/* Empty state — only when active tab has no panes */}
       {(!activeTab || !activeTab.rootNode) && (
         <div
+          onDragOver={(e) => {
+            if (!draggedPaneId || !activeTab) return
+            e.preventDefault()
+            e.stopPropagation()
+            setEmptyDropActive(true)
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setEmptyDropActive(false)
+          }}
+          onDrop={(e) => {
+            if (!draggedPaneId || !activeTab) return
+            e.preventDefault()
+            e.stopPropagation()
+            movePaneToTab(draggedPaneId, activeTab.id)
+            setEmptyDropActive(false)
+          }}
           style={{
             position: 'absolute',
             inset: 0,
-            backgroundColor: '#0e1011',
+            backgroundColor: emptyDropActive ? '#111815' : '#0e1011',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             overflow: 'hidden',
+            outline: emptyDropActive ? '2px solid #4ade80' : 'none',
+            outlineOffset: -2,
           }}
         >
           <div style={{ textAlign: 'center', userSelect: 'none' }}>

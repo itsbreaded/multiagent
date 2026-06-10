@@ -170,6 +170,8 @@ export function TabBar(): JSX.Element {
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
+  const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
+  const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
   const sessions = useSessionsStore((s) => s.sessions)
 
   const labels = computeLabels(tabs, sessions)
@@ -177,14 +179,23 @@ export function TabBar(): JSX.Element {
   // Drag reorder
   const dragIndex = useRef<number | null>(null)
   const dragSideRef = useRef<'left' | 'right' | null>(null)
+  const hoverActivateTimer = useRef<number | null>(null)
+  const hoverActivateTabId = useRef<string | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const [dragSide, setDragSide] = useState<'left' | 'right' | null>(null)
+  const [paneDropTabId, setPaneDropTabId] = useState<string | null>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
   useEffect(() => {
     const el = tabRefs.current.get(activeTabId)
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [activeTabId])
+
+  useEffect(() => {
+    return () => {
+      if (hoverActivateTimer.current !== null) window.clearTimeout(hoverActivateTimer.current)
+    }
+  }, [])
 
   // Rename state
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
@@ -247,6 +258,27 @@ export function TabBar(): JSX.Element {
     return collectLeaves(tab.rootNode).some((l) => l.paneType === 'agent')
   }
 
+  function clearPaneDragHover(): void {
+    if (hoverActivateTimer.current !== null) {
+      window.clearTimeout(hoverActivateTimer.current)
+      hoverActivateTimer.current = null
+    }
+    hoverActivateTabId.current = null
+    setPaneDropTabId(null)
+  }
+
+  function schedulePaneDragActivation(tabId: string): void {
+    if (tabId === activeTabId) return
+    if (hoverActivateTabId.current === tabId) return
+    if (hoverActivateTimer.current !== null) window.clearTimeout(hoverActivateTimer.current)
+    hoverActivateTabId.current = tabId
+    hoverActivateTimer.current = window.setTimeout(() => {
+      setActiveTab(tabId)
+      hoverActivateTimer.current = null
+      hoverActivateTabId.current = null
+    }, 500)
+  }
+
   return (
     <div
       style={{
@@ -297,6 +329,13 @@ export function TabBar(): JSX.Element {
               draggable={!isRenaming}
               onDragStart={() => { dragIndex.current = idx }}
               onDragOver={(e) => {
+                if (draggedPaneId) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setPaneDropTabId(tab.id)
+                  schedulePaneDragActivation(tab.id)
+                  return
+                }
                 e.preventDefault()
                 const rect = e.currentTarget.getBoundingClientRect()
                 const side = e.clientX - rect.left < rect.width / 2 ? 'left' : 'right'
@@ -304,9 +343,22 @@ export function TabBar(): JSX.Element {
                 setDragOverIndex(idx)
                 setDragSide(side)
               }}
-              onDragLeave={() => { setDragOverIndex(null); setDragSide(null) }}
-              onDragEnd={() => { dragIndex.current = null; dragSideRef.current = null; setDragOverIndex(null); setDragSide(null) }}
-              onDrop={() => {
+              onDragLeave={() => {
+                if (draggedPaneId) {
+                  clearPaneDragHover()
+                  return
+                }
+                setDragOverIndex(null); setDragSide(null)
+              }}
+              onDragEnd={() => { dragIndex.current = null; dragSideRef.current = null; setDragOverIndex(null); setDragSide(null); clearPaneDragHover() }}
+              onDrop={(e) => {
+                if (draggedPaneId) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  movePaneToTab(draggedPaneId, tab.id)
+                  clearPaneDragHover()
+                  return
+                }
                 const from = dragIndex.current
                 const side = dragSideRef.current
                 const targetTabId = tab.id
@@ -348,6 +400,8 @@ export function TabBar(): JSX.Element {
                 borderRight: dragOverIndex === idx && dragSide === 'right'
                   ? '2px solid #4ade80'
                   : isActive ? '1px solid #2a2b2e' : '1px solid transparent',
+                outline: paneDropTabId === tab.id ? '1px solid #4ade80' : 'none',
+                outlineOffset: -1,
                 fontSize: 12,
                 color: isActive ? '#e2e4e6' : '#6b7280',
                 cursor: 'pointer',

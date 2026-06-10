@@ -25,7 +25,9 @@ interface DirPickerPending {
 export function Sidebar(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
+  const sidebarBottomHeight = usePanesStore((s) => s.sidebarBottomHeight)
   const setSidebarWidth = usePanesStore((s) => s.setSidebarWidth)
+  const setSidebarBottomHeight = usePanesStore((s) => s.setSidebarBottomHeight)
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
   const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
@@ -48,11 +50,16 @@ export function Sidebar(): JSX.Element {
 
   const [spawnMenu, setSpawnMenu] = useState<SpawnMenu | null>(null)
   const [dirPickerPending, setDirPickerPending] = useState<DirPickerPending | null>(null)
+  const recentOpen = sidebarSectionOpen[RECENT_SECTION_ID] ?? true
 
   // Resize drag
+  const sidebarRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
   const startX = useRef(0)
   const startWidth = useRef(0)
+  const bottomDragging = useRef(false)
+  const startY = useRef(0)
+  const startBottomHeight = useRef(0)
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -77,6 +84,33 @@ export function Sidebar(): JSX.Element {
     [sidebarWidth, setSidebarWidth]
   )
 
+  const onBottomResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!recentOpen) return
+      e.preventDefault()
+      bottomDragging.current = true
+      startY.current = e.clientY
+      startBottomHeight.current = sidebarBottomHeight
+
+      const onMove = (me: MouseEvent) => {
+        if (!bottomDragging.current) return
+        const delta = startY.current - me.clientY
+        const containerHeight = sidebarRef.current?.clientHeight ?? window.innerHeight
+        const max = Math.max(140, containerHeight - 64)
+        const next = Math.max(96, Math.min(max, startBottomHeight.current + delta))
+        setSidebarBottomHeight(next)
+      }
+      const onUp = () => {
+        bottomDragging.current = false
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [recentOpen, sidebarBottomHeight, setSidebarBottomHeight]
+  )
+
   function spawn(type: 'agent' | 'shell', direction: SplitDirection, cwd: string, agentKind?: AgentKind) {
     if (type === 'agent') newSession(cwd, direction, agentKind)
     else addShellPane(cwd, direction)
@@ -86,6 +120,7 @@ export function Sidebar(): JSX.Element {
 
   return (
     <div
+      ref={sidebarRef}
       style={{
         width: sidebarWidth,
         minWidth: sidebarWidth,
@@ -119,8 +154,8 @@ export function Sidebar(): JSX.Element {
         />
       </div>
 
-      {/* Scrollable session list */}
-      <div className="dark-scrollbar" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+      {/* Workspace sections */}
+      <div className="dark-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
         {loading && (
           <div style={{ padding: '12px 16px', fontSize: 11, color: '#4a4b4e' }}>
             Scanning sessions...
@@ -128,20 +163,52 @@ export function Sidebar(): JSX.Element {
         )}
 
         <TabSections />
+      </div>
 
-        {resumable.length > 0 && (
+      {/* Static bottom sections */}
+      {resumable.length > 0 && (
+        <div
+          style={{
+            flexShrink: 0,
+            height: recentOpen ? sidebarBottomHeight : 32,
+            minHeight: recentOpen ? 96 : 32,
+            maxHeight: recentOpen ? 'calc(100% - 64px)' : 32,
+            borderTop: '1px solid #2a2b2e',
+            backgroundColor: '#18191c',
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          {recentOpen && (
+            <div
+              onMouseDown={onBottomResizeMouseDown}
+              style={{
+                position: 'absolute',
+                top: -3,
+                left: 0,
+                right: 0,
+                height: 6,
+                cursor: 'row-resize',
+                zIndex: 11,
+              }}
+            />
+          )}
           <SidebarSection
             title="Recent"
             count={resumable.length}
-            open={sidebarSectionOpen[RECENT_SECTION_ID] ?? true}
+            open={recentOpen}
             onOpenChange={(open) => setSidebarSectionOpen(RECENT_SECTION_ID, open)}
+            style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}
+            contentClassName="dark-scrollbar"
+            contentStyle={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}
           >
             {resumable.map((s) => (
               <SessionRow key={`${s.agentKind}:${s.sessionId}`} session={s} />
             ))}
           </SidebarSection>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Resize handle */}
       <div

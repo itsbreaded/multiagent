@@ -19,6 +19,8 @@ export function TabSections(): JSX.Element {
   const renameTab = usePanesStore((s) => s.renameTab)
   const setTabDefaultCwd = usePanesStore((s) => s.setTabDefaultCwd)
   const setSidebarSectionOpen = usePanesStore((s) => s.setSidebarSectionOpen)
+  const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
+  const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
 
   const tabLabels = computeLabels(tabs, sessions)
 
@@ -26,6 +28,7 @@ export function TabSections(): JSX.Element {
   const [dirPickerTabId, setDirPickerTabId] = useState<string | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [dropTabId, setDropTabId] = useState<string | null>(null)
 
   const dirPickerTab = dirPickerTabId ? tabs.find((t) => t.id === dirPickerTabId) : null
 
@@ -67,6 +70,23 @@ export function TabSections(): JSX.Element {
             onRenameChange={setRenameValue}
             onRenameCommit={commitRename}
             onRenameCancel={() => setRenamingTabId(null)}
+            headerDropActive={dropTabId === tab.id}
+            onHeaderDragOver={(e) => {
+              if (!draggedPaneId) return
+              e.preventDefault()
+              e.stopPropagation()
+              setDropTabId(tab.id)
+            }}
+            onHeaderDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
+            }}
+            onHeaderDrop={(e) => {
+              if (!draggedPaneId) return
+              e.preventDefault()
+              e.stopPropagation()
+              movePaneToTab(draggedPaneId, tab.id)
+              setDropTabId(null)
+            }}
           >
             {leaves.map((pane) => (
               <PaneRow
@@ -133,6 +153,9 @@ function PaneRow({
   const closePane = usePanesStore((s) => s.closePane)
   const movePaneToNewTab = usePanesStore((s) => s.movePaneToNewTab)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
+  const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
+  const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
+  const movePaneToSplit = usePanesStore((s) => s.movePaneToSplit)
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const name = paneLabelText(pane, sessions)
@@ -160,6 +183,31 @@ function PaneRow({
   return (
     <>
       <div
+        draggable={!renaming}
+        onDragStart={(e) => {
+          if (renaming) return
+          e.stopPropagation()
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('text/plain', pane.id)
+          setDraggedPane(pane.id)
+        }}
+        onDragEnd={() => setDraggedPane(null)}
+        onDragOver={(e) => {
+          if (!draggedPaneId || draggedPaneId === pane.id) return
+          e.preventDefault()
+          e.stopPropagation()
+          setHovered(true)
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setHovered(false)
+        }}
+        onDrop={(e) => {
+          if (!draggedPaneId || draggedPaneId === pane.id) return
+          e.preventDefault()
+          e.stopPropagation()
+          movePaneToSplit(draggedPaneId, pane.id, 'vertical', false)
+          setHovered(false)
+        }}
         onClick={() => { if (!renaming) { setActiveTab(tab.id); focusPane(pane.id) } }}
         onDoubleClick={() => startRename()}
         onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
