@@ -6,6 +6,7 @@ import { paneLabelText } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
+import vsCodeIcon from '../../assets/vscode.png'
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -20,6 +21,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
+  const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
   const sessions = useSessionsStore((s) => s.sessions)
 
   const activeTab = usePanesStore((s) => s.activeTab())
@@ -173,24 +175,15 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         <SessionIdBadge sessionId={pane.sessionId} />
       )}
 
-      {/* Status pill for agent panes */}
-      {isAgent && !renaming && (
-        <span
-          style={{
-            fontSize: 10,
-            color: '#6b7280',
-            backgroundColor: '#1e2022',
-            border: '1px solid #2a2b2e',
-            borderRadius: 3,
-            padding: '1px 5px',
-            flexShrink: 0,
-          }}
-        >
-          {agentLabel(pane.agentKind ?? 'claude')}
-        </span>
-      )}
-
       {/* Action buttons */}
+      {vsCodeAvailable && !renaming && (
+        <HeaderButton
+          title="Open in VS Code"
+          onClick={() => window.ipc.invoke('shell:open-vscode', pane.cwd).catch(() => {})}
+        >
+          <img src={vsCodeIcon} alt="VS Code" style={{ width: 12, height: 12, display: 'block' }} />
+        </HeaderButton>
+      )}
       {!isZoomed && (
         <>
           <HeaderButton

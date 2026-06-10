@@ -129,9 +129,11 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     // When we return false, we must call e.stopPropagation() ourselves or the
     // event bubbles to App.tsx's window listener and fires the action a second time.
     xterm.attachCustomKeyEventHandler((e) => {
-      // Shift+Enter: checked before keydown guard so keypress is also suppressed.
-      // Without this, xterm sends \r on keypress right after the newline is inserted.
+      // Shift+Enter: Claude Code uses the kitty keyboard protocol sequence to insert
+      // a newline without submitting. Other panes (Codex, shell) don't use kitty
+      // protocol so they need xterm to handle the key naturally.
       if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Enter') {
+        if (pane.agentKind !== 'claude') return true
         if (e.type === 'keydown') {
           const ptyId = ptyIdRef.current
           if (ptyId) window.ipc.invoke('pty:write', ptyId, '\x1b[13;2u').catch(() => {})

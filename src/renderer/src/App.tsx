@@ -78,6 +78,14 @@ export default function App(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
 
+  // Detect VS Code availability once on startup
+  const setVsCodeAvailable = usePanesStore((s) => s.setVsCodeAvailable)
+  useEffect(() => {
+    window.ipc.invoke('shell:vscode-available').then((available) => {
+      setVsCodeAvailable(available as boolean)
+    }).catch(() => {})
+  }, [setVsCodeAvailable])
+
   // Restore the saved layout on startup without prompting.
   useEffect(() => {
     if (restoreStartedRef.current) return

@@ -125,6 +125,8 @@ export interface IPCChannels {
   // --- Shell ---
   'shell:open-folder': (path: string) => void
   'shell:copy-to-clipboard': (text: string) => void
+  'shell:open-vscode': (cwd: string) => void
+  'shell:vscode-available': () => boolean
 
   // --- Dialogs ---
   'dialog:pick-directory': (title?: string) => string | null
@@ -152,6 +154,8 @@ export type InvokeChannels =
   | 'pty:kill'
   | 'shell:open-folder'
   | 'shell:copy-to-clipboard'
+  | 'shell:open-vscode'
+  | 'shell:vscode-available'
   | 'layout:save'
   | 'layout:load'
   | 'dialog:pick-directory'

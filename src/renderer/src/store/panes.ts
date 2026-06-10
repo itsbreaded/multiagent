@@ -127,6 +127,8 @@ interface PanesStore {
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
   lastAgentKind: AgentKind
+  vsCodeAvailable: boolean
+  setVsCodeAvailable: (available: boolean) => void
 
   // Tab operations
   addTab: (defaultCwd?: string, name?: string) => void
@@ -193,6 +195,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
   lastAgentKind: initialLastAgent(),
+  vsCodeAvailable: false,
+  setVsCodeAvailable: (available: boolean) => set({ vsCodeAvailable: available }),
   draggedPaneId: null,
 
   addTab: (defaultCwd?: string, name?: string) => {

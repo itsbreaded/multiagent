@@ -2,12 +2,21 @@ import { ipcMain, BrowserWindow, shell, clipboard, app, dialog } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
+import { execFileSync } from 'child_process'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { defaultShell } from '../pty/shell'
+
+let vsCodeAvailable = false
+try {
+  execFileSync('code', ['--version'], { stdio: 'ignore', shell: true, timeout: 3000 })
+  vsCodeAvailable = true
+} catch {
+  vsCodeAvailable = false
+}
 
 const MAX_IN_FLIGHT_PTY_BYTES = 1024 * 1024
 const PAUSE_PTY_BUFFER_BYTES = 2 * 1024 * 1024
@@ -343,6 +352,16 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   ipcMain.handle('shell:copy-to-clipboard', (_e, text: string) => {
     clipboard.writeText(text)
+  })
+
+  ipcMain.handle('shell:vscode-available', () => vsCodeAvailable)
+
+  ipcMain.handle('shell:open-vscode', (_e, cwd: string) => {
+    // shell.openExternal goes through ShellExecuteEx which properly transfers
+    // foreground focus to VS Code. spawn() with detached:true cannot steal focus
+    // from Electron due to Windows focus-stealing prevention.
+    // encodeURI preserves the drive colon and slashes but encodes spaces/specials.
+    shell.openExternal(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
   })
 
   ipcMain.handle('dialog:pick-directory', async (_e, title?: string) => {
