@@ -10,8 +10,13 @@ import { displayGitBranch } from '../../utils/git'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import vsCodeIcon from '../../assets/vscode.png'
+import folderOpenIcon from '../../assets/folderopen.png'
 import splitRightIcon from '../../assets/splitright.png'
 import splitDownIcon from '../../assets/splitdown.png'
+import fullscreenOpenIcon from '../../assets/fullscreenopen.png'
+import fullscreenCloseIcon from '../../assets/fullscreenclose.png'
+
+const ICON_IMG: React.CSSProperties = { width: 16, height: 16, display: 'block' }
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -193,10 +198,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           title="Open in folder"
           onClick={() => window.ipc.invoke('shell:open-folder', pane.cwd).catch(() => {})}
         >
-          <svg width="15" height="13" viewBox="0 0 13 11" fill="currentColor" style={{ display: 'block' }}>
-            <rect x="0" y="2.5" width="13" height="8" rx="1.5" />
-            <rect x="0" y="0" width="6" height="4" rx="1.5" />
-          </svg>
+          <img src={folderOpenIcon} alt="Open in folder" style={ICON_IMG} />
         </HeaderButton>
       )}
       {vsCodeAvailable && !renaming && (
@@ -204,7 +206,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           title="Open in VS Code"
           onClick={() => window.ipc.invoke('shell:open-vscode', pane.cwd).catch(() => {})}
         >
-          <img src={vsCodeIcon} alt="VS Code" style={{ width: 21, height: 21, display: 'block' }} />
+          <img src={vsCodeIcon} alt="VS Code" style={ICON_IMG} />
         </HeaderButton>
       )}
       {!isZoomed && (
@@ -213,13 +215,13 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
             title={`Split vertical (${HOTKEYS.splitVertical.display})`}
             onClick={(e) => setSplitMenu({ direction: 'vertical', x: e.clientX, y: e.clientY })}
           >
-            <img src={splitRightIcon} alt="Split right" style={{ width: 15, height: 15, display: 'block' }} />
+            <img src={splitRightIcon} alt="Split right" style={ICON_IMG} />
           </HeaderButton>
           <HeaderButton
             title={`Split horizontal (${HOTKEYS.splitHorizontal.display})`}
             onClick={(e) => setSplitMenu({ direction: 'horizontal', x: e.clientX, y: e.clientY })}
           >
-            <img src={splitDownIcon} alt="Split down" style={{ width: 15, height: 15, display: 'block' }} />
+            <img src={splitDownIcon} alt="Split down" style={ICON_IMG} />
           </HeaderButton>
         </>
       )}
@@ -227,7 +229,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         title={isZoomed ? 'Unzoom' : `Zoom pane (${HOTKEYS.zoomPane.display})`}
         onClick={() => (isZoomed ? unzoom() : zoomPane(pane.id))}
       >
-        {isZoomed ? '⊟' : '⤢'}
+        <img src={isZoomed ? fullscreenCloseIcon : fullscreenOpenIcon} alt={isZoomed ? 'Unzoom' : 'Zoom'} style={ICON_IMG} />
       </HeaderButton>
       <HeaderButton title={`Close pane (${HOTKEYS.closePane.display})`} onClick={() => closePane(pane.id)}>×</HeaderButton>
 
@@ -374,14 +376,14 @@ function SessionIdBadge({ sessionId }: { sessionId: string }): JSX.Element {
       style={{
         fontSize: 10,
         fontFamily: 'monospace',
-        color: copied ? '#4ade80' : '#3a3b3e',
+        color: copied ? '#4ade80' : '#6b7280',
         cursor: 'pointer',
         flexShrink: 0,
         letterSpacing: '0.02em',
         transition: 'color 0.15s',
       }}
-      onMouseEnter={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#6b7280' }}
-      onMouseLeave={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#3a3b3e' }}
+      onMouseEnter={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#9ca3af' }}
+      onMouseLeave={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#6b7280' }}
     >
       {copied ? '✓' : sessionId.slice(0, 8)}
     </span>

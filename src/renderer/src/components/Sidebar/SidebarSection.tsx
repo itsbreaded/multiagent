@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { border, sidebarStyles, ui } from '../../styles/theme'
+import arrowDropdownIcon from '../../assets/arrowdropdown.png'
 
 interface SidebarSectionProps {
   title: string
@@ -80,9 +81,7 @@ export function SidebarSection({
           onClick={() => !renaming && setOpen((o) => !o)}
           style={{ ...sidebarStyles.sectionToggle, cursor: renaming ? 'default' : 'pointer' }}
         >
-          <span style={{ fontSize: 9, transition: 'transform 0.15s', display: 'inline-block', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>
-            ▶
-          </span>
+          <img src={arrowDropdownIcon} alt="" style={{ width: 12, height: 12, display: 'block', transition: 'transform 0.15s', transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
         </button>
 
         {renaming ? (

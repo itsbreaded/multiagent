@@ -50,7 +50,6 @@ export function PaneGrid(): JSX.Element {
   const updatePaneRatio = usePanesStore((s) => s.updatePaneRatio)
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
-  const unzoom = usePanesStore((s) => s.unzoom)
   const findPane = usePanesStore((s) => s.findPane)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
@@ -243,24 +242,6 @@ export function PaneGrid(): JSX.Element {
             flexDirection: 'column',
           }}
         >
-          <button
-            onClick={unzoom}
-            style={{
-              position: 'absolute',
-              top: 4,
-              right: 4,
-              zIndex: 10,
-              background: '#1e2022',
-              border: '1px solid #2a2b2e',
-              color: '#6b7280',
-              borderRadius: 4,
-              padding: '2px 8px',
-              fontSize: 11,
-              cursor: 'pointer',
-            }}
-          >
-            Unzoom
-          </button>
           <PaneContainer pane={zoomedPane} />
         </div>
       )}

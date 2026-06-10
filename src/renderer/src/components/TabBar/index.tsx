@@ -7,6 +7,9 @@ import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
+import searchIcon from '../../assets/search.png'
+import commandPaletteIcon from '../../assets/commandpallete.png'
+import settingsIcon from '../../assets/settings.png'
 
 // --- Sub-components ---
 
@@ -521,22 +524,21 @@ export function TabBar(): JSX.Element {
         title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
         active={sessionBrowserOpen}
       >
-        ⌕
+        <img src={searchIcon} alt="Search" style={{ width: 16, height: 16, display: 'block' }} />
       </BarButton>
       <BarButton
         onClick={toggleCommandPalette}
         title={`Command palette (${HOTKEYS.commandPalette.display})`}
         active={commandPaletteOpen}
       >
-        &gt;
+        <img src={commandPaletteIcon} alt="Command palette" style={{ width: 16, height: 16, display: 'block' }} />
       </BarButton>
       <BarButton
         onClick={toggleSettings}
         title="Settings"
         active={settingsOpen}
       >
-        {'\u2699'}
-      </BarButton>
+        <img src={settingsIcon} alt="Settings" style={{ width: 16, height: 16, display: 'block' }} />      </BarButton>
 
       {/* Context menu (rendered outside tab strip to avoid overflow clipping) */}
       {contextMenu && (

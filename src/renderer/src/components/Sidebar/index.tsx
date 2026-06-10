@@ -7,7 +7,8 @@ import { SessionRow } from './SessionRow'
 import { TabSections } from './TabSections'
 import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
-import { controlStyles, menuStyles, sidebarStyles, ui } from '../../styles/theme'
+import { border, controlStyles, menuStyles, sidebarStyles, ui } from '../../styles/theme'
+import arrowDropdownIcon from '../../assets/arrowdropdown.png'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
@@ -132,16 +133,11 @@ export function Sidebar(): JSX.Element {
     >
       {/* Action buttons */}
       <div style={sidebarStyles.actionRow}>
-        <SpawnButton
+        <SplitSpawnButton
           label="+ Session"
           title={`Start ${agentLabel(lastAgentKind)} session`}
-          onClick={() => spawn('agent', 'vertical', smartCwd(), lastAgentKind)}
-        />
-        <SpawnButton
-          label="v"
-          title="Choose session agent"
-          compact
-          onClick={(e) => setSpawnMenu({ type: 'agent', x: e.clientX, y: e.clientY })}
+          onMain={() => spawn('agent', 'vertical', smartCwd(), lastAgentKind)}
+          onDropdown={(e) => setSpawnMenu({ type: 'agent', x: e.clientX, y: e.clientY })}
         />
         <SpawnButton
           label="+ Shell"
@@ -204,7 +200,6 @@ export function Sidebar(): JSX.Element {
           type={spawnMenu.type}
           x={spawnMenu.x}
           y={spawnMenu.y}
-          tabDefaultCwd={activeTab?.defaultCwd}
           onClose={() => setSpawnMenu(null)}
           onSpawn={(direction, agentKind) => {
             spawn(spawnMenu.type, direction, smartCwd(), agentKind)
@@ -234,6 +229,44 @@ export function Sidebar(): JSX.Element {
   )
 }
 
+// --- Split spawn button (main action + dropdown) ---
+
+function SplitSpawnButton({
+  label,
+  title,
+  onMain,
+  onDropdown,
+}: {
+  label: string
+  title?: string
+  onMain: () => void
+  onDropdown: (e: React.MouseEvent<HTMLButtonElement>) => void
+}): JSX.Element {
+  const base = controlStyles.sidebarButton
+  return (
+    <div style={{ flex: 1, display: 'flex', borderRadius: ui.radius.md, overflow: 'hidden', border: border.default, backgroundColor: ui.color.control }}>
+      <button
+        onClick={onMain}
+        title={title}
+        style={{ flex: 1, background: 'none', border: 'none', borderRight: border.default, color: base.color, fontSize: base.fontSize, fontWeight: base.fontWeight, cursor: 'pointer', padding: base.padding, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden' }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
+      >
+        {label}
+      </button>
+      <button
+        onClick={onDropdown}
+        title="Choose session agent"
+        style={{ flex: '0 0 26px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
+      >
+        <img src={arrowDropdownIcon} alt="More options" style={{ width: 16, height: 16, display: 'block' }} />
+      </button>
+    </div>
+  )
+}
+
 // --- Spawn button ---
 
 function SpawnButton({
@@ -242,7 +275,7 @@ function SpawnButton({
   compact = false,
   onClick,
 }: {
-  label: string
+  label: React.ReactNode
   title?: string
   compact?: boolean
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
@@ -254,6 +287,9 @@ function SpawnButton({
       style={{
         flex: compact ? '0 0 30px' : 1,
         ...controlStyles.sidebarButton,
+        whiteSpace: 'nowrap' as const,
+        overflow: 'hidden',
+        ...(compact ? { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0' } : {}),
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control }}
@@ -269,7 +305,6 @@ function SpawnMenuPopover({
   type,
   x,
   y,
-  tabDefaultCwd,
   onClose,
   onSpawn,
   onSpawnIn,
@@ -277,7 +312,6 @@ function SpawnMenuPopover({
   type: 'agent' | 'shell'
   x: number
   y: number
-  tabDefaultCwd?: string
   onClose: () => void
   onSpawn: (direction: SplitDirection, agentKind?: AgentKind) => void
   onSpawnIn: (direction: SplitDirection, agentKind?: AgentKind) => void
@@ -298,8 +332,6 @@ function SpawnMenuPopover({
       visible: true,
     })
   }, [x, y])
-
-  const noun = type === 'agent' ? 'session' : 'shell'
 
   function row(
     label: string,
@@ -328,9 +360,6 @@ function SpawnMenuPopover({
     return <div style={menuStyles.separator} />
   }
 
-  const dirHint = tabDefaultCwd
-    ? tabDefaultCwd.split(/[\\/]/).pop()
-    : null
 
   return (
     <>
@@ -348,25 +377,6 @@ function SpawnMenuPopover({
           visibility: pos.visible ? 'visible' : 'hidden',
         }}
       >
-        {/* Section label with dir hint */}
-        <div style={{
-          padding: '4px 12px 5px',
-          fontSize: 10,
-          color: ui.color.textDim,
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
-          <span>New {noun}</span>
-          {dirHint && (
-            <span style={{ fontFamily: 'monospace', textTransform: 'none', letterSpacing: 0 }}>
-              {dirHint}
-            </span>
-          )}
-        </div>
-        <div style={{ ...menuStyles.separator, margin: '0 0 3px' }} />
 
         {type === 'agent' && (
           <>
