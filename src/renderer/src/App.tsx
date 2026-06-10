@@ -77,7 +77,7 @@ export default function App(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
-  const sidebarBottomHeight = usePanesStore((s) => s.sidebarBottomHeight)
+  const sidebarPanelSizes = usePanesStore((s) => s.sidebarPanelSizes)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
 
@@ -95,7 +95,7 @@ export default function App(): JSX.Element {
     restoreStartedRef.current = true
 
     window.ipc.invoke('layout:load').then((saved) => {
-      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
+      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
       if (data?.tabs?.length) {
         void usePanesStore.getState().applyLayout(data)
       }
@@ -107,10 +107,10 @@ export default function App(): JSX.Element {
     if (!layoutReady) return
     if (!tabs.length) return
     const timer = setTimeout(() => {
-      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarBottomHeight).catch(() => {})
+      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [layoutReady, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarBottomHeight])
+  }, [layoutReady, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes])
 
   return (
     <div

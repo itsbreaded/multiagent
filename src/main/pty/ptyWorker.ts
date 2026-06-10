@@ -10,7 +10,7 @@
 import * as pty from 'node-pty'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
-import { join, basename } from 'path'
+import { basename } from 'path'
 import { defaultShell } from './shell'
 
 type WorkerMessage =

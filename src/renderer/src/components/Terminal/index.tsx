@@ -242,6 +242,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
   useEffect(() => {
     const xterm = xtermRef.current
     if (!xterm || status === 'mounting') return
+    const terminal: XTerm = xterm
 
     if (pane.paneType === 'agent' && !pane.ptyId) {
       xterm.clear()
@@ -291,7 +292,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       const writePtyData = (seq: number, data: string): void => {
         if (cancelled) return
         activeWriteSeqs.add(seq)
-        xterm.write(data, () => {
+        terminal.write(data, () => {
           window.ipc.send('pty:data-ack', ptyId, seq)
           activeWriteSeqs.delete(seq)
         })
@@ -312,7 +313,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
             const data = pendingInput
             pendingInput = ''
             await window.ipc.invoke('pty:write', ptyId, data)
-            xterm.scrollToBottom()
+            terminal.scrollToBottom()
           }
         } catch {
           // Input errors are surfaced by PTY exit/error handling.
@@ -322,13 +323,13 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         }
       }
 
-      dataDisposable = xterm.onData((data) => {
+      dataDisposable = terminal.onData((data) => {
         pendingInput += data
         void flushInput()
       })
 
       conptyDa1Handler = IS_WINDOWS
-        ? xterm.parser.registerCsiHandler({ final: 'c' }, (params) => {
+        ? terminal.parser.registerCsiHandler({ final: 'c' }, (params) => {
             if (params.length === 0 || (params.length === 1 && params[0] === 0)) {
               pendingInput += '\x1b[?61;4c'
               void flushInput()
@@ -347,7 +348,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       const flushPendingResize = (): void => {
         pendingResizeTimer = null
         if (pendingResizeCols === null) return
-        sendResize(pendingResizeCols, xterm.rows)
+        sendResize(pendingResizeCols, terminal.rows)
         pendingResizeCols = null
       }
 
@@ -367,9 +368,9 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
         if (pendingResizeTimer) return
         pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
       }
-      resizeDisposable = xterm.onResize(queueResize)
+      resizeDisposable = terminal.onResize(queueResize)
       try { fitAddonRef.current?.fit() } catch { /* ignore */ }
-      sendResize(xterm.cols, xterm.rows)
+      sendResize(terminal.cols, terminal.rows)
     }
 
     connect()

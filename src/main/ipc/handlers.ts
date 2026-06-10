@@ -8,7 +8,6 @@ import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
-import { defaultShell } from '../pty/shell'
 
 let vsCodeAvailable = false
 try {
@@ -440,9 +439,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     }
   })
 
-  ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarBottomHeight: unknown) => {
+  ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarPanelSizes: unknown) => {
     try {
-      fs.writeFileSync(layoutPath, JSON.stringify({ tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarBottomHeight }))
+      fs.writeFileSync(layoutPath, JSON.stringify({ tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes }))
     } catch (err) {
       console.error('[MultiAgent] layout:save failed:', err)
     }

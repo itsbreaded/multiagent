@@ -7,6 +7,8 @@ interface SidebarSectionProps {
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  onTitleClick?: () => void
+  onTitleDoubleClick?: () => void
   children: React.ReactNode
   onContextMenu?: React.MouseEventHandler<HTMLDivElement>
   renaming?: boolean
@@ -29,6 +31,8 @@ export function SidebarSection({
   defaultOpen = true,
   open: controlledOpen,
   onOpenChange,
+  onTitleClick,
+  onTitleDoubleClick,
   children,
   onContextMenu,
   renaming,
@@ -103,13 +107,21 @@ export function SidebarSection({
               fontWeight: 600,
               letterSpacing: '0.08em',
               padding: '0 2px',
-              textTransform: 'uppercase',
               minWidth: 0,
             }}
           />
         ) : (
           <button
-            onClick={() => setOpen((o) => !o)}
+            onClick={() => {
+              if (onTitleClick) onTitleClick()
+              else setOpen((o) => !o)
+            }}
+            onDoubleClick={(e) => {
+              if (!onTitleDoubleClick) return
+              e.preventDefault()
+              e.stopPropagation()
+              onTitleDoubleClick()
+            }}
             style={sidebarStyles.sectionTitleButton}
           >
             {title}

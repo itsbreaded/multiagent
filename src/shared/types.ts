@@ -64,7 +64,7 @@ export interface AppState {
   sessions: Session[]
   sidebarOpen: boolean
   sidebarWidth: number   // px
-  sidebarBottomHeight?: number // px
+  sidebarPanelSizes?: Record<string, number> // px by stable sidebar panel id
   sidebarSectionOpen: Record<string, boolean>
   zoomedPaneId: string | null
   sessionBrowserOpen: boolean
@@ -136,8 +136,8 @@ export interface IPCChannels {
   'dialog:pick-directory': (title?: string) => string | null
 
   // --- Layout persistence ---
-  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarBottomHeight?: number) => void
-  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
+  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
+  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
 
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
@@ -175,3 +175,9 @@ export type SendChannels =
   | 'pty:data-ack'
   | 'pty:attach'
   | 'pty:detach'
+
+export interface IpcBridge {
+  invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
+  on(channel: EventChannels, handler: (...args: unknown[]) => void): () => void
+  send(channel: SendChannels, ...args: unknown[]): void
+}

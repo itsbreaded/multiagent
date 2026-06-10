@@ -20,6 +20,7 @@ export function TabSections(): JSX.Element {
   const renameTab = usePanesStore((s) => s.renameTab)
   const setTabDefaultCwd = usePanesStore((s) => s.setTabDefaultCwd)
   const setSidebarSectionOpen = usePanesStore((s) => s.setSidebarSectionOpen)
+  const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
 
@@ -62,6 +63,8 @@ export function TabSections(): JSX.Element {
             count={leaves.length > 1 ? leaves.length : undefined}
             open={open}
             onOpenChange={(next) => setSidebarSectionOpen(sectionId, next)}
+            onTitleClick={() => setActiveTab(tab.id)}
+            onTitleDoubleClick={() => startRename(tab.id)}
             onContextMenu={(e) => {
               e.preventDefault()
               setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })

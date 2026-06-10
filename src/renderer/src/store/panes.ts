@@ -123,7 +123,7 @@ interface PanesStore {
   zoomedPaneId: string | null
   sidebarOpen: boolean
   sidebarWidth: number
-  sidebarBottomHeight: number
+  sidebarPanelSizes: Record<string, number>
   sidebarSectionOpen: Record<string, boolean>
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
@@ -165,12 +165,12 @@ interface PanesStore {
   setPaneCustomName: (paneId: string, name: string) => void
 
   // Layout persistence
-  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> }) => Promise<void>
+  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> }) => Promise<void>
 
   // UI toggles
   toggleSidebar: () => void
   setSidebarWidth: (width: number) => void
-  setSidebarBottomHeight: (height: number) => void
+  setSidebarPanelSize: (panelId: string, size: number) => void
   toggleSessionBrowser: () => void
   toggleCommandPalette: () => void
   toggleSettings: () => void
@@ -196,7 +196,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   zoomedPaneId: null,
   sidebarOpen: true,
   sidebarWidth: 220,
-  sidebarBottomHeight: 220,
+  sidebarPanelSizes: {
+    [RECENT_SECTION_ID]: 220,
+  },
   sidebarSectionOpen: {
     [RECENT_SECTION_ID]: true,
   },
@@ -564,7 +566,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       // convert it to a shell pane rather than guessing which session to restore.
       function sanitizeNode(node: PaneNode): PaneNode {
         if (node.type === 'leaf') {
-          const legacy = node as PaneLeaf & { paneType: PaneType | 'claude' }
+          const legacy = node as Omit<PaneLeaf, 'paneType'> & { paneType: PaneType | 'claude' }
           const migrated: PaneLeaf = legacy.paneType === 'claude'
             ? { ...legacy, paneType: 'agent', agentKind: 'claude' }
             : { ...node, agentKind: node.paneType === 'agent' ? (node.agentKind ?? 'claude') : undefined }
@@ -606,14 +608,26 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
             ? savedSectionOpen[tab.id]
             : tab.id === activeTabId
       }
+      const savedPanelSizes = saved.sidebarPanelSizes && typeof saved.sidebarPanelSizes === 'object'
+        ? Object.fromEntries(
+            Object.entries(saved.sidebarPanelSizes).filter((entry): entry is [string, number] =>
+              typeof entry[1] === 'number' && Number.isFinite(entry[1])
+            )
+          )
+        : {}
+      const legacyRecentHeight = typeof saved.sidebarBottomHeight === 'number' && Number.isFinite(saved.sidebarBottomHeight)
+        ? saved.sidebarBottomHeight
+        : 220
+      const sidebarPanelSizes: Record<string, number> = {
+        [RECENT_SECTION_ID]: savedPanelSizes[RECENT_SECTION_ID] ?? legacyRecentHeight,
+        ...savedPanelSizes,
+      }
 
       set({
         tabs,
         activeTabId,
         sidebarWidth: saved.sidebarWidth ?? 220,
-        sidebarBottomHeight: typeof (saved as { sidebarBottomHeight?: unknown }).sidebarBottomHeight === 'number'
-          ? (saved as { sidebarBottomHeight: number }).sidebarBottomHeight
-          : 220,
+        sidebarPanelSizes,
         sidebarOpen: saved.sidebarOpen ?? true,
         sidebarSectionOpen,
       })
@@ -817,7 +831,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
-  setSidebarBottomHeight: (height) => set({ sidebarBottomHeight: height }),
+  setSidebarPanelSize: (panelId, size) => set((s) => ({ sidebarPanelSizes: { ...s.sidebarPanelSizes, [panelId]: size } })),
   toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false, settingsOpen: false })),
   toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen, sessionBrowserOpen: false, settingsOpen: false })),
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, sessionBrowserOpen: false, commandPaletteOpen: false })),

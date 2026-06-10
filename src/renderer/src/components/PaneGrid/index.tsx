@@ -50,7 +50,6 @@ export function PaneGrid(): JSX.Element {
   const updatePaneRatio = usePanesStore((s) => s.updatePaneRatio)
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
-  const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
   const unzoom = usePanesStore((s) => s.unzoom)
   const findPane = usePanesStore((s) => s.findPane)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)

@@ -31,18 +31,3 @@ contextBridge.exposeInMainWorld('homeDir', os.homedir())
 // Expose OS release string (e.g. "10.0.22621") so the renderer can extract
 // the Windows build number for xterm's windowsPty ConPTY workaround selection.
 contextBridge.exposeInMainWorld('osRelease', os.release())
-
-// Type augmentation for window.ipc — consumed by renderer TypeScript
-export interface IpcBridge {
-  invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
-  on(channel: EventChannels, handler: (...args: unknown[]) => void): () => void
-  send(channel: SendChannels, ...args: unknown[]): void
-}
-
-declare global {
-  interface Window {
-    ipc: IpcBridge
-    homeDir: string
-    osRelease: string
-  }
-}

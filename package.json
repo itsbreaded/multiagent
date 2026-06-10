@@ -7,7 +7,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b --noEmit",
     "pack": "electron-builder --dir",
     "dist": "electron-vite build && electron-builder",
     "postinstall": "electron-rebuild -f -o better-sqlite3"
@@ -22,6 +22,8 @@
     "@tailwindcss/vite": "^4.3.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.20",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
     "@xterm/addon-webgl": "^0.19.0",
     "electron": "^39.8.10",

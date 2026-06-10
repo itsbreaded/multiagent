@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, shell, screen } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'

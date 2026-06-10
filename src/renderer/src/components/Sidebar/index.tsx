@@ -26,9 +26,9 @@ interface DirPickerPending {
 export function Sidebar(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
-  const sidebarBottomHeight = usePanesStore((s) => s.sidebarBottomHeight)
+  const sidebarPanelSizes = usePanesStore((s) => s.sidebarPanelSizes)
   const setSidebarWidth = usePanesStore((s) => s.setSidebarWidth)
-  const setSidebarBottomHeight = usePanesStore((s) => s.setSidebarBottomHeight)
+  const setSidebarPanelSize = usePanesStore((s) => s.setSidebarPanelSize)
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
   const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
@@ -52,6 +52,7 @@ export function Sidebar(): JSX.Element {
   const [spawnMenu, setSpawnMenu] = useState<SpawnMenu | null>(null)
   const [dirPickerPending, setDirPickerPending] = useState<DirPickerPending | null>(null)
   const recentOpen = sidebarSectionOpen[RECENT_SECTION_ID] ?? true
+  const recentHeight = sidebarPanelSizes[RECENT_SECTION_ID] ?? 220
 
   // Resize drag
   const sidebarRef = useRef<HTMLDivElement>(null)
@@ -91,7 +92,7 @@ export function Sidebar(): JSX.Element {
       e.preventDefault()
       bottomDragging.current = true
       startY.current = e.clientY
-      startBottomHeight.current = sidebarBottomHeight
+      startBottomHeight.current = recentHeight
 
       const onMove = (me: MouseEvent) => {
         if (!bottomDragging.current) return
@@ -99,7 +100,7 @@ export function Sidebar(): JSX.Element {
         const containerHeight = sidebarRef.current?.clientHeight ?? window.innerHeight
         const max = Math.max(140, containerHeight - 64)
         const next = Math.max(96, Math.min(max, startBottomHeight.current + delta))
-        setSidebarBottomHeight(next)
+        setSidebarPanelSize(RECENT_SECTION_ID, next)
       }
       const onUp = () => {
         bottomDragging.current = false
@@ -109,7 +110,7 @@ export function Sidebar(): JSX.Element {
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
-    [recentOpen, sidebarBottomHeight, setSidebarBottomHeight]
+    [recentOpen, recentHeight, setSidebarPanelSize]
   )
 
   function spawn(type: 'agent' | 'shell', direction: SplitDirection, cwd: string, agentKind?: AgentKind) {
@@ -165,7 +166,7 @@ export function Sidebar(): JSX.Element {
         <div
           style={{
             ...sidebarStyles.dock,
-            height: recentOpen ? sidebarBottomHeight : 32,
+            height: recentOpen ? recentHeight : 32,
             minHeight: recentOpen ? 96 : 32,
             maxHeight: recentOpen ? 'calc(100% - 64px)' : 32,
           }}
