@@ -17,6 +17,11 @@ const EMPTY_FORM: Omit<McpServerEntry, 'id'> = {
 }
 
 type TestState = 'idle' | 'testing' | 'ok' | 'unreachable' | 'error'
+type ProbeState =
+  | { status: 'idle' }
+  | { status: 'probing' }
+  | { status: 'done'; tools: string[] }
+  | { status: 'error'; message: string }
 type PreviewTab = 'claude' | 'codex'
 
 export function McpSection(): JSX.Element {
@@ -35,6 +40,7 @@ export function McpSection(): JSX.Element {
   const [saved, setSaved] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [testStates, setTestStates] = useState<Record<string, TestState>>({})
+  const [probeStates, setProbeStates] = useState<Record<string, ProbeState>>({})
 
   // Track whether we have ever successfully loaded status so that subsequent
   // refreshes update silently without tearing out the current display.
@@ -128,6 +134,7 @@ export function McpSection(): JSX.Element {
   function deleteServer(id: string): void {
     save({ ...mcpSettings, customServers: mcpSettings.customServers.filter((s) => s.id !== id) })
     setTestStates((prev) => { const n = { ...prev }; delete n[id]; return n })
+    setProbeStates((prev) => { const n = { ...prev }; delete n[id]; return n })
   }
 
   function toggleServer(id: string, enabled: boolean): void {
@@ -143,6 +150,17 @@ export function McpSection(): JSX.Element {
     const result = await testConnection(entry.url ?? '', entry.type)
     setTestStates((p) => ({ ...p, [entry.id]: result }))
     setTimeout(() => setTestStates((p) => ({ ...p, [entry.id]: 'idle' })), 4000)
+  }
+
+  async function probeServer(entry: McpServerEntry): Promise<void> {
+    if (entry.type !== 'stdio') return
+    setProbeStates((p) => ({ ...p, [entry.id]: { status: 'probing' } }))
+    try {
+      const result = await window.ipc.invoke('mcp:probe-stdio', entry.command ?? '', entry.args ?? [], entry.env) as { tools: string[] }
+      setProbeStates((p) => ({ ...p, [entry.id]: { status: 'done', tools: result.tools } }))
+    } catch (err) {
+      setProbeStates((p) => ({ ...p, [entry.id]: { status: 'error', message: (err as Error).message } }))
+    }
   }
 
   function handleImport(servers: McpServerEntry[]): void {
@@ -247,8 +265,9 @@ export function McpSection(): JSX.Element {
           </div>
         )}
 
-        {mcpSettings.customServers.map((entry) =>
-          editingId === entry.id && showAddForm ? null : (
+        {mcpSettings.customServers.map((entry) => {
+          const probe = probeStates[entry.id] ?? { status: 'idle' }
+          return editingId === entry.id && showAddForm ? null : (
             <ServerCard key={entry.id}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -260,9 +279,23 @@ export function McpSection(): JSX.Element {
                   <div style={{ color: '#6b7280', fontSize: 11, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {entry.type === 'stdio' ? entry.command : entry.url}
                   </div>
+                  {/* Probe results for stdio */}
+                  {entry.type === 'stdio' && probe.status === 'probing' && (
+                    <div style={{ color: '#4a4b4e', fontSize: 11, marginTop: 4 }}>Probing — spawning server…</div>
+                  )}
+                  {entry.type === 'stdio' && probe.status === 'done' && (
+                    <ToolsCollapse tools={probe.tools} emptyLabel="Server responded but listed no tools" />
+                  )}
+                  {entry.type === 'stdio' && probe.status === 'error' && (
+                    <div style={{ color: '#f87171', fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>
+                      {probe.message}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                  {entry.type !== 'stdio' && (
+                  {entry.type === 'stdio' ? (
+                    <ProbeButton state={probe.status} onClick={() => probeServer(entry)} />
+                  ) : (
                     <TestButton state={testStates[entry.id] ?? 'idle'} onClick={() => testServer(entry)} />
                   )}
                   <Toggle checked={entry.enabled} onChange={(v) => toggleServer(entry.id, v)} />
@@ -272,7 +305,7 @@ export function McpSection(): JSX.Element {
               </div>
             </ServerCard>
           )
-        )}
+        })}
 
         {showImport && (
           <ServerCard>
@@ -452,6 +485,7 @@ function ServerForm({
   )
   const [envError, setEnvError] = useState<string | null>(null)
   const [testState, setTestState] = useState<TestState>('idle')
+  const [formProbe, setFormProbe] = useState<ProbeState>({ status: 'idle' })
 
   function update(patch: Partial<Omit<McpServerEntry, 'id'>>): void {
     onChange({ ...data, ...patch })
@@ -483,6 +517,17 @@ function ServerForm({
     const result = await testConnection(data.url.trim(), data.type)
     setTestState(result)
     setTimeout(() => setTestState('idle'), 4000)
+  }
+
+  async function handleProbe(): Promise<void> {
+    if (data.type !== 'stdio' || !data.command?.trim()) return
+    setFormProbe({ status: 'probing' })
+    try {
+      const result = await window.ipc.invoke('mcp:probe-stdio', data.command.trim(), data.args ?? [], data.env) as { tools: string[] }
+      setFormProbe({ status: 'done', tools: result.tools })
+    } catch (err) {
+      setFormProbe({ status: 'error', message: (err as Error).message })
+    }
   }
 
   // Reset args/env text when type changes away from stdio
@@ -565,7 +610,13 @@ function ServerForm({
       ) : (
         <>
           <FormRow label="Command">
-            <FormInput value={data.command ?? ''} placeholder="npx" onChange={(v) => update({ command: v })} monospace />
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ flex: 1 }}>
+                <FormInput value={data.command ?? ''} placeholder="npx" onChange={(v) => update({ command: v })} monospace />
+              </div>
+              <ProbeButton state={formProbe.status} onClick={handleProbe} />
+            </div>
+            <FieldHint>Probe spawns the server, runs MCP handshake, and lists tools — may take up to 30s for npx packages</FieldHint>
           </FormRow>
           <FormRow label="Args">
             <FormInput
@@ -601,6 +652,12 @@ function ServerForm({
           <FieldHint style={{ marginTop: -4, marginBottom: 8 }}>
             Codex injection of stdio env vars uses per-key TOML overrides — complex env may require native config instead.
           </FieldHint>
+          {formProbe.status === 'done' && (
+            <ToolsCollapse tools={formProbe.tools} emptyLabel="Server responded but listed no tools" />
+          )}
+          {formProbe.status === 'error' && (
+            <div style={{ color: '#f87171', fontSize: 11, marginBottom: 6, lineHeight: 1.4 }}>{formProbe.message}</div>
+          )}
         </>
       )}
 
@@ -628,15 +685,18 @@ function ServerForm({
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ToolsCollapse({ tools }: { tools: string[] }): JSX.Element {
+function ToolsCollapse({ tools, emptyLabel }: { tools: string[]; emptyLabel?: string }): JSX.Element {
   const [open, setOpen] = useState(false)
+  if (tools.length === 0) {
+    return <div style={{ color: '#4a4b4e', fontSize: 11, marginTop: 4 }}>{emptyLabel ?? 'No tools'}</div>
+  }
   return (
     <div style={{ marginTop: 4 }}>
       <button
         onClick={() => setOpen((v) => !v)}
         style={{ background: 'none', border: 'none', color: '#4a4b4e', fontSize: 10, cursor: 'pointer', padding: 0 }}
       >
-        {open ? '▾' : '▸'} {tools.length} tools
+        {open ? '▾' : '▸'} {tools.length} tool{tools.length !== 1 ? 's' : ''}
       </button>
       {open && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
@@ -648,6 +708,38 @@ function ToolsCollapse({ tools }: { tools: string[] }): JSX.Element {
         </div>
       )}
     </div>
+  )
+}
+
+function ProbeButton({ state, onClick }: { state: ProbeState['status']; onClick: () => void }): JSX.Element {
+  const busy = state === 'probing'
+  const label = busy ? '…' : state === 'done' ? '✓ Probed' : state === 'error' ? '✗ Error' : 'Probe'
+  const color = state === 'done' ? '#4ade80' : state === 'error' ? '#f87171' : '#6b7280'
+  const title = state === 'done'
+    ? 'Tools fetched — click to re-probe'
+    : state === 'error'
+    ? 'Probe failed — click to retry'
+    : 'Spawn server and list available tools (may take up to 30s for npx packages)'
+  return (
+    <button
+      onClick={onClick}
+      disabled={busy}
+      title={title}
+      style={{
+        background: 'none',
+        border: '1px solid #2a2b2e',
+        borderRadius: 4,
+        color,
+        fontSize: 11,
+        cursor: busy ? 'default' : 'pointer',
+        padding: '2px 8px',
+        minWidth: 52,
+        fontFamily: 'monospace',
+        flexShrink: 0,
+      }}
+    >
+      {label}
+    </button>
   )
 }
 

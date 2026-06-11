@@ -160,6 +160,7 @@ export interface IPCChannels {
   'mcp:get-status': () => McpStatus
   'mcp:get-settings': () => McpSettings
   'mcp:save-settings': (settings: McpSettings) => void
+  'mcp:probe-stdio': (command: string, args: string[], env?: Record<string, string>) => { tools: string[] }
 
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
@@ -189,6 +190,7 @@ export type InvokeChannels =
   | 'mcp:get-status'
   | 'mcp:get-settings'
   | 'mcp:save-settings'
+  | 'mcp:probe-stdio'
 
 export type EventChannels =
   | 'sessions:updated'

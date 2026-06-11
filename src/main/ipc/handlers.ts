@@ -10,6 +10,7 @@ import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
+import { probeStdioServer } from '../mcp/probeStdio'
 import type { McpSettings } from '../../shared/types'
 
 let vsCodeAvailable = false
@@ -294,6 +295,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   ipcMain.handle('mcp:save-settings', (_e, settings: McpSettings) => {
     mcpManager.saveSettings(settings)
+  })
+
+  ipcMain.handle('mcp:probe-stdio', async (_e, command: string, args: string[], env?: Record<string, string>) => {
+    const tools = await probeStdioServer(command, args, env)
+    return { tools }
   })
 
   return () => {
