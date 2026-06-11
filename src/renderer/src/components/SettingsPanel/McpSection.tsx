@@ -861,7 +861,8 @@ function parseImportJson(text: string): McpServerEntry[] | string {
     for (const [name, config] of Object.entries(rawServers)) {
       if (!name || name === 'multiagent-browser') continue
       const c = (config ?? {}) as Record<string, unknown>
-      const type = (c.type as McpServerType | undefined) ?? 'http'
+      const explicit = c.type as McpServerType | undefined
+      const type: McpServerType = explicit ?? (c.command ? 'stdio' : 'http')
       entries.push({
         id: generateId(),
         name,
