@@ -8,8 +8,9 @@ import {
   type HotkeyId,
   type HotkeyOverride,
 } from '../../utils/hotkeys'
+import { McpSection } from './McpSection'
 
-type SettingsSection = 'appearance' | 'hotkeys' | 'general'
+type SettingsSection = 'appearance' | 'hotkeys' | 'general' | 'mcp'
 
 // Terminal-only shortcuts shown read-only for visibility
 const TERMINAL_SHORTCUTS = [
@@ -41,6 +42,7 @@ export function SettingsPanel(): JSX.Element {
   const sections = useMemo(() => [
     { id: 'appearance' as const, label: 'Appearance', count: 1 },
     { id: 'hotkeys' as const,    label: 'Hotkeys',    count: customizedCount },
+    { id: 'mcp' as const,        label: 'MCP',        count: 0, experimental: true },
     { id: 'general' as const,    label: 'General',    count: 0 },
   ], [customizedCount])
 
@@ -167,7 +169,22 @@ export function SettingsPanel(): JSX.Element {
                   color: active ? '#d4d4d4' : '#6b7280',
                 }}
               >
-                <span>{section.label}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {section.label}
+                  {'experimental' in section && section.experimental && (
+                    <span style={{
+                      fontSize: 9,
+                      background: '#1a2a3a',
+                      border: '1px solid #2a3a5a',
+                      borderRadius: 3,
+                      color: '#60a0d0',
+                      padding: '0 4px',
+                      letterSpacing: '0.04em',
+                    }}>
+                      beta
+                    </span>
+                  )}
+                </span>
                 {section.count > 0 && <span style={{ color: '#4a4b4e', fontSize: 11 }}>{section.count}</span>}
               </button>
             )
@@ -344,6 +361,9 @@ export function SettingsPanel(): JSX.Element {
                 )}
               </>
             )}
+
+            {/* MCP section */}
+            {activeSection === 'mcp' && <McpSection />}
 
             {/* General section */}
             {activeSection === 'general' && (

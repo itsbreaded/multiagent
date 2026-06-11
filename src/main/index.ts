@@ -4,8 +4,7 @@ import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { BrowserViewManager } from './browser/BrowserViewManager'
-import { BrowserMcpServer } from './mcp/BrowserMcpServer'
-import { McpInjector } from './mcp/McpInjector'
+import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
 
 interface WindowState {
@@ -56,7 +55,6 @@ function saveWindowState(win: BrowserWindow): void {
 
 // Keep references so resources can be cleaned up on quit
 let cleanupFn: (() => void) | null = null
-let mcpInjector: McpInjector | null = null
 let browserViewManager: BrowserViewManager | null = null
 
 async function createWindow(): Promise<void> {
@@ -109,14 +107,8 @@ async function createWindow(): Promise<void> {
   browserViewManager = new BrowserViewManager()
   browserViewManager.initialize()
 
-  const browserMcpServer = new BrowserMcpServer(browserViewManager)
-  mcpInjector = new McpInjector()
-  browserMcpServer.startHttp().then((port) => {
-    mcpInjector!.inject(
-      `http://127.0.0.1:${port}/sse`,
-      `http://127.0.0.1:${port}/mcp`
-    )
-    console.log(`[MultiAgent] Browser MCP server listening on port ${port}`)
+  mcpManager.start(browserViewManager).then(() => {
+    console.log(`[MultiAgent] Browser MCP server listening on port ${mcpManager.getStatus().port}`)
   }).catch((err) => {
     console.error('[MultiAgent] Browser MCP server failed to start:', err)
   })
@@ -155,6 +147,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   cleanupFn?.()
-  mcpInjector?.cleanup()
+  mcpManager.cleanup()
   browserViewManager?.destroy()
 })

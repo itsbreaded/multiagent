@@ -9,6 +9,8 @@ import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
+import { mcpManager } from '../mcp/McpManager'
+import type { McpSettings } from '../../shared/types'
 
 let vsCodeAvailable = false
 try {
@@ -284,6 +286,14 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     } catch (err) {
       console.error('[MultiAgent] layout:save failed:', err)
     }
+  })
+
+  ipcMain.handle('mcp:get-status', () => mcpManager.getStatus())
+
+  ipcMain.handle('mcp:get-settings', () => mcpManager.getSettings())
+
+  ipcMain.handle('mcp:save-settings', (_e, settings: McpSettings) => {
+    mcpManager.saveSettings(settings)
   })
 
   return () => {

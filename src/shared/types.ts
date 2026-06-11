@@ -1,6 +1,31 @@
 // Session status
 export type SessionStatus = 'live-attached' | 'resumable'
 
+// MCP server configuration
+export type McpServerType = 'http' | 'sse' | 'stdio'
+
+export interface McpServerEntry {
+  id: string
+  name: string
+  enabled: boolean
+  type: McpServerType
+  url?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
+export interface McpSettings {
+  builtinBrowserEnabled: boolean
+  customServers: McpServerEntry[]
+}
+
+export interface McpStatus {
+  port: number | null
+  running: boolean
+  tools: string[]
+}
+
 export type AgentKind = 'claude' | 'codex'
 
 // A CLI agent session as stored/displayed
@@ -131,6 +156,11 @@ export interface IPCChannels {
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
   'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
 
+  // --- MCP ---
+  'mcp:get-status': () => McpStatus
+  'mcp:get-settings': () => McpSettings
+  'mcp:save-settings': (settings: McpSettings) => void
+
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
   'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
@@ -156,6 +186,9 @@ export type InvokeChannels =
   | 'layout:save'
   | 'layout:load'
   | 'dialog:pick-directory'
+  | 'mcp:get-status'
+  | 'mcp:get-settings'
+  | 'mcp:save-settings'
 
 export type EventChannels =
   | 'sessions:updated'

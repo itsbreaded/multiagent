@@ -1,8 +1,7 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { existsSync, unlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-
-const PORT_PLACEHOLDER = '{port}'
+import type { McpSettings } from '../../shared/types'
 
 let claudeMcpConfigPath: string | null = null
 let codexMcpUrl: string | null = null
@@ -16,12 +15,18 @@ export function currentCodexMcpUrl(): string | null {
 }
 
 export class McpInjector {
-  inject(sseUrl: string, streamableHttpUrl: string): void {
+  inject(sseUrl: string, streamableHttpUrl: string, settings?: McpSettings): void {
     void sseUrl
     const port = portFromUrl(streamableHttpUrl)
-    claudeMcpConfigPath = writeClaudeMcpConfig(port)
-    codexMcpUrl = resolveTemplate('codex-mcp.toml', portFromUrl(streamableHttpUrl))
-      .match(/^\s*url\s*=\s*"([^"]+)"/m)?.[1] ?? streamableHttpUrl
+    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings)
+    codexMcpUrl = buildCodexMcpUrl(port)
+  }
+
+  updateSettings(sseUrl: string, streamableHttpUrl: string, settings: McpSettings): void {
+    void sseUrl
+    const port = portFromUrl(streamableHttpUrl)
+    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings)
+    codexMcpUrl = buildCodexMcpUrl(port)
   }
 
   cleanup(): void {
@@ -30,10 +35,43 @@ export class McpInjector {
   }
 }
 
-function writeClaudeMcpConfig(port: string): string {
+function buildMcpConfig(port: string, settings?: McpSettings): Record<string, unknown> {
+  const mcpServers: Record<string, unknown> = {}
+
+  if (!settings || settings.builtinBrowserEnabled !== false) {
+    mcpServers['multiagent-browser'] = {
+      type: 'http',
+      url: `http://127.0.0.1:${port}/mcp`,
+    }
+  }
+
+  if (settings?.customServers) {
+    for (const server of settings.customServers) {
+      if (!server.enabled || !server.name.trim()) continue
+      if (server.type === 'stdio') {
+        mcpServers[server.name] = {
+          type: 'stdio',
+          command: server.command ?? '',
+          ...(server.args?.length ? { args: server.args } : {}),
+          ...(server.env && Object.keys(server.env).length ? { env: server.env } : {}),
+        }
+      } else {
+        mcpServers[server.name] = {
+          type: server.type,
+          url: server.url ?? '',
+        }
+      }
+    }
+  }
+
+  return { mcpServers }
+}
+
+function writeClaudeMcpConfig(port: string, settings?: McpSettings): string {
   cleanupClaudeMcpConfig()
   const configPath = join(tmpdir(), `multiagent-claude-mcp-${process.pid}.json`)
-  writeFileSync(configPath, resolveTemplate('claude-mcp.json', port), 'utf-8')
+  const config = buildMcpConfig(port, settings)
+  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
   return configPath
 }
 
@@ -45,12 +83,8 @@ function cleanupClaudeMcpConfig(): void {
   claudeMcpConfigPath = null
 }
 
-function resolveTemplate(fileName: string, port: string): string {
-  return readTemplate(fileName).replaceAll(PORT_PLACEHOLDER, port)
-}
-
-function readTemplate(fileName: string): string {
-  return readFileSync(join(__dirname, '../../src/main/mcp/templates', fileName), 'utf-8')
+function buildCodexMcpUrl(port: string): string {
+  return `http://127.0.0.1:${port}/mcp`
 }
 
 function portFromUrl(url: string): string {
