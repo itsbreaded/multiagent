@@ -491,7 +491,7 @@ export function TabBar(): JSX.Element {
         })}
 
         <button
-          onClick={() => addTab()}
+          onClick={() => { const id = addTab(); startRename(id) }}
           title={`New tab (${HOTKEYS.newTab.display})`}
           style={{
             marginLeft: 4,

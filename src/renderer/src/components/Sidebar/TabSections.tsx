@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import type { PaneLeaf, Session, Tab } from '../../../../shared/types'
 import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
@@ -23,6 +23,8 @@ export function TabSections(): JSX.Element {
   const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
+  const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
+  const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
 
   const tabLabels = computeLabels(tabs, sessions)
 
@@ -43,6 +45,13 @@ export function TabSections(): JSX.Element {
     if (renamingTabId) renameTab(renamingTabId, renameValue)
     setRenamingTabId(null)
   }
+
+  useEffect(() => {
+    if (pendingRenameTabId && tabs.some((t) => t.id === pendingRenameTabId)) {
+      startRename(pendingRenameTabId)
+      setPendingRenameTabId(null)
+    }
+  }, [pendingRenameTabId])
 
   if (tabs.length === 0) return <></>
 

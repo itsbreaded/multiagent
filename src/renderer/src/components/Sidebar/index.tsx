@@ -38,6 +38,7 @@ export function Sidebar(): JSX.Element {
   const lastShellSpawnMode = usePanesStore((s) => s.lastShellSpawnMode)
   const setLastShellSpawnMode = usePanesStore((s) => s.setLastShellSpawnMode)
   const addTab = usePanesStore((s) => s.addTab)
+  const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
@@ -161,7 +162,7 @@ export function Sidebar(): JSX.Element {
         />
         <button
           title="New tab"
-          onClick={() => addTab(activeCwd())}
+          onClick={() => { const id = addTab(activeCwd()); setPendingRenameTabId(id) }}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -170,7 +171,7 @@ export function Sidebar(): JSX.Element {
             height: 26,
             flexShrink: 0,
             background: 'none',
-            border: `1px solid ${border.subtle}`,
+            border: border.default,
             borderRadius: 5,
             cursor: 'pointer',
             padding: 0,

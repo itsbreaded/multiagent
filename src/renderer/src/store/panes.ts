@@ -151,7 +151,9 @@ interface PanesStore {
   refreshGitBranch: (cwd: string) => void
 
   // Tab operations
-  addTab: (defaultCwd?: string, name?: string) => void
+  addTab: (defaultCwd?: string, name?: string) => string
+  pendingRenameTabId: string | null
+  setPendingRenameTabId: (id: string | null) => void
   setTabDefaultCwd: (tabId: string, cwd: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
@@ -261,10 +263,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
   },
   draggedPaneId: null,
+  pendingRenameTabId: null,
+  setPendingRenameTabId: (id) => set({ pendingRenameTabId: id }),
 
   addTab: (defaultCwd?: string, name?: string) => {
     const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined, customLabel: name || undefined }
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id, sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true } }))
+    return tab.id
   },
 
   setTabDefaultCwd: (tabId, cwd) => {
