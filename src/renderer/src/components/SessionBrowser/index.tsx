@@ -3,8 +3,9 @@ import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
-import { agentBadge, agentLabel } from '../../utils/agents'
+import { agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
+import { AgentIcon } from '../AgentIcon'
 
 function groupByProject(sessions: Session[]): Map<string, Session[]> {
   const map = new Map<string, Session[]>()
@@ -272,8 +273,8 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
             display: 'inline-block',
           }}
         />
-        <span style={{ fontSize: 11, color: '#6b7280', flexShrink: 0 }}>
-          {agentBadge(session.agentKind)}
+        <span style={{ width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <AgentIcon agentKind={session.agentKind} size={14} />
         </span>
         <span style={{ fontSize: 11, color: '#4a4b4e', flexShrink: 0 }}>
           {formatRelativeTime(session.lastActivity)}

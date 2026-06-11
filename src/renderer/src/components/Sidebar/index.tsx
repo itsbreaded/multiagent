@@ -9,6 +9,7 @@ import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
 import { border, controlStyles, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import arrowDropdownIcon from '../../assets/arrowdropdown.png'
+import { AgentIcon, ShellIcon } from '../AgentIcon'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
@@ -33,6 +34,8 @@ export function Sidebar(): JSX.Element {
   const newSession = usePanesStore((s) => s.newSession)
   const addShellPane = usePanesStore((s) => s.addShellPane)
   const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
+  const lastShellSpawnMode = usePanesStore((s) => s.lastShellSpawnMode)
+  const setLastShellSpawnMode = usePanesStore((s) => s.setLastShellSpawnMode)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
@@ -119,6 +122,14 @@ export function Sidebar(): JSX.Element {
     else addShellPane(cwd, direction)
   }
 
+  function spawnShellFromSavedMode(): void {
+    if (lastShellSpawnMode === 'choose') {
+      setDirPickerPending({ type: 'shell', direction: 'vertical' })
+      return
+    }
+    spawn('shell', 'vertical', smartCwd())
+  }
+
   if (!sidebarOpen) return <></>
 
   return (
@@ -134,15 +145,17 @@ export function Sidebar(): JSX.Element {
       {/* Action buttons */}
       <div style={sidebarStyles.actionRow}>
         <SplitSpawnButton
-          label="+ Session"
+          label={<><AgentIcon agentKind={lastAgentKind} size={16} /> Session</>}
           title={`Start ${agentLabel(lastAgentKind)} session`}
           onMain={() => spawn('agent', 'vertical', smartCwd(), lastAgentKind)}
           onDropdown={(e) => setSpawnMenu({ type: 'agent', x: e.clientX, y: e.clientY })}
         />
-        <SpawnButton
-          label="+ Shell"
+        <SplitSpawnButton
+          label={<><ShellIcon size={16} /> Shell</>}
           title="Open shell"
-          onClick={(e) => setSpawnMenu({ type: 'shell', x: e.clientX, y: e.clientY })}
+          dropdownTitle="Choose shell location"
+          onMain={spawnShellFromSavedMode}
+          onDropdown={(e) => setSpawnMenu({ type: 'shell', x: e.clientX, y: e.clientY })}
         />
       </div>
 
@@ -202,10 +215,12 @@ export function Sidebar(): JSX.Element {
           y={spawnMenu.y}
           onClose={() => setSpawnMenu(null)}
           onSpawn={(direction, agentKind) => {
+            if (spawnMenu.type === 'shell') setLastShellSpawnMode('current')
             spawn(spawnMenu.type, direction, smartCwd(), agentKind)
             setSpawnMenu(null)
           }}
           onSpawnIn={(direction, agentKind) => {
+            if (spawnMenu.type === 'shell') setLastShellSpawnMode('choose')
             setDirPickerPending({ type: spawnMenu.type, direction, agentKind })
             setSpawnMenu(null)
           }}
@@ -218,6 +233,7 @@ export function Sidebar(): JSX.Element {
           initial={smartCwd()}
           confirmLabel="Start"
           skipLabel="Cancel"
+          autoBrowse
           onConfirm={(dir) => {
             spawn(dirPickerPending.type, dirPickerPending.direction, dir, dirPickerPending.agentKind)
             setDirPickerPending(null)
@@ -234,11 +250,13 @@ export function Sidebar(): JSX.Element {
 function SplitSpawnButton({
   label,
   title,
+  dropdownTitle = 'Choose session agent',
   onMain,
   onDropdown,
 }: {
-  label: string
+  label: React.ReactNode
   title?: string
+  dropdownTitle?: string
   onMain: () => void
   onDropdown: (e: React.MouseEvent<HTMLButtonElement>) => void
 }): JSX.Element {
@@ -248,7 +266,7 @@ function SplitSpawnButton({
       <button
         onClick={onMain}
         title={title}
-        style={{ flex: 1, background: 'none', border: 'none', borderRight: border.default, color: base.color, fontSize: base.fontSize, fontWeight: base.fontWeight, cursor: 'pointer', padding: base.padding, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden' }}
+        style={{ flex: 1, background: 'none', border: 'none', borderRight: border.default, color: base.color, fontSize: base.fontSize, fontWeight: base.fontWeight, cursor: 'pointer', padding: base.padding, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >
@@ -256,7 +274,7 @@ function SplitSpawnButton({
       </button>
       <button
         onClick={onDropdown}
-        title="Choose session agent"
+        title={dropdownTitle}
         style={{ flex: '0 0 26px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
@@ -264,38 +282,6 @@ function SplitSpawnButton({
         <img src={arrowDropdownIcon} alt="More options" style={{ width: 16, height: 16, display: 'block' }} />
       </button>
     </div>
-  )
-}
-
-// --- Spawn button ---
-
-function SpawnButton({
-  label,
-  title,
-  compact = false,
-  onClick,
-}: {
-  label: React.ReactNode
-  title?: string
-  compact?: boolean
-  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
-}): JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      style={{
-        flex: compact ? '0 0 30px' : 1,
-        ...controlStyles.sidebarButton,
-        whiteSpace: 'nowrap' as const,
-        overflow: 'hidden',
-        ...(compact ? { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0' } : {}),
-      }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control }}
-    >
-      {label}
-    </button>
   )
 }
 
@@ -335,7 +321,7 @@ function SpawnMenuPopover({
 
   function row(
     label: string,
-    hint: string,
+    hint: React.ReactNode,
     onClick: () => void,
     dimmed = false,
   ): JSX.Element {
@@ -351,7 +337,9 @@ function SpawnMenuPopover({
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >
         <span>{label}</span>
-        <span style={{ fontSize: 13, opacity: dimmed ? 0.3 : 0.5 }}>{hint}</span>
+        <span style={{ fontSize: 13, opacity: dimmed ? 0.3 : 0.8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
+          {hint}
+        </span>
       </button>
     )
   }
@@ -381,20 +369,20 @@ function SpawnMenuPopover({
         {type === 'agent' && (
           <>
             <MenuLabel>Current Directory</MenuLabel>
-            {row('Claude Code', 'C', () => onSpawn('vertical', 'claude'))}
-            {row('Codex CLI', 'X', () => onSpawn('vertical', 'codex'))}
+            {row('Claude Code', <AgentIcon agentKind="claude" size={16} />, () => onSpawn('vertical', 'claude'))}
+            {row('Codex CLI', <AgentIcon agentKind="codex" size={16} />, () => onSpawn('vertical', 'codex'))}
             {sep()}
             <MenuLabel>Choose Directory</MenuLabel>
-            {row('Claude Code...', 'C', () => onSpawnIn('vertical', 'claude'))}
-            {row('Codex CLI...', 'X', () => onSpawnIn('vertical', 'codex'))}
+            {row('Claude Code...', <AgentIcon agentKind="claude" size={16} />, () => onSpawnIn('vertical', 'claude'))}
+            {row('Codex CLI...', <AgentIcon agentKind="codex" size={16} />, () => onSpawnIn('vertical', 'codex'))}
           </>
         )}
 
         {type === 'shell' && (
           <>
-            {row('Current Directory', '>', () => onSpawn('vertical'))}
+            {row('Current Directory', <ShellIcon size={16} />, () => onSpawn('vertical'))}
             {sep()}
-            {row('Choose Directory...', '>', () => onSpawnIn('vertical'))}
+            {row('Choose Directory...', <ShellIcon size={16} />, () => onSpawnIn('vertical'))}
           </>
         )}
       </div>

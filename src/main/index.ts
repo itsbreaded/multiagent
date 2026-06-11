@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, screen } from 'electron'
+import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc/handlers'
 import { BrowserViewManager } from './browser/BrowserViewManager'
 import { BrowserMcpServer } from './mcp/BrowserMcpServer'
 import { McpInjector } from './mcp/McpInjector'
+import { openExternalUrl } from './external'
 
 interface WindowState {
   x: number
@@ -88,8 +89,16 @@ async function createWindow(): Promise<void> {
   mainWindow.on('closed', () => app.quit())
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternalUrl(details.url)
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.once('did-finish-load', () => {
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+      if (url === mainWindow.webContents.getURL()) return
+      event.preventDefault()
+      openExternalUrl(url)
+    })
   })
 
   // Wire IPC handlers (sessions, PTY, shell, layout)

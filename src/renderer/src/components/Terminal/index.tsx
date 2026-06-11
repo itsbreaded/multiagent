@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -104,6 +105,9 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
 
     const fitAddon = new FitAddon()
     xterm.loadAddon(fitAddon)
+    xterm.loadAddon(new WebLinksAddon((_event, uri) => {
+      window.ipc.invoke('shell:open-external', uri).catch(() => {})
+    }))
     xterm.open(containerRef.current)
     // Tell xterm we're running under ConPTY so it applies the right
     // rendering workarounds for the detected build number.

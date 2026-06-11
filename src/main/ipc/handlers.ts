@@ -8,6 +8,7 @@ import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
+import { openExternalUrl } from '../external'
 
 let vsCodeAvailable = false
 try {
@@ -238,6 +239,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   ipcMain.handle('shell:open-folder', (_e, folderPath: string) => shell.openPath(folderPath))
 
+  ipcMain.handle('shell:open-external', (_e, url: string) => {
+    openExternalUrl(url)
+  })
+
   ipcMain.handle('shell:copy-to-clipboard', (_e, text: string) => {
     clipboard.writeText(text)
   })
@@ -254,11 +259,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     shell.openExternal(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
   })
 
-  ipcMain.handle('dialog:pick-directory', async (_e, title?: string) => {
+  ipcMain.handle('dialog:pick-directory', async (_e, title?: string, defaultPath?: string) => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: title ?? 'Select Directory',
       properties: ['openDirectory'],
-      defaultPath: os.homedir(),
+      defaultPath: defaultPath || os.homedir(),
     })
     return result.canceled ? null : (result.filePaths[0] ?? null)
   })

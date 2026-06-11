@@ -116,6 +116,7 @@ export interface IPCChannels {
 
   // --- Shell ---
   'shell:open-folder': (path: string) => void
+  'shell:open-external': (url: string) => void
   'shell:copy-to-clipboard': (text: string) => void
   'shell:open-vscode': (cwd: string) => void
   'shell:vscode-available': () => boolean
@@ -124,7 +125,7 @@ export interface IPCChannels {
   'git:branch': (cwd: string) => string | null
 
   // --- Dialogs ---
-  'dialog:pick-directory': (title?: string) => string | null
+  'dialog:pick-directory': (title?: string, defaultPath?: string) => string | null
 
   // --- Layout persistence ---
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
@@ -147,6 +148,7 @@ export type InvokeChannels =
   | 'pty:resize'
   | 'pty:kill'
   | 'shell:open-folder'
+  | 'shell:open-external'
   | 'shell:copy-to-clipboard'
   | 'shell:open-vscode'
   | 'shell:vscode-available'

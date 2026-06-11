@@ -3,9 +3,9 @@ import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
-import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
 import { border, menuStyles, ui } from '../../styles/theme'
+import { AgentIcon } from '../AgentIcon'
 
 interface SessionRowProps {
   session: Session
@@ -178,23 +178,16 @@ function getStatusDot(session: Session): React.ReactNode {
 function AgentBadge({ session }: { session: Session }): JSX.Element {
   return (
     <span
-      title={agentLabel(session.agentKind)}
       style={{
         width: 14,
         height: 14,
-        borderRadius: 3,
-        border: `1px solid ${agentAccent(session.agentKind)}`,
-        color: agentAccent(session.agentKind),
-        fontSize: 9,
-        fontWeight: 700,
-        fontFamily: 'monospace',
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
       }}
     >
-      {agentBadge(session.agentKind)}
+      <AgentIcon agentKind={session.agentKind} size={14} />
     </span>
   )
 }

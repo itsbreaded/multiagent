@@ -4,12 +4,12 @@ import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
-import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
 import { DirPicker } from '../DirPicker'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { border, menuStyles, ui } from '../../styles/theme'
+import { AgentIcon, ShellIcon } from '../AgentIcon'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -125,6 +125,7 @@ export function TabSections(): JSX.Element {
           initial={dirPickerTab?.defaultCwd ?? ''}
           confirmLabel="Change"
           skipLabel="Cancel"
+          autoBrowse
           onConfirm={(dir) => { setTabDefaultCwd(dirPickerTabId, dir); setDirPickerTabId(null) }}
           onSkip={() => setDirPickerTabId(null)}
         />
@@ -241,26 +242,21 @@ function PaneRow({
       >
         {pane.paneType === 'agent' && pane.agentKind ? (
           <span
-            title={agentLabel(pane.agentKind)}
             style={{
               width: 14,
               height: 14,
-              borderRadius: 3,
-              border: `1px solid ${agentAccent(pane.agentKind)}`,
-              color: agentAccent(pane.agentKind),
-              fontSize: 9,
-              fontWeight: 700,
-              fontFamily: 'monospace',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
             }}
           >
-            {agentBadge(pane.agentKind)}
+            <AgentIcon agentKind={pane.agentKind} size={14} />
           </span>
         ) : (
-          <span style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${ui.color.textMuted}`, flexShrink: 0, display: 'inline-block', opacity: 0.8 }} />
+          <span style={{ width: 14, height: 14, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: 0.9 }}>
+            <ShellIcon size={14} />
+          </span>
         )}
         {renaming ? (
           <input

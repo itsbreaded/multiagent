@@ -7,6 +7,7 @@ interface DirPickerProps {
   confirmLabel?: string
   skipLabel?: string
   nameField?: boolean
+  autoBrowse?: boolean
   onConfirm: (dir: string, name?: string) => void
   onSkip: () => void
 }
@@ -18,6 +19,7 @@ export function DirPicker({
   confirmLabel = 'Set',
   skipLabel = 'Skip',
   nameField = false,
+  autoBrowse = false,
   onConfirm,
   onSkip,
 }: DirPickerProps): JSX.Element {
@@ -25,6 +27,7 @@ export function DirPicker({
   const [name, setName] = useState('')
   const nameRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const autoBrowseStartedRef = useRef(false)
 
   useEffect(() => {
     if (nameField) {
@@ -46,12 +49,20 @@ export function DirPicker({
   async function browse(): Promise<void> {
     if (!window.ipc) return
     try {
-      const picked = await window.ipc.invoke('dialog:pick-directory', title) as string | null
+      const picked = await window.ipc.invoke('dialog:pick-directory', title, value || initial) as string | null
       if (picked) setValue(picked)
     } catch {
       // ignore
     }
   }
+
+  useEffect(() => {
+    if (!autoBrowse || autoBrowseStartedRef.current) return
+    autoBrowseStartedRef.current = true
+    void browse()
+  // `browse` intentionally reads the current value when the effect fires.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoBrowse])
 
   function handleConfirm(): void {
     const trimmedDir = value.trim()

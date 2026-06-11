@@ -7,6 +7,7 @@ import { PaneContainer } from './PaneContainer'
 import { PaneSplitDropTarget } from './PaneSplitDropTarget'
 import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
+import { ShellIcon } from '../AgentIcon'
 
 function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void): React.ReactNode {
   if (node.type === 'leaf') {
@@ -183,9 +184,13 @@ export function PaneGrid(): JSX.Element {
                   color: '#6b7280',
                   fontSize: 13,
                   cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
                   textAlign: 'left',
                 }}
               >
+                <ShellIcon size={16} />
                 Open Shell
               </button>
               <button
@@ -203,7 +208,7 @@ export function PaneGrid(): JSX.Element {
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
               >
-                ...
+                <ShellIcon size={16} />
               </button>
             </div>
 
@@ -221,6 +226,7 @@ export function PaneGrid(): JSX.Element {
               initial={cwdForNew}
               confirmLabel="Start"
               skipLabel="Cancel"
+              autoBrowse
               onConfirm={(dir) => {
                 if (dirPickerFor !== 'shell') newSession(dir, 'vertical', dirPickerFor)
                 else addShellPane(dir)

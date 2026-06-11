@@ -111,6 +111,19 @@ function rememberAgent(agentKind: AgentKind): void {
   }
 }
 
+export type ShellSpawnMode = 'current' | 'choose'
+
+function initialLastShellSpawnMode(): ShellSpawnMode {
+  if (typeof localStorage === 'undefined') return 'current'
+  return localStorage.getItem('multiagent:lastShellSpawnMode') === 'choose' ? 'choose' : 'current'
+}
+
+function rememberShellSpawnMode(mode: ShellSpawnMode): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('multiagent:lastShellSpawnMode', mode)
+  }
+}
+
 export const RECENT_SECTION_ID = 'recent'
 
 export function tabSidebarSectionId(tabId: string): string {
@@ -129,6 +142,7 @@ interface PanesStore {
   commandPaletteOpen: boolean
   settingsOpen: boolean
   lastAgentKind: AgentKind
+  lastShellSpawnMode: ShellSpawnMode
   vsCodeAvailable: boolean
   setVsCodeAvailable: (available: boolean) => void
   cwdGitBranches: Record<string, { status: 'loading' | 'ready'; branch: string | null }>
@@ -162,6 +176,7 @@ interface PanesStore {
   newSession: (cwd: string, direction?: SplitDirection, agentKind?: AgentKind) => Promise<void>
   addShellPane: (cwd: string, direction?: SplitDirection) => Promise<void>
   setLastAgentKind: (agentKind: AgentKind) => void
+  setLastShellSpawnMode: (mode: ShellSpawnMode) => void
   setPaneCwd: (ptyId: string, cwd: string) => void
   setPaneCustomName: (paneId: string, name: string) => void
 
@@ -207,6 +222,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   commandPaletteOpen: false,
   settingsOpen: false,
   lastAgentKind: initialLastAgent(),
+  lastShellSpawnMode: initialLastShellSpawnMode(),
   vsCodeAvailable: false,
   setVsCodeAvailable: (available: boolean) => set({ vsCodeAvailable: available }),
   cwdGitBranches: {},
@@ -459,6 +475,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setLastAgentKind: (agentKind) => {
     rememberAgent(agentKind)
     set({ lastAgentKind: agentKind })
+  },
+
+  setLastShellSpawnMode: (mode) => {
+    rememberShellSpawnMode(mode)
+    set({ lastShellSpawnMode: mode })
   },
 
   resumeSession: async (agentKind, sessionId, cwd) => {

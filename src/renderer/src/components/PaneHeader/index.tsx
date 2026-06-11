@@ -5,10 +5,11 @@ import { useSessionsStore } from '../../store/sessions'
 import { paneLabelText } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
-import { agentAccent, agentBadge, agentLabel } from '../../utils/agents'
+import { agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
+import { AgentIcon, ShellIcon } from '../AgentIcon'
 import vsCodeIcon from '../../assets/vscode.png'
 import folderOpenIcon from '../../assets/folderopen.png'
 import splitRightIcon from '../../assets/splitright.png'
@@ -62,7 +63,6 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const label = paneLabelText(pane, sessions)
   const isZoomed = zoomedPaneId === pane.id
   const isAgent = pane.paneType === 'agent'
-  const icon = isAgent ? agentBadge(pane.agentKind ?? 'claude') : '>'
   const session = pane.agentKind && pane.sessionId
     ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
     : null
@@ -116,14 +116,17 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         style={{
           fontSize: 10,
           fontWeight: 700,
-          color: isAgent ? agentAccent(pane.agentKind ?? 'claude') : '#6b7280',
+          color: '#6b7280',
           flexShrink: 0,
           fontFamily: 'monospace',
-          width: 14,
+          width: 16,
           textAlign: 'center',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
-        {icon}
+        {isAgent ? <AgentIcon agentKind={pane.agentKind ?? 'claude'} size={16} /> : <ShellIcon size={16} />}
       </span>
 
       {/* Title — double-click to rename */}
@@ -254,6 +257,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           initial={activeTab?.defaultCwd ?? pane.cwd}
           confirmLabel="Split"
           skipLabel="Cancel"
+          autoBrowse
           onConfirm={(dir) => { splitPane(pane.id, dirPickerForSplit, pane.paneType, dir, pane.agentKind); setDirPickerForSplit(null) }}
           onSkip={() => setDirPickerForSplit(null)}
         />

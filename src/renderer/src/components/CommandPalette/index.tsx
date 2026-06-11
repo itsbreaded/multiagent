@@ -4,7 +4,8 @@ import { useSessions } from '../../hooks/useSessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
 import { HOTKEYS } from '../../utils/hotkeys'
-import { agentBadge } from '../../utils/agents'
+import type { AgentKind } from '../../../../shared/types'
+import { AgentIcon, ShellIcon } from '../AgentIcon'
 
 interface SessionEntry {
   kind: 'session'
@@ -16,6 +17,8 @@ interface ActionEntry {
   label: string
   shortcut?: string
   icon: string
+  agentKind?: AgentKind
+  shellIcon?: boolean
   run: () => void
 }
 
@@ -44,7 +47,8 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'New Claude session',
-      icon: 'C',
+      icon: '',
+      agentKind: 'claude',
       run: () => {
         const pane = getFocusedPane()
         newSession(pane?.cwd ?? window.homeDir ?? 'C:\\', 'vertical', 'claude')
@@ -54,7 +58,8 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'New Codex session',
-      icon: 'X',
+      icon: '',
+      agentKind: 'codex',
       run: () => {
         const pane = getFocusedPane()
         newSession(pane?.cwd ?? window.homeDir ?? 'C:\\', 'vertical', 'codex')
@@ -64,7 +69,8 @@ export function CommandPalette(): JSX.Element {
     {
       kind: 'action',
       label: 'New shell pane',
-      icon: '>',
+      icon: '',
+      shellIcon: true,
       run: () => {
         const pane = getFocusedPane()
         addShellPane(pane?.cwd ?? window.homeDir ?? 'C:\\')
@@ -215,9 +221,10 @@ export function CommandPalette(): JSX.Element {
                     onClick={() => executeEntry({ kind: 'session', session: s })}
                     onHover={() => setSelectedIdx(idx)}
                   >
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                      <span style={{ fontSize: 13, color: '#d4d4d4' }}>
-                        {agentBadge(s.agentKind)} {s.projectName.split('/').pop()}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#d4d4d4' }}>
+                        <AgentIcon agentKind={s.agentKind} size={14} />
+                        {s.projectName.split('/').pop()}
                       </span>
                       <span style={{ fontSize: 11, color: '#4a4b4e' }}>
                         {formatRelativeTime(s.lastActivity)} ago
@@ -262,10 +269,13 @@ export function CommandPalette(): JSX.Element {
                           color: '#6b7280',
                           fontFamily: 'monospace',
                           width: 16,
-                          textAlign: 'center',
+                          height: 16,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
                         }}
                       >
-                        {a.icon}
+                        {a.agentKind ? <AgentIcon agentKind={a.agentKind} size={16} /> : a.shellIcon ? <ShellIcon size={16} /> : a.icon}
                       </span>
                       <span style={{ fontSize: 13, color: '#d4d4d4', flex: 1 }}>{a.label}</span>
                       {a.shortcut && (
