@@ -208,8 +208,8 @@ export function TabBar(): JSX.Element {
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
 
-  // Directory picker state: true = new tab flow, string = change default for that tabId
-  const [dirPickerState, setDirPickerState] = useState<'new-tab' | string | null>(null)
+  // Directory picker state: string = change default for that tabId
+  const [dirPickerState, setDirPickerState] = useState<string | null>(null)
 
   const dirPickerTab = typeof dirPickerState === 'string'
     ? tabs.find((t) => t.id === dirPickerState)
@@ -491,7 +491,7 @@ export function TabBar(): JSX.Element {
         })}
 
         <button
-          onClick={() => setDirPickerState('new-tab')}
+          onClick={() => addTab()}
           title={`New tab (${HOTKEYS.newTab.display})`}
           style={{
             marginLeft: 4,
@@ -557,21 +557,8 @@ export function TabBar(): JSX.Element {
         </div>
       )}
 
-      {/* Directory picker — new tab flow */}
-      {dirPickerState === 'new-tab' && (
-        <DirPicker
-          title="New tab"
-          description="Name your workspace and optionally set a default directory."
-          nameField
-          confirmLabel="Create"
-          skipLabel="Cancel"
-          onConfirm={(dir, name) => { addTab(dir || undefined, name); setDirPickerState(null) }}
-          onSkip={() => setDirPickerState(null)}
-        />
-      )}
-
       {/* Directory picker — change default for existing tab */}
-      {typeof dirPickerState === 'string' && dirPickerState !== 'new-tab' && (
+      {dirPickerState !== null && (
         <DirPicker
           title="Change default directory"
           description="New sessions and shells in this tab will start here by default."

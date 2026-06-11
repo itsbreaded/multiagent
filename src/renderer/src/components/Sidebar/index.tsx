@@ -9,6 +9,7 @@ import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
 import { border, controlStyles, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import arrowDropdownIcon from '../../assets/arrowdropdown.png'
+import newFolderIcon from '../../assets/newfolder.png'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
@@ -36,6 +37,7 @@ export function Sidebar(): JSX.Element {
   const lastAgentKind = usePanesStore((s) => s.lastAgentKind)
   const lastShellSpawnMode = usePanesStore((s) => s.lastShellSpawnMode)
   const setLastShellSpawnMode = usePanesStore((s) => s.setLastShellSpawnMode)
+  const addTab = usePanesStore((s) => s.addTab)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
@@ -157,6 +159,25 @@ export function Sidebar(): JSX.Element {
           onMain={spawnShellFromSavedMode}
           onDropdown={(e) => setSpawnMenu({ type: 'shell', x: e.clientX, y: e.clientY })}
         />
+        <button
+          title="New tab"
+          onClick={() => addTab(activeCwd())}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 26,
+            height: 26,
+            flexShrink: 0,
+            background: 'none',
+            border: `1px solid ${border.subtle}`,
+            borderRadius: 5,
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          <img src={newFolderIcon} alt="New tab" style={{ width: 14, height: 14, opacity: 0.7 }} />
+        </button>
       </div>
 
       {/* Workspace sections */}
