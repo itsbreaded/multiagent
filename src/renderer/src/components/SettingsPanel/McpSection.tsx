@@ -36,10 +36,15 @@ export function McpSection(): JSX.Element {
   const [showImport, setShowImport] = useState(false)
   const [testStates, setTestStates] = useState<Record<string, TestState>>({})
 
+  // Track whether we have ever successfully loaded status so that subsequent
+  // refreshes update silently without tearing out the current display.
+  const hasLoadedOnce = useRef(false)
+
   const fetchStatus = useCallback(() => {
-    setStatusLoading(true)
     setStatusError(false)
+    if (!hasLoadedOnce.current) setStatusLoading(true)
     window.ipc.invoke('mcp:get-status').then((s) => {
+      hasLoadedOnce.current = true
       setStatus(s as McpStatus)
       setStatusLoading(false)
     }).catch(() => {
