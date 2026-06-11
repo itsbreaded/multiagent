@@ -18,6 +18,7 @@ interface SettingsState {
   resetAllHotkeyOverrides: () => void
   mcpSettings: McpSettings
   setMcpSettings: (settings: McpSettings) => void
+  hydrateMcpSettings: (settings: McpSettings) => void
 }
 
 type Persisted = Pick<SettingsState, 'showGitBranchBadges' | 'hotkeyOverrides' | 'mcpSettings'>
@@ -93,5 +94,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     window.ipc.invoke('mcp:save-settings', mcpSettings).catch((err) => {
       console.error('[Settings] Failed to sync MCP settings to main:', err)
     })
+  },
+
+  hydrateMcpSettings: (mcpSettings) => {
+    set({ mcpSettings })
+    const s = get()
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, hotkeyOverrides: s.hotkeyOverrides, mcpSettings })
   },
 }))

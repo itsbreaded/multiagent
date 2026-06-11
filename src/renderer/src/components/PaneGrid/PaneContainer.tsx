@@ -6,9 +6,10 @@ import { Terminal } from '../Terminal'
 
 interface PaneContainerProps {
   pane: PaneLeaf
+  layoutKey: string
 }
 
-export function PaneContainer({ pane }: PaneContainerProps): JSX.Element {
+export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Element {
   const focusedPaneId = usePanesStore((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
     return tab?.focusedPaneId ?? ''
@@ -31,7 +32,7 @@ export function PaneContainer({ pane }: PaneContainerProps): JSX.Element {
       }}
     >
       <PaneHeader pane={pane} isFocused={isFocused} />
-      <Terminal pane={pane} />
+      <Terminal pane={pane} layoutKey={layoutKey} />
     </div>
   )
 }

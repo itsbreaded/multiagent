@@ -289,7 +289,7 @@ function codexCliArgs(): string {
   if (mcpUrl && (!settings || settings.builtinBrowserEnabled !== false)) {
     args.push(
       '-c',
-      psSingleQuoted(`mcp_servers.multiagent-browser.url=${JSON.stringify(mcpUrl)}`),
+      psSingleQuoted(`mcp_servers.multiagent-browser.url=${tomlLit(mcpUrl)}`),
       '-c',
       psSingleQuoted('mcp_servers.multiagent-browser.enabled=true')
     )
@@ -302,13 +302,20 @@ function codexCliArgs(): string {
       const key = server.name.trim()
       if (server.type === 'stdio') {
         if (server.command) {
-          args.push('-c', psSingleQuoted(`mcp_servers.${key}.command=${JSON.stringify(server.command)}`))
+          args.push('-c', psSingleQuoted(`mcp_servers.${key}.command=${tomlLit(server.command)}`))
           if (server.args?.length) {
-            args.push('-c', psSingleQuoted(`mcp_servers.${key}.args=${JSON.stringify(server.args)}`))
+            // Skip any arg containing a single quote — TOML literal strings can't represent them.
+            // Codex won't receive those args, but Claude handles them correctly via the JSON config file.
+            const safeArgs = server.args.filter(a => !a.includes("'"))
+            if (safeArgs.length) {
+              args.push('-c', psSingleQuoted(`mcp_servers.${key}.args=${tomlLitArray(safeArgs)}`))
+            }
           }
           if (server.env && Object.keys(server.env).length) {
             for (const [k, v] of Object.entries(server.env)) {
-              args.push('-c', psSingleQuoted(`mcp_servers.${key}.env.${k}=${JSON.stringify(v)}`))
+              if (!v.includes("'")) {
+                args.push('-c', psSingleQuoted(`mcp_servers.${key}.env.${k}=${tomlLit(v)}`))
+              }
             }
           }
           args.push('-c', psSingleQuoted(`mcp_servers.${key}.enabled=true`))
@@ -316,7 +323,7 @@ function codexCliArgs(): string {
       } else {
         if (server.url) {
           args.push(
-            '-c', psSingleQuoted(`mcp_servers.${key}.url=${JSON.stringify(server.url)}`),
+            '-c', psSingleQuoted(`mcp_servers.${key}.url=${tomlLit(server.url)}`),
             '-c', psSingleQuoted(`mcp_servers.${key}.enabled=true`)
           )
         }
@@ -329,6 +336,19 @@ function codexCliArgs(): string {
 
 function psSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
+}
+
+// Build a TOML literal string (single-quoted) for use inside psSingleQuoted().
+// psSingleQuoted doubles the single quotes so PowerShell passes them verbatim,
+// and TOML's literal-string syntax accepts them without any double-quote dependency.
+// This avoids the Windows/PowerShell 5.1 behaviour where double quotes passed to
+// native executables can be stripped, breaking TOML array parsing.
+function tomlLit(value: string): string {
+  return `'${value}'`
+}
+
+function tomlLitArray(items: string[]): string {
+  return `[${items.map(tomlLit).join(', ')}]`
 }
 
 function normalizePath(value: string): string {

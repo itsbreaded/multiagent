@@ -8,6 +8,7 @@ import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
 import { agentLabel } from '../../utils/agents'
+import * as xtermRegistry from '../../utils/xtermRegistry'
 
 const XTERM_THEME = {
   background: '#0e1011',
@@ -46,20 +47,46 @@ interface ContextMenu {
 
 interface TerminalProps {
   pane: PaneLeaf
+  layoutKey: string
 }
 
-export function Terminal({ pane }: TerminalProps): JSX.Element {
+export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const queueFitRef = useRef<(() => void) | null>(null)
   const ptyIdRef = useRef<string | null>(pane.ptyId ?? null)
   const setPtyId = usePanesStore((s) => s.setPtyId)
-  const [status, setStatus] = useState<'mounting' | 'connecting' | 'ready' | 'error'>('mounting')
+
+  // If a live xterm already exists for this pane (e.g. we're remounting after a
+  // layout change), start in 'ready' so the terminal content is shown immediately
+  // without flashing the "connecting" overlay again.
+  const [status, setStatus] = useState<'mounting' | 'connecting' | 'ready' | 'error'>(() => {
+    const entry = xtermRegistry.getEntry(pane.id)
+    return entry?.connected ? 'ready' : 'mounting'
+  })
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
 
   // Keep ptyIdRef in sync so context menu paste can always find the current ptyId
   useEffect(() => { ptyIdRef.current = pane.ptyId ?? null }, [pane.ptyId])
+
+  useEffect(() => {
+    let disposed = false
+    const queue = (): void => {
+      if (!disposed) queueFitRef.current?.()
+    }
+    const frame = requestAnimationFrame(queue)
+    const timer1 = setTimeout(queue, 80)
+    const timer2 = setTimeout(queue, 200)
+
+    return () => {
+      disposed = true
+      cancelAnimationFrame(frame)
+      clearTimeout(timer1)
+      clearTimeout(timer2)
+    }
+  }, [layoutKey])
 
   const handleCopy = useCallback(() => {
     const xterm = xtermRef.current
@@ -78,52 +105,60 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     setContextMenu(null)
   }, [])
 
-  // Effect 1: create the xterm instance once per pane
+  // Effect 1: attach the xterm instance for this pane.
+  // Uses a registry so the instance (and its scrollback buffer) survives React
+  // remounts that happen when the pane tree restructures during drag-drop.
+  // The xterm is only truly disposed when the pane is explicitly closed.
   useEffect(() => {
     if (!containerRef.current) return
 
-    const theme = pane.paneType === 'agent'
-      ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
-      : XTERM_THEME
+    const entry = xtermRegistry.getOrCreate(pane.id, () => {
+      const theme = pane.paneType === 'agent'
+        ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
+        : XTERM_THEME
 
-    const xterm = new XTerm({
-      allowProposedApi: true,
-      theme,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-      fontSize: 13,
-      lineHeight: 1.3,
-      cursorBlink: pane.paneType !== 'agent',
-      scrollback: TERMINAL_SCROLLBACK_LINES,
-      scrollOnEraseInDisplay: true,
-      allowTransparency: false,
-      windowOptions: {
-        getWinSizePixels: true,
-        getCellSizePixels: true,
-        getWinSizeChars: true,
-      },
+      const xterm = new XTerm({
+        allowProposedApi: true,
+        theme,
+        fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+        fontSize: 13,
+        lineHeight: 1.3,
+        cursorBlink: pane.paneType !== 'agent',
+        scrollback: TERMINAL_SCROLLBACK_LINES,
+        scrollOnEraseInDisplay: true,
+        allowTransparency: false,
+        windowOptions: {
+          getWinSizePixels: true,
+          getCellSizePixels: true,
+          getWinSizeChars: true,
+        },
+      })
+
+      const fitAddon = new FitAddon()
+      xterm.loadAddon(fitAddon)
+      xterm.loadAddon(new WebLinksAddon((_event, uri) => {
+        window.ipc.invoke('shell:open-external', uri).catch(() => {})
+      }))
+      // No WebGL or Canvas addon — xterm DOM renderer is used. It is leaner on
+      // low-powered / software-rasterised GPUs where WebGL (via SwiftShader/WARP)
+      // produces ~50-60% CPU for a single keystroke echo.
+      if (IS_WINDOWS) {
+        const buildNumber = parseInt(window.osRelease?.split('.')[2] ?? '0', 10)
+        xterm.options.windowsPty = { backend: 'conpty', buildNumber }
+      }
+
+      return { xterm, fitAddon }
     })
 
-    const fitAddon = new FitAddon()
-    xterm.loadAddon(fitAddon)
-    xterm.loadAddon(new WebLinksAddon((_event, uri) => {
-      window.ipc.invoke('shell:open-external', uri).catch(() => {})
-    }))
-    xterm.open(containerRef.current)
-    // Tell xterm we're running under ConPTY so it applies the right
-    // rendering workarounds for the detected build number.
-    if (IS_WINDOWS) {
-      const buildNumber = parseInt(window.osRelease?.split('.')[2] ?? '0', 10)
-      xterm.options.windowsPty = { backend: 'conpty', buildNumber }
-    }
-    fitAddon.fit()
-    // No WebGL or Canvas addon — xterm DOM renderer is used. It is leaner on
-    // low-powered / software-rasterised GPUs where WebGL (via SwiftShader/WARP)
-    // produces ~50-60% CPU for a single keystroke echo.
+    // Attach the wrapper div (which xterm opened into) to our container.
+    xtermRegistry.attach(pane.id, containerRef.current)
 
-    // Intercept keyboard shortcuts before xterm sees them.
-    // xterm only calls stopPropagation when it processes a key (return true).
-    // When we return false, we must call e.stopPropagation() ourselves or the
-    // event bubbles to App.tsx's window listener and fires the action a second time.
+    const { xterm, fitAddon } = entry
+    xtermRef.current = xterm
+    fitAddonRef.current = fitAddon
+
+    // Re-attach the key handler on every mount so the closure captures fresh
+    // refs. attachCustomKeyEventHandler replaces the previous handler.
     xterm.attachCustomKeyEventHandler((e) => {
       // Shift+Enter: translate to Alt+Enter for agent CLIs. Both Codex and
       // Claude Code treat Alt+Enter as insert-newline without submitting.
@@ -187,10 +222,8 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       return true
     })
 
-    xtermRef.current = xterm
-    fitAddonRef.current = fitAddon
-
     let pendingFit: number | null = null
+    let delayedFit: ReturnType<typeof setTimeout> | null = null
     let lastFitSize: { width: number; height: number } | null = null
     const fitTerminal = (): void => {
       const container = containerRef.current
@@ -198,18 +231,27 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
       const rect = container.getBoundingClientRect()
       const width = Math.round(rect.width)
       const height = Math.round(rect.height)
+      if (width <= 0 || height <= 0) return
       if (lastFitSize?.width === width && lastFitSize.height === height) return
       lastFitSize = { width, height }
       try { fitAddon.fit() } catch { /* ignore */ }
     }
-    const ro = new ResizeObserver(() => {
+    const queueFit = (): void => {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
       pendingFit = requestAnimationFrame(() => {
         pendingFit = null
         fitTerminal()
       })
-    })
+      if (delayedFit !== null) clearTimeout(delayedFit)
+      delayedFit = setTimeout(() => {
+        delayedFit = null
+        fitTerminal()
+      }, 120)
+    }
+    const ro = new ResizeObserver(queueFit)
+    queueFitRef.current = queueFit
     ro.observe(containerRef.current)
+    if (containerRef.current.parentElement) ro.observe(containerRef.current.parentElement)
 
     // Block paste events from reaching xterm's internal textarea listener.
     // Without this, Ctrl+Shift+V triggers both our key handler AND xterm's
@@ -221,17 +263,24 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
     }
     container.addEventListener('paste', blockPaste, true)
 
-    setStatus('connecting')
+    // Only show the connecting overlay on a true first mount (no prior PTY).
+    if (!entry.connected) setStatus('connecting')
 
     return () => {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
+      if (delayedFit !== null) clearTimeout(delayedFit)
       container.removeEventListener('paste', blockPaste, true)
       ro.disconnect()
-      xterm.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
+      queueFitRef.current = null
+
+      // Detach the wrapper to off-screen storage — do NOT dispose.
+      // The xterm instance and its full scrollback buffer survive until the
+      // pane is explicitly closed via closePane().
+      xtermRegistry.detach(pane.id)
     }
-  }, [pane.id])
+  }, [pane.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Effect 2: connect to the PTY once a ptyId is available
   useEffect(() => {
@@ -278,6 +327,7 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
 
       ptyIdRef.current = ptyId
       setStatus('ready')
+      xtermRegistry.markConnected(pane.id)
 
       unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
         if (receivedId === ptyId && typeof data === 'string' && !cancelled) {
@@ -391,7 +441,10 @@ export function Terminal({ pane }: TerminalProps): JSX.Element {
           {errorMsg}
         </div>
       )}
-      <div ref={containerRef} style={{ width: '100%', height: '100%', minHeight: 0, minWidth: 0, padding: 4 }} />
+      <div
+        ref={containerRef}
+        style={{ position: 'absolute', inset: 0 }}
+      />
 
       {contextMenu && (
         <div

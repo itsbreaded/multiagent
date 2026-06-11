@@ -27,6 +27,7 @@ type PreviewTab = 'claude' | 'codex'
 export function McpSection(): JSX.Element {
   const mcpSettings = useSettingsStore((s) => s.mcpSettings)
   const setMcpSettings = useSettingsStore((s) => s.setMcpSettings)
+  const hydrateMcpSettings = useSettingsStore((s) => s.hydrateMcpSettings)
 
   const [status, setStatus] = useState<McpStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
@@ -60,6 +61,12 @@ export function McpSection(): JSX.Element {
   }, [])
 
   useEffect(() => { fetchStatus() }, [fetchStatus])
+
+  useEffect(() => {
+    window.ipc.invoke('mcp:get-settings').then((s) => {
+      hydrateMcpSettings(s as McpSettings)
+    }).catch(() => {})
+  }, [hydrateMcpSettings])
 
   function save(next: McpSettings): void {
     setMcpSettings(next)

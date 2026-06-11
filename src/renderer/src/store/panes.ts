@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AgentKind, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
+import * as xtermRegistry from '../utils/xtermRegistry'
 
 function uuid(): string {
   return crypto.randomUUID()
@@ -273,6 +274,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   closeTab: (tabId) => {
+    const tab = get().tabs.find((t) => t.id === tabId)
+    if (tab?.rootNode) {
+      collectLeafIds(tab.rootNode).forEach((id) => xtermRegistry.dispose(id))
+    }
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== tabId)
       const activeTabId =
@@ -309,6 +314,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   closeOtherTabs: (tabId) => {
+    get().tabs.forEach((t) => {
+      if (t.id !== tabId && t.rootNode) {
+        collectLeafIds(t.rootNode).forEach((id) => xtermRegistry.dispose(id))
+      }
+    })
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id === tabId)
       const sectionId = tabSidebarSectionId(tabId)
@@ -324,6 +334,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   closeTabsToRight: (tabId) => {
+    const { tabs } = get()
+    const idx = tabs.findIndex((t) => t.id === tabId)
+    if (idx !== -1) {
+      tabs.slice(idx + 1).forEach((t) => {
+        if (t.rootNode) collectLeafIds(t.rootNode).forEach((id) => xtermRegistry.dispose(id))
+      })
+    }
     set((s) => {
       const idx = s.tabs.findIndex((t) => t.id === tabId)
       if (idx === -1) return s
@@ -391,12 +408,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   closePane: (paneId) => {
-    // Kill the PTY before removing the pane from the tree so the process is
-    // cleaned up even though Terminal's unmount no longer calls pty:kill.
+    // Kill the PTY and dispose the xterm instance before removing the pane.
     const pane = get().findPane(paneId)
     if (pane?.ptyId && typeof window !== 'undefined' && window.ipc) {
       window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
     }
+    xtermRegistry.dispose(paneId)
     set((s) => {
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t

@@ -9,12 +9,12 @@ import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
 import { ShellIcon } from '../AgentIcon'
 
-function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void): React.ReactNode {
+function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void, layoutPath = 'root'): React.ReactNode {
   if (node.type === 'leaf') {
     const pane = node as PaneLeaf
     return (
       <PaneSplitDropTarget key={pane.id} pane={pane}>
-        <PaneContainer pane={pane} />
+        <PaneContainer pane={pane} layoutKey={layoutPath} />
       </PaneSplitDropTarget>
     )
   }
@@ -33,10 +33,10 @@ function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number
       }}
     >
       <Allotment.Pane>
-        {renderNode(split.first, updateRatio)}
+        {renderNode(split.first, updateRatio, `${layoutPath}/${split.id}:first`)}
       </Allotment.Pane>
       <Allotment.Pane>
-        {renderNode(split.second, updateRatio)}
+        {renderNode(split.second, updateRatio, `${layoutPath}/${split.id}:second`)}
       </Allotment.Pane>
     </Allotment>
   )
@@ -248,7 +248,7 @@ export function PaneGrid(): JSX.Element {
             flexDirection: 'column',
           }}
         >
-          <PaneContainer pane={zoomedPane} />
+          <PaneContainer pane={zoomedPane} layoutKey={`zoom:${zoomedPane.id}`} />
         </div>
       )}
 

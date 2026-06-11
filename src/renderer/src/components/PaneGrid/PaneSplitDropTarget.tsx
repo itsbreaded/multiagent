@@ -67,7 +67,7 @@ export function PaneSplitDropTarget({ pane, children }: Props): JSX.Element {
 
   return (
     <div
-      style={{ position: 'relative', height: '100%', width: '100%' }}
+      style={{ position: 'relative', height: '100%', width: '100%', minHeight: 0, minWidth: 0, overflow: 'hidden' }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
