@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { McpServerEntry, McpServerType, McpSettings, McpStatus } from '../../../../shared/types'
 import { useSettingsStore } from '../../store/settings'
 
 function generateId(): string {
-  return `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  return `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
 const EMPTY_FORM: Omit<McpServerEntry, 'id'> = {
@@ -16,24 +16,36 @@ const EMPTY_FORM: Omit<McpServerEntry, 'id'> = {
   env: {},
 }
 
+type TestState = 'idle' | 'testing' | 'ok' | 'unreachable' | 'error'
+type PreviewTab = 'claude' | 'codex'
+
 export function McpSection(): JSX.Element {
   const mcpSettings = useSettingsStore((s) => s.mcpSettings)
   const setMcpSettings = useSettingsStore((s) => s.setMcpSettings)
 
   const [status, setStatus] = useState<McpStatus | null>(null)
+  const [statusLoading, setStatusLoading] = useState(true)
   const [statusError, setStatusError] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formData, setFormData] = useState<Omit<McpServerEntry, 'id'>>(EMPTY_FORM)
   const [formError, setFormError] = useState<string | null>(null)
   const [showJson, setShowJson] = useState(false)
+  const [previewTab, setPreviewTab] = useState<PreviewTab>('claude')
   const [saved, setSaved] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [testStates, setTestStates] = useState<Record<string, TestState>>({})
 
   const fetchStatus = useCallback(() => {
+    setStatusLoading(true)
     setStatusError(false)
     window.ipc.invoke('mcp:get-status').then((s) => {
       setStatus(s as McpStatus)
-    }).catch(() => setStatusError(true))
+      setStatusLoading(false)
+    }).catch(() => {
+      setStatusError(true)
+      setStatusLoading(false)
+    })
   }, [])
 
   useEffect(() => { fetchStatus() }, [fetchStatus])
@@ -53,6 +65,7 @@ export function McpSection(): JSX.Element {
     setFormError(null)
     setEditingId(null)
     setShowAddForm(true)
+    setShowImport(false)
   }
 
   function openEdit(entry: McpServerEntry): void {
@@ -60,6 +73,7 @@ export function McpSection(): JSX.Element {
     setFormError(null)
     setEditingId(entry.id)
     setShowAddForm(true)
+    setShowImport(false)
   }
 
   function cancelForm(): void {
@@ -68,21 +82,21 @@ export function McpSection(): JSX.Element {
     setFormError(null)
   }
 
-  function validateForm(): string | null {
-    if (!formData.name.trim()) return 'Server name is required.'
-    if (!/^[a-zA-Z0-9_-]+$/.test(formData.name.trim())) return 'Name must contain only letters, numbers, hyphens, and underscores.'
-    if (formData.name.trim() === 'multiagent-browser') return '"multiagent-browser" is reserved for the built-in server.'
-    if (formData.type !== 'stdio' && !formData.url?.trim()) return 'URL is required for HTTP/SSE servers.'
-    if (formData.type === 'stdio' && !formData.command?.trim()) return 'Command is required for stdio servers.'
+  function validateForm(data: Omit<McpServerEntry, 'id'>, editId: string | null): string | null {
+    if (!data.name.trim()) return 'Server name is required.'
+    if (!/^[a-zA-Z0-9_-]+$/.test(data.name.trim())) return 'Name must contain only letters, numbers, hyphens, and underscores.'
+    if (data.name.trim() === 'multiagent-browser') return '"multiagent-browser" is reserved for the built-in server.'
+    if (data.type !== 'stdio' && !data.url?.trim()) return 'URL is required for HTTP/SSE servers.'
+    if (data.type === 'stdio' && !data.command?.trim()) return 'Command is required for stdio servers.'
     const isDuplicate = mcpSettings.customServers.some(
-      (s) => s.name.trim() === formData.name.trim() && s.id !== editingId
+      (s) => s.name.trim() === data.name.trim() && s.id !== editId
     )
-    if (isDuplicate) return `A server named "${formData.name.trim()}" already exists.`
+    if (isDuplicate) return `A server named "${data.name.trim()}" already exists.`
     return null
   }
 
   function submitForm(): void {
-    const err = validateForm()
+    const err = validateForm(formData, editingId)
     if (err) { setFormError(err); return }
 
     const entry: McpServerEntry = {
@@ -90,12 +104,11 @@ export function McpSection(): JSX.Element {
       name: formData.name.trim(),
       enabled: formData.enabled,
       type: formData.type,
-      ...(formData.type !== 'stdio' ? { url: formData.url?.trim() } : {}),
-      ...(formData.type === 'stdio' ? {
+      ...(formData.type !== 'stdio' ? { url: formData.url?.trim() } : {
         command: formData.command?.trim(),
         args: (formData.args ?? []).filter(Boolean),
         ...(formData.env && Object.keys(formData.env).length ? { env: formData.env } : {}),
-      } : {}),
+      }),
     }
 
     const customServers = editingId
@@ -109,6 +122,7 @@ export function McpSection(): JSX.Element {
 
   function deleteServer(id: string): void {
     save({ ...mcpSettings, customServers: mcpSettings.customServers.filter((s) => s.id !== id) })
+    setTestStates((prev) => { const n = { ...prev }; delete n[id]; return n })
   }
 
   function toggleServer(id: string, enabled: boolean): void {
@@ -118,114 +132,117 @@ export function McpSection(): JSX.Element {
     })
   }
 
-  const generatedJson = buildPreviewJson(mcpSettings, status?.port ?? null)
+  async function testServer(entry: McpServerEntry): Promise<void> {
+    if (entry.type === 'stdio') return
+    setTestStates((p) => ({ ...p, [entry.id]: 'testing' }))
+    const result = await testConnection(entry.url ?? '', entry.type)
+    setTestStates((p) => ({ ...p, [entry.id]: result }))
+    setTimeout(() => setTestStates((p) => ({ ...p, [entry.id]: 'idle' })), 4000)
+  }
+
+  function handleImport(servers: McpServerEntry[]): void {
+    const existingNames = new Set(mcpSettings.customServers.map((s) => s.name))
+    const fresh = servers.filter((s) => !existingNames.has(s.name))
+    save({ ...mcpSettings, customServers: [...mcpSettings.customServers, ...fresh] })
+    setShowImport(false)
+  }
+
+  const claudeJson = buildClaudePreviewJson(mcpSettings, status?.port ?? null)
+  const codexArgs = buildCodexArgsPreview(mcpSettings, status?.port ?? null)
 
   return (
     <div>
       <SectionLabel>Model Context Protocol (MCP)</SectionLabel>
-      <p style={{ color: '#6b7280', fontSize: 11, padding: '0 14px 12px', lineHeight: 1.5, margin: 0 }}>
-        Configure MCP servers that are injected into new Claude and Codex sessions.
-        Changes apply to sessions started after saving.
+      <p style={{ color: '#6b7280', fontSize: 11, padding: '0 14px 10px', lineHeight: 1.5, margin: 0 }}>
+        MCP servers are injected into each new Claude and Codex session at launch.
+        Changes apply to sessions started after saving — existing sessions are not affected.
       </p>
 
       {saved && (
         <div style={{
           margin: '0 0 8px',
-          padding: '6px 12px',
+          padding: '5px 12px',
           background: '#0f2a15',
           border: '1px solid #1a4a25',
           borderRadius: 5,
           color: '#4ade80',
           fontSize: 12,
         }}>
-          Settings saved — new sessions will use the updated config.
+          Saved — new sessions will use the updated config.
         </div>
       )}
 
       {/* Built-in Browser MCP Server */}
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ padding: '0 14px 4px', fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          Built-in Server
-        </div>
-        <ServerCard>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <StatusDot running={status?.running ?? false} />
-                <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>multiagent-browser</span>
-                <span style={{ color: '#4a4b4e', fontSize: 10, fontFamily: 'monospace', background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>
-                  http
-                </span>
-              </div>
-              {status ? (
-                <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.5 }}>
-                  {status.running ? (
-                    <>
-                      Listening on port <code style={{ color: '#a0a4a8', background: '#1e1f22', padding: '0 4px', borderRadius: 3 }}>{status.port}</code>
-                      {' · '}
-                      <span style={{ color: '#4a4b4e' }}>{status.tools.length} tools available</span>
-                    </>
-                  ) : 'Not running'}
-                </div>
+      <SubLabel>Built-in server</SubLabel>
+      <ServerCard>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <StatusDot running={!statusLoading && !statusError && (status?.running ?? false)} />
+              <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>multiagent-browser</span>
+              <TypeBadge type="http" />
+              <span style={{ color: '#4a4b4e', fontSize: 10, background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>built-in</span>
+            </div>
+            <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.5 }}>
+              {statusLoading ? (
+                <span style={{ color: '#4a4b4e' }}>Loading…</span>
               ) : statusError ? (
-                <div style={{ color: '#f87171', fontSize: 11 }}>Failed to fetch status</div>
-              ) : (
-                <div style={{ color: '#4a4b4e', fontSize: 11 }}>Loading...</div>
-              )}
-              {status?.running && mcpSettings.builtinBrowserEnabled && (
-                <ToolsCollapse tools={status.tools} />
-              )}
+                <span style={{ color: '#f87171' }}>Failed to fetch status</span>
+              ) : status?.running ? (
+                <>
+                  Port{' '}
+                  <code style={{ color: '#a0a4a8', background: '#1e1f22', padding: '0 4px', borderRadius: 3 }}>
+                    {status.port}
+                  </code>
+                  {' · '}
+                  <span>{status.tools.length} tools</span>
+                </>
+              ) : 'Not running'}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              {statusError && (
-                <button
-                  onClick={fetchStatus}
-                  style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: '#6b7280', fontSize: 11, cursor: 'pointer', padding: '2px 8px' }}
-                >
-                  Retry
-                </button>
-              )}
-              <Toggle
-                checked={mcpSettings.builtinBrowserEnabled}
-                onChange={toggleBuiltin}
-                label={mcpSettings.builtinBrowserEnabled ? 'Enabled' : 'Disabled'}
-              />
-            </div>
+            {!statusLoading && !statusError && status?.running && mcpSettings.builtinBrowserEnabled && (
+              <ToolsCollapse tools={status.tools} />
+            )}
           </div>
-        </ServerCard>
-      </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 2 }}>
+            <button
+              onClick={fetchStatus}
+              title="Refresh status"
+              style={{ background: 'none', border: '1px solid #2a2b2e', borderRadius: 4, color: '#4a4b4e', fontSize: 11, cursor: 'pointer', padding: '2px 7px' }}
+            >
+              ↻
+            </button>
+            <Toggle
+              checked={mcpSettings.builtinBrowserEnabled}
+              onChange={toggleBuiltin}
+              label={mcpSettings.builtinBrowserEnabled ? 'Enabled' : 'Disabled'}
+            />
+          </div>
+        </div>
+      </ServerCard>
 
       {/* Custom Servers */}
-      <div style={{ marginBottom: 8 }}>
+      <div style={{ marginTop: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 14px 4px' }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Custom Servers
-          </div>
-          {!showAddForm && (
-            <button
-              onClick={openAdd}
-              style={{
-                background: 'none',
-                border: '1px solid #3a3b3e',
-                borderRadius: 4,
-                color: '#4ade80',
-                fontSize: 11,
-                cursor: 'pointer',
-                padding: '2px 8px',
-              }}
-            >
-              + Add server
-            </button>
+          <SubLabel inline>Custom servers</SubLabel>
+          {!showAddForm && !showImport && (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <ActionButton onClick={() => { setShowImport(true); setShowAddForm(false) }}>
+                Import JSON
+              </ActionButton>
+              <ActionButton onClick={openAdd} accent>
+                + Add server
+              </ActionButton>
+            </div>
           )}
         </div>
 
-        {mcpSettings.customServers.length === 0 && !showAddForm && (
-          <div style={{ color: '#4a4b4e', fontSize: 12, padding: '10px 14px' }}>
+        {mcpSettings.customServers.length === 0 && !showAddForm && !showImport && (
+          <div style={{ color: '#4a4b4e', fontSize: 12, padding: '8px 14px' }}>
             No custom servers configured.
           </div>
         )}
 
-        {mcpSettings.customServers.map((entry) => (
+        {mcpSettings.customServers.map((entry) =>
           editingId === entry.id && showAddForm ? null : (
             <ServerCard key={entry.id}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -233,27 +250,32 @@ export function McpSection(): JSX.Element {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
                     <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>{entry.name}</span>
                     <TypeBadge type={entry.type} />
-                    {!entry.enabled && (
-                      <span style={{ color: '#4a4b4e', fontSize: 10, background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>
-                        disabled
-                      </span>
-                    )}
+                    {!entry.enabled && <DisabledBadge />}
                   </div>
                   <div style={{ color: '#6b7280', fontSize: 11, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {entry.type === 'stdio' ? entry.command : entry.url}
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  {entry.type !== 'stdio' && (
+                    <TestButton state={testStates[entry.id] ?? 'idle'} onClick={() => testServer(entry)} />
+                  )}
                   <Toggle checked={entry.enabled} onChange={(v) => toggleServer(entry.id, v)} />
-                  <ActionButton onClick={() => openEdit(entry)} title="Edit">✎</ActionButton>
-                  <ActionButton onClick={() => deleteServer(entry.id)} title="Delete" danger>×</ActionButton>
+                  <IconButton onClick={() => openEdit(entry)} title="Edit">✎</IconButton>
+                  <IconButton onClick={() => deleteServer(entry.id)} title="Delete" danger>×</IconButton>
                 </div>
               </div>
             </ServerCard>
           )
-        ))}
+        )}
 
-        {showAddForm && (
+        {showImport && (
+          <ServerCard>
+            <ImportForm onImport={handleImport} onCancel={() => setShowImport(false)} />
+          </ServerCard>
+        )}
+
+        {showAddForm && !showImport && (
           <ServerCard>
             <ServerForm
               data={formData}
@@ -267,47 +289,140 @@ export function McpSection(): JSX.Element {
         )}
       </div>
 
-      {/* JSON Preview */}
+      {/* Config Preview */}
       <div style={{ marginTop: 16 }}>
         <button
           onClick={() => setShowJson((v) => !v)}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: '#4a4b4e',
-            fontSize: 11,
-            cursor: 'pointer',
-            padding: '0 14px 6px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
+          style={{ background: 'none', border: 'none', color: '#4a4b4e', fontSize: 11, cursor: 'pointer', padding: '0 14px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
         >
           <span>{showJson ? '▾' : '▸'}</span>
-          <span>Generated config (claude-mcp.json)</span>
+          <span>Generated config preview</span>
         </button>
         {showJson && (
-          <pre style={{
-            margin: '0 0 8px',
-            padding: 12,
-            background: '#0e0f11',
-            border: '1px solid #2a2b2e',
-            borderRadius: 6,
-            color: '#a0a4a8',
-            fontSize: 11,
-            fontFamily: 'monospace',
-            overflow: 'auto',
-            maxHeight: 220,
-            lineHeight: 1.5,
-            whiteSpace: 'pre',
-          }}>
-            {generatedJson}
-          </pre>
+          <div>
+            <div style={{ display: 'flex', borderBottom: '1px solid #2a2b2e', marginBottom: 0 }}>
+              {(['claude', 'codex'] as PreviewTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setPreviewTab(tab)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    borderBottom: previewTab === tab ? '2px solid #4ade80' : '2px solid transparent',
+                    color: previewTab === tab ? '#d4d4d4' : '#4a4b4e',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    padding: '5px 14px',
+                    marginBottom: -1,
+                  }}
+                >
+                  {tab === 'claude' ? 'Claude (claude-mcp.json)' : 'Codex (-c args)'}
+                </button>
+              ))}
+            </div>
+            <pre style={{
+              margin: 0,
+              padding: 12,
+              background: '#0e0f11',
+              border: '1px solid #2a2b2e',
+              borderTop: 'none',
+              borderRadius: '0 0 6px 6px',
+              color: '#a0a4a8',
+              fontSize: 11,
+              fontFamily: 'monospace',
+              overflow: 'auto',
+              maxHeight: 220,
+              lineHeight: 1.5,
+              whiteSpace: 'pre',
+            }}>
+              {previewTab === 'claude' ? claudeJson : codexArgs}
+            </pre>
+          </div>
         )}
       </div>
     </div>
   )
 }
+
+// ─── Import Form ────────────────────────────────────────────────────────────
+
+function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry[]) => void; onCancel: () => void }): JSX.Element {
+  const [text, setText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [preview, setPreview] = useState<McpServerEntry[]>([])
+
+  function parse(raw: string): void {
+    setError(null)
+    setPreview([])
+    if (!raw.trim()) return
+    const result = parseImportJson(raw)
+    if (typeof result === 'string') { setError(result); return }
+    setPreview(result)
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d4', marginBottom: 6 }}>
+        Import from JSON
+      </div>
+      <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
+        Paste a standard <code style={{ color: '#a0a4a8' }}>mcpServers</code> config object. Servers with
+        duplicate names will be skipped.
+      </div>
+      <textarea
+        autoFocus
+        value={text}
+        onChange={(e) => { setText(e.target.value); parse(e.target.value) }}
+        placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "type": "http",\n      "url": "http://localhost:3000/mcp"\n    }\n  }\n}'}
+        rows={7}
+        style={{
+          width: '100%',
+          background: '#0e0f11',
+          border: `1px solid ${error ? '#5a2020' : '#2a2b2e'}`,
+          borderRadius: 4,
+          color: '#d4d4d4',
+          fontSize: 11,
+          fontFamily: 'monospace',
+          padding: '6px 8px',
+          resize: 'vertical',
+          outline: 'none',
+          boxSizing: 'border-box',
+        }}
+      />
+      {error && <div style={{ color: '#f87171', fontSize: 11, marginTop: 4 }}>{error}</div>}
+      {preview.length > 0 && (
+        <div style={{ color: '#4ade80', fontSize: 11, marginTop: 4 }}>
+          {preview.length} server{preview.length > 1 ? 's' : ''} found: {preview.map((s) => s.name).join(', ')}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+        <button
+          onClick={() => preview.length > 0 && onImport(preview)}
+          disabled={preview.length === 0}
+          style={{
+            background: preview.length > 0 ? '#1a3a1a' : '#141517',
+            border: `1px solid ${preview.length > 0 ? '#2a5a2a' : '#2a2b2e'}`,
+            borderRadius: 4,
+            color: preview.length > 0 ? '#4ade80' : '#4a4b4e',
+            fontSize: 12,
+            cursor: preview.length > 0 ? 'pointer' : 'default',
+            padding: '5px 14px',
+          }}
+        >
+          Import {preview.length > 0 ? `(${preview.length})` : ''}
+        </button>
+        <button
+          onClick={onCancel}
+          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: '#6b7280', fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Server Form ─────────────────────────────────────────────────────────────
 
 function ServerForm({
   data,
@@ -331,6 +446,7 @@ function ServerForm({
       : ''
   )
   const [envError, setEnvError] = useState<string | null>(null)
+  const [testState, setTestState] = useState<TestState>('idle')
 
   function update(patch: Partial<Omit<McpServerEntry, 'id'>>): void {
     onChange({ ...data, ...patch })
@@ -345,20 +461,32 @@ function ServerForm({
     setEnvText(val)
     setEnvError(null)
     if (!val.trim()) { update({ env: {} }); return }
-    try {
-      const env: Record<string, string> = {}
-      for (const line of val.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        const eqIdx = trimmed.indexOf('=')
-        if (eqIdx < 1) { setEnvError('Format: KEY=value (one per line)'); return }
-        env[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1)
-      }
-      update({ env })
-    } catch {
-      setEnvError('Invalid env format')
+    const env: Record<string, string> = {}
+    for (const line of val.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      const eqIdx = trimmed.indexOf('=')
+      if (eqIdx < 1) { setEnvError('Format: KEY=value (one per line)'); return }
+      env[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1)
     }
+    update({ env })
   }
+
+  async function handleTest(): Promise<void> {
+    if (data.type === 'stdio' || !data.url?.trim()) return
+    setTestState('testing')
+    const result = await testConnection(data.url.trim(), data.type)
+    setTestState(result)
+    setTimeout(() => setTestState('idle'), 4000)
+  }
+
+  // Reset args/env text when type changes away from stdio
+  const prevType = useRef(data.type)
+  useEffect(() => {
+    if (prevType.current !== data.type) {
+      prevType.current = data.type
+    }
+  }, [data.type])
 
   return (
     <div>
@@ -379,7 +507,7 @@ function ServerForm({
           onChange={(v) => update({ name: v })}
           monospace
         />
-        <div style={{ color: '#4a4b4e', fontSize: 10, marginTop: 2 }}>Used as the key in mcpServers config</div>
+        <FieldHint>Key in the mcpServers config — letters, numbers, hyphens, underscores</FieldHint>
       </FormRow>
 
       <FormRow label="Type">
@@ -403,26 +531,36 @@ function ServerForm({
             </button>
           ))}
         </div>
+        <FieldHint>
+          {data.type === 'http' ? 'Streamable HTTP transport (MCP 2025-03-26+)' :
+           data.type === 'sse' ? 'Server-Sent Events transport — connect to /sse endpoint' :
+           'Local subprocess over stdin/stdout'}
+        </FieldHint>
       </FormRow>
 
       {data.type !== 'stdio' ? (
         <FormRow label="URL">
-          <FormInput
-            value={data.url ?? ''}
-            placeholder="http://localhost:3000/mcp"
-            onChange={(v) => update({ url: v })}
-            monospace
-          />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ flex: 1 }}>
+              <FormInput
+                value={data.url ?? ''}
+                placeholder={data.type === 'sse' ? 'http://localhost:3000/sse' : 'http://localhost:3000/mcp'}
+                onChange={(v) => update({ url: v })}
+                monospace
+              />
+            </div>
+            <TestButton state={testState} onClick={handleTest} />
+          </div>
+          <FieldHint>
+            {data.type === 'sse'
+              ? 'Full URL to the SSE endpoint — Claude uses GET, expects text/event-stream'
+              : 'Full URL to the MCP endpoint — Claude uses POST per streamable HTTP spec'}
+          </FieldHint>
         </FormRow>
       ) : (
         <>
           <FormRow label="Command">
-            <FormInput
-              value={data.command ?? ''}
-              placeholder="npx"
-              onChange={(v) => update({ command: v })}
-              monospace
-            />
+            <FormInput value={data.command ?? ''} placeholder="npx" onChange={(v) => update({ command: v })} monospace />
           </FormRow>
           <FormRow label="Args">
             <FormInput
@@ -431,13 +569,13 @@ function ServerForm({
               onChange={handleArgsChange}
               monospace
             />
-            <div style={{ color: '#4a4b4e', fontSize: 10, marginTop: 2 }}>Space-separated arguments</div>
+            <FieldHint>Space-separated arguments</FieldHint>
           </FormRow>
-          <FormRow label="Env">
+          <FormRow label="Env vars">
             <textarea
               value={envText}
               onChange={(e) => handleEnvChange(e.target.value)}
-              placeholder={'KEY=value\nANOTHER=value'}
+              placeholder={'KEY=value\nANOTHER_KEY=value'}
               rows={3}
               style={{
                 width: '100%',
@@ -455,6 +593,9 @@ function ServerForm({
             />
             {envError && <div style={{ color: '#f87171', fontSize: 10, marginTop: 2 }}>{envError}</div>}
           </FormRow>
+          <FieldHint style={{ marginTop: -4, marginBottom: 8 }}>
+            Codex injection of stdio env vars uses per-key TOML overrides — complex env may require native config instead.
+          </FieldHint>
         </>
       )}
 
@@ -465,29 +606,13 @@ function ServerForm({
       <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
         <button
           onClick={onSubmit}
-          style={{
-            background: '#1a3a1a',
-            border: '1px solid #2a5a2a',
-            borderRadius: 4,
-            color: '#4ade80',
-            fontSize: 12,
-            cursor: 'pointer',
-            padding: '5px 14px',
-          }}
+          style={{ background: '#1a3a1a', border: '1px solid #2a5a2a', borderRadius: 4, color: '#4ade80', fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           {isEdit ? 'Save changes' : 'Add server'}
         </button>
         <button
           onClick={onCancel}
-          style={{
-            background: 'none',
-            border: '1px solid #3a3b3e',
-            borderRadius: 4,
-            color: '#6b7280',
-            fontSize: 12,
-            cursor: 'pointer',
-            padding: '5px 14px',
-          }}
+          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: '#6b7280', fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           Cancel
         </button>
@@ -495,6 +620,8 @@ function ServerForm({
     </div>
   )
 }
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function ToolsCollapse({ tools }: { tools: string[] }): JSX.Element {
   const [open, setOpen] = useState(false)
@@ -509,18 +636,7 @@ function ToolsCollapse({ tools }: { tools: string[] }): JSX.Element {
       {open && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
           {tools.map((t) => (
-            <span
-              key={t}
-              style={{
-                fontSize: 10,
-                fontFamily: 'monospace',
-                color: '#6b7280',
-                background: '#1e1f22',
-                border: '1px solid #2a2b2e',
-                borderRadius: 3,
-                padding: '1px 5px',
-              }}
-            >
+            <span key={t} style={{ fontSize: 10, fontFamily: 'monospace', color: '#6b7280', background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>
               {t}
             </span>
           ))}
@@ -530,107 +646,112 @@ function ToolsCollapse({ tools }: { tools: string[] }): JSX.Element {
   )
 }
 
-function StatusDot({ running }: { running: boolean }): JSX.Element {
+function TestButton({ state, onClick }: { state: TestState; onClick: () => void }): JSX.Element {
+  const label = state === 'testing' ? '…' : state === 'ok' ? '✓' : state === 'unreachable' ? '✗' : state === 'error' ? '!' : 'Test'
+  const color = state === 'ok' ? '#4ade80' : state === 'unreachable' ? '#f87171' : state === 'error' ? '#facc15' : '#6b7280'
   return (
-    <span style={{
-      display: 'inline-block',
-      width: 7,
-      height: 7,
-      borderRadius: '50%',
-      background: running ? '#4ade80' : '#4a4b4e',
-      flexShrink: 0,
-    }} />
+    <button
+      onClick={onClick}
+      disabled={state === 'testing'}
+      title={state === 'ok' ? 'Reachable' : state === 'unreachable' ? 'Unreachable' : state === 'error' ? 'Server responded with error (but is running)' : 'Test connection'}
+      style={{
+        background: 'none',
+        border: '1px solid #2a2b2e',
+        borderRadius: 4,
+        color,
+        fontSize: 11,
+        cursor: state === 'testing' ? 'default' : 'pointer',
+        padding: '2px 8px',
+        minWidth: 42,
+        fontFamily: 'monospace',
+        flexShrink: 0,
+      }}
+    >
+      {label}
+    </button>
   )
 }
 
-function TypeBadge({ type }: { type: McpServerType }): JSX.Element {
+function StatusDot({ running }: { running: boolean }): JSX.Element {
   return (
-    <span style={{
-      color: '#4a4b4e',
-      fontSize: 10,
-      fontFamily: 'monospace',
-      background: '#1e1f22',
-      border: '1px solid #2a2b2e',
-      borderRadius: 3,
-      padding: '1px 5px',
-    }}>
+    <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: running ? '#4ade80' : '#4a4b4e', flexShrink: 0 }} />
+  )
+}
+
+function TypeBadge({ type }: { type: McpServerType | 'http' }): JSX.Element {
+  const colors: Record<string, { bg: string; border: string; text: string }> = {
+    http:  { bg: '#0d1f2d', border: '#1a3a5a', text: '#60a0d0' },
+    sse:   { bg: '#1f1a0d', border: '#5a3a1a', text: '#d09060' },
+    stdio: { bg: '#1a0d1f', border: '#3a1a5a', text: '#a060d0' },
+  }
+  const c = colors[type] ?? colors.http
+  return (
+    <span style={{ fontSize: 10, fontFamily: 'monospace', background: c.bg, border: `1px solid ${c.border}`, borderRadius: 3, color: c.text, padding: '1px 5px' }}>
       {type}
     </span>
   )
 }
 
-function Toggle({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-  label?: string
-}): JSX.Element {
+function DisabledBadge(): JSX.Element {
+  return (
+    <span style={{ color: '#4a4b4e', fontSize: 10, background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>
+      disabled
+    </span>
+  )
+}
+
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }): JSX.Element {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
       <div
         onClick={() => onChange(!checked)}
-        style={{
-          width: 30,
-          height: 16,
-          borderRadius: 8,
-          background: checked ? '#4ade80' : '#2a2b2e',
-          position: 'relative',
-          cursor: 'pointer',
-          transition: 'background 0.15s',
-          flexShrink: 0,
-        }}
+        style={{ width: 30, height: 16, borderRadius: 8, background: checked ? '#4ade80' : '#2a2b2e', position: 'relative', cursor: 'pointer', transition: 'background 0.15s', flexShrink: 0 }}
       >
-        <div style={{
-          position: 'absolute',
-          top: 2,
-          left: checked ? 16 : 2,
-          width: 12,
-          height: 12,
-          borderRadius: '50%',
-          background: checked ? '#0a1f0a' : '#4a4b4e',
-          transition: 'left 0.15s',
-        }} />
+        <div style={{ position: 'absolute', top: 2, left: checked ? 16 : 2, width: 12, height: 12, borderRadius: '50%', background: checked ? '#0a1f0a' : '#4a4b4e', transition: 'left 0.15s' }} />
       </div>
       {label && <span style={{ color: checked ? '#d4d4d4' : '#6b7280', fontSize: 12 }}>{label}</span>}
     </label>
   )
 }
 
-function ActionButton({
-  children,
-  onClick,
-  title,
-  danger,
-}: {
-  children: React.ReactNode
-  onClick: () => void
-  title?: string
-  danger?: boolean
-}): JSX.Element {
+function IconButton({ children, onClick, title, danger }: { children: React.ReactNode; onClick: () => void; title?: string; danger?: boolean }): JSX.Element {
+  const [hovered, setHovered] = useState(false)
   return (
     <button
       onClick={onClick}
       title={title}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         background: 'none',
-        border: '1px solid #2a2b2e',
+        border: '1px solid',
+        borderColor: hovered ? (danger ? '#5a2020' : '#4a4b4e') : '#2a2b2e',
         borderRadius: 4,
-        color: danger ? '#4a4b4e' : '#4a4b4e',
+        color: hovered ? (danger ? '#f87171' : '#d4d4d4') : '#4a4b4e',
         fontSize: 13,
         cursor: 'pointer',
         padding: '1px 6px',
         lineHeight: 1.2,
+        transition: 'color 0.1s, border-color 0.1s',
       }}
-      onMouseEnter={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color = danger ? '#f87171' : '#d4d4d4'
-        ;(e.currentTarget as HTMLButtonElement).style.borderColor = danger ? '#5a2020' : '#4a4b4e'
-      }}
-      onMouseLeave={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e'
-        ;(e.currentTarget as HTMLButtonElement).style.borderColor = '#2a2b2e'
+    >
+      {children}
+    </button>
+  )
+}
+
+function ActionButton({ children, onClick, accent }: { children: React.ReactNode; onClick: () => void; accent?: boolean }): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: 'none',
+        border: `1px solid ${accent ? '#2a5a2a' : '#3a3b3e'}`,
+        borderRadius: 4,
+        color: accent ? '#4ade80' : '#6b7280',
+        fontSize: 11,
+        cursor: 'pointer',
+        padding: '2px 8px',
       }}
     >
       {children}
@@ -640,13 +761,7 @@ function ActionButton({
 
 function ServerCard({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{
-      padding: '10px 12px',
-      marginBottom: 4,
-      border: '1px solid #2a2b2e',
-      borderRadius: 6,
-      background: '#141517',
-    }}>
+    <div style={{ padding: '10px 12px', marginBottom: 4, border: '1px solid #2a2b2e', borderRadius: 6, background: '#141517' }}>
       {children}
     </div>
   )
@@ -654,17 +769,20 @@ function ServerCard({ children }: { children: React.ReactNode }): JSX.Element {
 
 function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{
-      padding: '6px 14px 3px',
-      fontSize: 10,
-      fontWeight: 600,
-      color: '#4a4b4e',
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-    }}>
+    <div style={{ padding: '6px 14px 3px', fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
       {children}
     </div>
   )
+}
+
+function SubLabel({ children, inline }: { children: React.ReactNode; inline?: boolean }): JSX.Element {
+  const el = (
+    <div style={{ fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+      {children}
+    </div>
+  )
+  if (inline) return el
+  return <div style={{ padding: '0 14px 4px' }}>{el}</div>
 }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
@@ -676,17 +794,7 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
-function FormInput({
-  value,
-  placeholder,
-  onChange,
-  monospace,
-}: {
-  value: string
-  placeholder?: string
-  onChange: (v: string) => void
-  monospace?: boolean
-}): JSX.Element {
+function FormInput({ value, placeholder, onChange, monospace }: { value: string; placeholder?: string; onChange: (v: string) => void; monospace?: boolean }): JSX.Element {
   return (
     <input
       value={value}
@@ -708,14 +816,71 @@ function FormInput({
   )
 }
 
-function buildPreviewJson(settings: McpSettings, port: number | null): string {
+function FieldHint({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }): JSX.Element {
+  return <div style={{ color: '#4a4b4e', fontSize: 10, marginTop: 2, lineHeight: 1.4, ...style }}>{children}</div>
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function testConnection(url: string, type: McpServerType): Promise<TestState> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 4000)
+    let res: Response
+    if (type === 'sse') {
+      // GET to the SSE endpoint — just check that the server responds
+      res = await fetch(url, { method: 'GET', signal: controller.signal })
+    } else {
+      // POST a minimal JSONRPC initialize to the HTTP endpoint
+      res = await fetch(url, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1, params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'multiagent', version: '1' } } }),
+      })
+    }
+    clearTimeout(timer)
+    // Any response (even 4xx/5xx) means the server is running; 2xx is ideal
+    return res.status < 500 ? 'ok' : 'error'
+  } catch {
+    return 'unreachable'
+  }
+}
+
+function parseImportJson(text: string): McpServerEntry[] | string {
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    const rawServers: Record<string, unknown> =
+      (parsed.mcpServers as Record<string, unknown> | undefined) ?? parsed
+    const entries: McpServerEntry[] = []
+    for (const [name, config] of Object.entries(rawServers)) {
+      if (!name || name === 'multiagent-browser') continue
+      const c = (config ?? {}) as Record<string, unknown>
+      const type = (c.type as McpServerType | undefined) ?? 'http'
+      entries.push({
+        id: generateId(),
+        name,
+        enabled: true,
+        type,
+        ...(type !== 'stdio' ? { url: (c.url as string | undefined) ?? '' } : {
+          command: (c.command as string | undefined) ?? '',
+          args: (c.args as string[] | undefined) ?? [],
+          env: (c.env as Record<string, string> | undefined) ?? {},
+        }),
+      })
+    }
+    if (entries.length === 0) return 'No server entries found in this config.'
+    return entries
+  } catch (e) {
+    return `JSON parse error: ${(e as Error).message}`
+  }
+}
+
+function buildClaudePreviewJson(settings: McpSettings, port: number | null): string {
   const mcpServers: Record<string, unknown> = {}
 
   if (settings.builtinBrowserEnabled) {
-    mcpServers['multiagent-browser'] = {
-      type: 'http',
-      url: `http://127.0.0.1:${port ?? '<port>'}/mcp`,
-    }
+    mcpServers['multiagent-browser'] = { type: 'http', url: `http://127.0.0.1:${port ?? '<port>'}/mcp` }
   }
 
   for (const server of settings.customServers) {
@@ -733,4 +898,43 @@ function buildPreviewJson(settings: McpSettings, port: number | null): string {
   }
 
   return JSON.stringify({ mcpServers }, null, 2)
+}
+
+function buildCodexArgsPreview(settings: McpSettings, port: number | null): string {
+  const lines: string[] = ['# Injected via -c flags when spawning Codex', '']
+
+  if (settings.builtinBrowserEnabled && port !== null) {
+    const url = `http://127.0.0.1:${port}/mcp`
+    lines.push(`-c 'mcp_servers.multiagent-browser.url="${url}"'`)
+    lines.push(`-c 'mcp_servers.multiagent-browser.enabled=true'`)
+  } else if (settings.builtinBrowserEnabled) {
+    lines.push(`-c 'mcp_servers.multiagent-browser.url="http://127.0.0.1:<port>/mcp"'`)
+    lines.push(`-c 'mcp_servers.multiagent-browser.enabled=true'`)
+  }
+
+  for (const server of settings.customServers) {
+    if (!server.enabled || !server.name.trim()) continue
+    const key = server.name.trim()
+    lines.push('')
+    if (server.type === 'stdio') {
+      if (server.command) {
+        lines.push(`-c 'mcp_servers.${key}.command=${JSON.stringify(server.command)}'`)
+        if (server.args?.length) lines.push(`-c 'mcp_servers.${key}.args=${JSON.stringify(server.args)}'`)
+        if (server.env) {
+          for (const [k, v] of Object.entries(server.env)) {
+            lines.push(`-c 'mcp_servers.${key}.env.${k}=${JSON.stringify(v)}'`)
+          }
+        }
+        lines.push(`-c 'mcp_servers.${key}.enabled=true'`)
+      }
+    } else {
+      if (server.url) {
+        lines.push(`-c 'mcp_servers.${key}.url=${JSON.stringify(server.url)}'`)
+        lines.push(`-c 'mcp_servers.${key}.enabled=true'`)
+      }
+    }
+  }
+
+  if (lines.length === 2) lines.push('# (no MCP servers enabled)')
+  return lines.join('\n')
 }

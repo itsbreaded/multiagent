@@ -6,7 +6,7 @@ import type { BrowserWindow } from 'electron'
 import type { PtyManager } from '../pty/PtyManager'
 import type { AgentKind } from '../../shared/types'
 import { CodexSessionScanner, codexSessionsDir } from './CodexSessionScanner'
-import { currentClaudeMcpConfigPath, currentCodexMcpUrl } from '../mcp/McpInjector'
+import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentMcpSettings } from '../mcp/McpInjector'
 
 // --- Shared watcher state ---
 // One chokidar instance watches ~/.claude/projects/ for all sessions.
@@ -281,8 +281,12 @@ function codexCliArgs(): string {
     '-c',
     psSingleQuoted('tui.terminal_title=[]'),
   ]
+
+  const settings = currentMcpSettings()
   const mcpUrl = currentCodexMcpUrl()
-  if (mcpUrl) {
+
+  // Built-in browser server
+  if (mcpUrl && (!settings || settings.builtinBrowserEnabled !== false)) {
     args.push(
       '-c',
       psSingleQuoted(`mcp_servers.multiagent-browser.url=${JSON.stringify(mcpUrl)}`),
@@ -290,6 +294,36 @@ function codexCliArgs(): string {
       psSingleQuoted('mcp_servers.multiagent-browser.enabled=true')
     )
   }
+
+  // Custom servers
+  if (settings) {
+    for (const server of settings.customServers) {
+      if (!server.enabled || !server.name.trim()) continue
+      const key = server.name.trim()
+      if (server.type === 'stdio') {
+        if (server.command) {
+          args.push('-c', psSingleQuoted(`mcp_servers.${key}.command=${JSON.stringify(server.command)}`))
+          if (server.args?.length) {
+            args.push('-c', psSingleQuoted(`mcp_servers.${key}.args=${JSON.stringify(server.args)}`))
+          }
+          if (server.env && Object.keys(server.env).length) {
+            for (const [k, v] of Object.entries(server.env)) {
+              args.push('-c', psSingleQuoted(`mcp_servers.${key}.env.${k}=${JSON.stringify(v)}`))
+            }
+          }
+          args.push('-c', psSingleQuoted(`mcp_servers.${key}.enabled=true`))
+        }
+      } else {
+        if (server.url) {
+          args.push(
+            '-c', psSingleQuoted(`mcp_servers.${key}.url=${JSON.stringify(server.url)}`),
+            '-c', psSingleQuoted(`mcp_servers.${key}.enabled=true`)
+          )
+        }
+      }
+    }
+  }
+
   return ` ${args.join(' ')}`
 }
 

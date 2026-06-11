@@ -5,6 +5,7 @@ import type { McpSettings } from '../../shared/types'
 
 let claudeMcpConfigPath: string | null = null
 let codexMcpUrl: string | null = null
+let activeMcpSettings: McpSettings | undefined = undefined
 
 export function currentClaudeMcpConfigPath(): string | null {
   return claudeMcpConfigPath
@@ -14,9 +15,14 @@ export function currentCodexMcpUrl(): string | null {
   return codexMcpUrl
 }
 
+export function currentMcpSettings(): McpSettings | undefined {
+  return activeMcpSettings
+}
+
 export class McpInjector {
   inject(sseUrl: string, streamableHttpUrl: string, settings?: McpSettings): void {
     void sseUrl
+    activeMcpSettings = settings
     const port = portFromUrl(streamableHttpUrl)
     claudeMcpConfigPath = writeClaudeMcpConfig(port, settings)
     codexMcpUrl = buildCodexMcpUrl(port)
@@ -24,6 +30,7 @@ export class McpInjector {
 
   updateSettings(sseUrl: string, streamableHttpUrl: string, settings: McpSettings): void {
     void sseUrl
+    activeMcpSettings = settings
     const port = portFromUrl(streamableHttpUrl)
     claudeMcpConfigPath = writeClaudeMcpConfig(port, settings)
     codexMcpUrl = buildCodexMcpUrl(port)
@@ -32,6 +39,7 @@ export class McpInjector {
   cleanup(): void {
     cleanupClaudeMcpConfig()
     codexMcpUrl = null
+    activeMcpSettings = undefined
   }
 }
 
