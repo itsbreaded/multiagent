@@ -15,7 +15,7 @@ This section tracks the current code state after the first implementation pass. 
 3. Agent pane runtime metadata returned together from `session:new` is committed with a single `updatePane` patch.
 4. `session:detected` now commits the last-agent preference and pane `sessionId` update in one store update.
 5. Cross-window pane transfer is ack-based: the target renderer commits `pane:received` and sends `pane:received-applied` before main moves PTY routing.
-6. `tab:absorb` now validates source and destination windows before releasing the source tab or moving PTYs.
+6. `tab:absorb` now validates source and destination windows, sends `tab:release` with a release id, waits for `tab:release-applied`, then records new ownership and moves PTYs.
 7. Detached tab ownership has sync versions, ownership generations, and stale-sync tombstones to prevent old detached sync from reclaiming returned/moved tabs.
 8. Detached tab ownership is kept pending during `tab:tear-off` and is promoted to routable/focusable ownership only after the detached renderer initializes and acks PTY adoption with `tab:detached-ready`.
 9. `window:focus-pane` re-checks tab ownership and ownership generation before focusing a remote window.
@@ -29,7 +29,6 @@ This section tracks the current code state after the first implementation pass. 
 
 ### Remaining Follow-Up
 
-- Consider a full acked `tab:release-applied` / `tab:receive-applied` transaction for tab absorb. The current implementation validates source before routing and receives optimistically in the destination, but it is not a complete tab-transfer transaction.
 - Manually verify multi-window behavior in the running app:
   - No sidebar focus flicker when focusing detached panes.
   - Clicking inactive-tab sidebar panes highlights only the intended pane.

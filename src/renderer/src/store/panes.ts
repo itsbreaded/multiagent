@@ -1267,13 +1267,16 @@ if (typeof window !== 'undefined' && window.ipc) {
   // Main tells this window to release a tab (it moved to another window).
   // In a detached window: just remove it locally (PTYs stay alive in the destination).
   // In the primary window: mark it as detached so the sidebar still shows it.
-  window.ipc.on('tab:release', (tabId: unknown, ownerWindowId: unknown) => {
+  window.ipc.on('tab:release', (tabId: unknown, ownerWindowId: unknown, releaseId: unknown) => {
     if (typeof tabId !== 'string') return
     const store = usePanesStore.getState()
     if (store.isDetachedWindow) {
       store.removeTabLocally(tabId)
     } else {
       store.detachTab(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined)
+    }
+    if (typeof releaseId === 'string') {
+      window.ipc.send('tab:release-applied', releaseId)
     }
   })
 

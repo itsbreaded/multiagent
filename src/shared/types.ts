@@ -205,7 +205,7 @@ export interface IPCChannels {
   // Renderer asks main to absorb a tab dragged from sourceWindowId
   'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => boolean
   // Main pushes to source window: remove the tab that was absorbed by another window
-  'tab:release': (tabId: string, ownerWindowId?: number) => void
+  'tab:release': (tabId: string, ownerWindowId?: number, releaseId?: string) => void
 
   // --- Multi-window: live sync & pane transfer ---
   // Detached window pushes its full tab list to main; main forwards to all other windows
@@ -286,6 +286,7 @@ export type SendChannels =
   | 'pty:write'
   | 'tab:state-sync'
   | 'tab:detached-ready'
+  | 'tab:release-applied'
   | 'pane:focus-changed'
   | 'focus:target-report'
   | 'pane:received-applied'

@@ -25,6 +25,7 @@ try {
 const COALESCE_DELAY_MS = 5
 let remoteFocusRequestSeq = 0
 let focusTargetVersionSeq = 0
+let tabReleaseSeq = 0
 const GIT_BRANCH_CACHE_MS = 10_000
 
 interface CoalesceEntry {
@@ -509,7 +510,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return true
   })
 
-  ipcMain.handle('tab:absorb', (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
+  ipcMain.handle('tab:absorb', async (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
     const toWin = BrowserWindow.fromWebContents(e.sender)
     if (!toWin) return false
     let tab: Tab
@@ -522,12 +523,33 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const sourceWin = windowManager.getWindowById(sourceWindowId)
     if (!sourceWin || sourceWin.isDestroyed()) return false
 
+    const releaseId = `${Date.now()}:${++tabReleaseSeq}`
+    const released = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        ipcMain.removeListener('tab:release-applied', onApplied)
+        resolve(false)
+      }, 1000)
+      const onApplied = (event: Electron.IpcMainEvent, ackReleaseId: unknown): void => {
+        if (ackReleaseId !== releaseId) return
+        const ackWin = BrowserWindow.fromWebContents(event.sender)
+        if (!ackWin || ackWin.id !== sourceWin.id) return
+        clearTimeout(timer)
+        ipcMain.removeListener('tab:release-applied', onApplied)
+        resolve(true)
+      }
+      ipcMain.on('tab:release-applied', onApplied)
+      sourceWin.webContents.send(
+        'tab:release',
+        tab.id,
+        windowManager.isDetachedWindow(toWin.id) ? toWin.id : undefined,
+        releaseId,
+      )
+    })
+    if (!released || toWin.isDestroyed()) return false
+
     windowManager.unrecordTab(tab.id)
     if (windowManager.isDetachedWindow(toWin.id)) {
       windowManager.recordDetachedTab(toWin.id, [tab.id])
-      sourceWin.webContents.send('tab:release', tab.id, toWin.id)
-    } else {
-      sourceWin.webContents.send('tab:release', tab.id)
     }
     for (const ptyId of ptyIds as string[]) {
       windowManager.transferPty(ptyId, toWin)
