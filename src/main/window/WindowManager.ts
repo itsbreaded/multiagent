@@ -23,6 +23,9 @@ class WindowManager {
   private detachedWindowTabs = new Map<number, string[]>()
   /** Maps tab id → detached window id (for window:focus-for-tab) */
   private tabToWindowId = new Map<string, number>()
+  private tabOwnershipGeneration = new Map<string, number>()
+  private tabSyncTombstones = new Map<string, number>()
+  private syncVersionByWindow = new Map<number, number>()
   private detachedWindowIds = new Set<number>()
 
   private preloadPath: string | null = null
@@ -57,6 +60,8 @@ class WindowManager {
         for (const tabId of tabIds) {
           primaryWin.webContents.send('tab:return', tabId)
           this.tabToWindowId.delete(tabId)
+          this.tabSyncTombstones.set(tabId, id)
+          this.bumpTabOwnershipGeneration(tabId)
         }
       }
       this.detachedWindowTabs.delete(id)
@@ -78,6 +83,8 @@ class WindowManager {
     this.detachedWindowTabs.set(windowId, [...existing, ...tabIds])
     for (const tabId of tabIds) {
       this.tabToWindowId.set(tabId, windowId)
+      if (this.tabSyncTombstones.get(tabId) === windowId) this.tabSyncTombstones.delete(tabId)
+      this.bumpTabOwnershipGeneration(tabId)
     }
   }
 
@@ -86,6 +93,8 @@ class WindowManager {
     const windowId = this.tabToWindowId.get(tabId)
     if (windowId === undefined) return
     this.tabToWindowId.delete(tabId)
+    this.tabSyncTombstones.set(tabId, windowId)
+    this.bumpTabOwnershipGeneration(tabId)
     const existing = this.detachedWindowTabs.get(windowId)
     if (existing) {
       this.detachedWindowTabs.set(windowId, existing.filter((id) => id !== tabId))
@@ -93,16 +102,27 @@ class WindowManager {
   }
 
   /** Replace the full tab list for a window (used on live-sync updates). */
-  recordDetachedTabsForWindow(windowId: number, tabIds: string[]): void {
+  recordDetachedTabsForWindow(windowId: number, tabIds: string[], version?: number): string[] {
+    if (version !== undefined) {
+      const previous = this.syncVersionByWindow.get(windowId) ?? 0
+      if (version <= previous) return this.detachedWindowTabs.get(windowId) ?? []
+      this.syncVersionByWindow.set(windowId, version)
+    }
     const old = this.detachedWindowTabs.get(windowId) ?? []
+    const acceptedTabIds = tabIds.filter((id) => this.tabSyncTombstones.get(id) !== windowId)
     // Remove stale mappings
     for (const id of old) {
-      if (!tabIds.includes(id)) this.tabToWindowId.delete(id)
+      if (!acceptedTabIds.includes(id)) {
+        this.tabToWindowId.delete(id)
+        this.bumpTabOwnershipGeneration(id)
+      }
     }
-    this.detachedWindowTabs.set(windowId, tabIds)
-    for (const id of tabIds) {
+    this.detachedWindowTabs.set(windowId, acceptedTabIds)
+    for (const id of acceptedTabIds) {
+      if (this.tabToWindowId.get(id) !== windowId) this.bumpTabOwnershipGeneration(id)
       this.tabToWindowId.set(id, windowId)
     }
+    return acceptedTabIds
   }
 
   isDetachedWindow(windowId: number): boolean {
@@ -112,6 +132,14 @@ class WindowManager {
   /** Returns the window ID that currently owns a tab, or null. */
   getWindowIdForTab(tabId: string): number | null {
     return this.tabToWindowId.get(tabId) ?? null
+  }
+
+  getOwnershipGeneration(tabId: string): number {
+    return this.tabOwnershipGeneration.get(tabId) ?? 0
+  }
+
+  private bumpTabOwnershipGeneration(tabId: string): void {
+    this.tabOwnershipGeneration.set(tabId, (this.tabOwnershipGeneration.get(tabId) ?? 0) + 1)
   }
 
   broadcastExcept(excludeId: number, channel: string, ...args: unknown[]): void {

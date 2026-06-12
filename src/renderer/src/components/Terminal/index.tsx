@@ -156,6 +156,10 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     const { xterm, fitAddon } = entry
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
+    xterm.options.theme = pane.paneType === 'agent'
+      ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
+      : XTERM_THEME
+    xterm.options.cursorBlink = pane.paneType !== 'agent'
 
     // Re-attach the key handler on every mount so the closure captures fresh
     // refs. attachCustomKeyEventHandler replaces the previous handler.
@@ -280,7 +284,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // pane is explicitly closed via closePane().
       xtermRegistry.detach(pane.id)
     }
-  }, [pane.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pane.id, pane.paneType, pane.agentKind])
 
   // Effect 2: connect to the PTY once a ptyId is available
   useEffect(() => {

@@ -12,6 +12,7 @@ function clearPendingRemoteFocus(): void {
     clearTimeout(pendingRemoteFocusTimer)
     pendingRemoteFocusTimer = null
   }
+  usePanesStore.setState({ pendingFocusTarget: null })
 }
 
 function uuid(): string {
@@ -149,6 +150,7 @@ interface PanesStore {
   setWindowId: (id: number) => void
   isDetachedWindow: boolean
   activeWindowId: number | null
+  pendingFocusTarget: { windowId: number; tabId: string; paneId?: string } | null
   initDetached: (tab: Tab, ptyIds: string[]) => void
   receiveTab: (tab: Tab, atIndex?: number) => void
   detachTab: (tabId: string, ownerWindowId?: number) => void
@@ -195,11 +197,13 @@ interface PanesStore {
   focusDetachedPaneOptimistically: (windowId: number, tabId: string, paneId?: string) => void
   splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string, agentKind?: AgentKind) => Promise<void>
   closePane: (paneId: string) => void
+  closePaneInTab: (tabId: string, paneId: string) => void
   zoomPane: (paneId: string) => void
   unzoom: () => void
   updatePaneRatio: (splitId: string, ratio: number) => void
   setPtyId: (paneId: string, ptyId: string) => void
   setSessionId: (paneId: string, sessionId: string) => void
+  updatePane: (paneId: string, patch: Partial<PaneLeaf>) => void
 
   // Session / PTY actions (Phase 2)
   resumeSession: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
@@ -244,6 +248,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setWindowId: (id) => set({ windowId: id }),
   isDetachedWindow: false,
   activeWindowId: null,
+  pendingFocusTarget: null,
 
   detachedWindowTabIds: {},
   detachedWindowActiveTabIds: {},
@@ -523,7 +528,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setActiveTab: (tabId) => {
-    set({ activeTabId: tabId })
+    set((s) => {
+      const tab = s.tabs.find((t) => t.id === tabId)
+      const zoomedPaneId = tab?.rootNode && s.zoomedPaneId && findLeaf(tab.rootNode, s.zoomedPaneId)
+        ? s.zoomedPaneId
+        : null
+      return { activeTabId: tabId, zoomedPaneId }
+    })
     // Immediately notify other windows when the active tab changes in a detached window.
     const { isDetachedWindow, windowId } = get()
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
@@ -621,10 +632,17 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   focusPaneInTab: (tabId, paneId) => {
     const { isDetachedWindow, windowId } = get()
-    set((s) => ({
-      activeTabId: tabId,
-      tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
-    }))
+    set((s) => {
+      const tab = s.tabs.find((t) => t.id === tabId)
+      const zoomedPaneId = tab?.rootNode && s.zoomedPaneId && findLeaf(tab.rootNode, s.zoomedPaneId)
+        ? s.zoomedPaneId
+        : null
+      return {
+        activeTabId: tabId,
+        tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
+        zoomedPaneId,
+      }
+    })
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
       window.ipc.send('pane:focus-changed', windowId, tabId, paneId)
     }
@@ -640,7 +658,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
     const key = String(windowId)
     set((s) => ({
-      activeWindowId: windowId,
+      pendingFocusTarget: { windowId, tabId, paneId },
       detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [key]: tabId },
       tabs: paneId
         ? s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t)
@@ -675,8 +693,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       get().setLastAgentKind(resolvedAgent)
       try {
         const result = await window.ipc.invoke('session:new', resolvedAgent, cwd) as { ptyId: string; sessionId: string | null }
-        if (result?.ptyId) get().setPtyId(newLeaf.id, result.ptyId)
-        if (result?.sessionId) get().setSessionId(newLeaf.id, result.sessionId)
+        const patch: Partial<PaneLeaf> = {}
+        if (result?.ptyId) patch.ptyId = result.ptyId
+        if (result?.sessionId) patch.sessionId = result.sessionId
+        if (Object.keys(patch).length > 0) get().updatePane(newLeaf.id, patch)
       } catch (err) {
         console.error('session:new IPC failed', err)
       }
@@ -685,20 +705,22 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   closePane: (paneId) => {
-    // Kill the PTY and dispose the xterm instance before removing the pane.
-    const pane = get().findPane(paneId)
-    if (pane?.ptyId && typeof window !== 'undefined' && window.ipc) {
+    get().closePaneInTab(get().activeTabId, paneId)
+  },
+
+  closePaneInTab: (tabId, paneId) => {
+    const tab = get().tabs.find((t) => t.id === tabId)
+    const pane = tab?.rootNode ? findLeaf(tab.rootNode, paneId) : null
+    if (!pane) return
+    if (pane.ptyId && typeof window !== 'undefined' && window.ipc) {
       window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
     }
     xtermRegistry.dispose(paneId)
     set((s) => {
       const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId) return t
-        if (!t.rootNode) return t
+        if (t.id !== tabId || !t.rootNode) return t
         const newRoot = removeLeaf(t.rootNode, paneId)
         if (!newRoot) {
-          // Preserve the tab's label by snapshotting the last pane's directory
-          // as customLabel so it doesn't fall back to "New Tab".
           const closedLeaf = findLeaf(t.rootNode, paneId)
           const lastSegment = closedLeaf?.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop()
           const fallbackLabel = t.customLabel ?? lastSegment
@@ -763,6 +785,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
       tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { sessionId }) } : t),
+    }))
+  },
+
+  updatePane: (paneId, patch) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, patch) } : t),
     }))
   },
 
@@ -841,12 +869,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (typeof window !== 'undefined' && window.ipc) {
       try {
         const result = (await window.ipc.invoke('session:new', resolvedAgent, cwd)) as { ptyId: string; sessionId: string | null }
-        if (result?.ptyId) {
-          get().setPtyId(leaf.id, result.ptyId)
-        }
-        if (result?.sessionId) {
-          get().setSessionId(leaf.id, result.sessionId)
-        }
+        const patch: Partial<PaneLeaf> = {}
+        if (result?.ptyId) patch.ptyId = result.ptyId
+        if (result?.sessionId) patch.sessionId = result.sessionId
+        if (Object.keys(patch).length > 0) get().updatePane(leaf.id, patch)
       } catch (err) {
         console.error('session:new IPC failed', err)
       }
@@ -868,16 +894,6 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
       return { tabs }
     })
-    if (typeof window !== 'undefined' && window.ipc) {
-      try {
-        const result = (await window.ipc.invoke('pty:create', cwd)) as { ptyId: string }
-        if (result?.ptyId) {
-          get().setPtyId(leaf.id, result.ptyId)
-        }
-      } catch (err) {
-        console.error('pty:create IPC failed', err)
-      }
-    }
   },
 
   applyLayout: async (saved) => {
@@ -1218,8 +1234,11 @@ if (typeof window !== 'undefined' && window.ipc) {
       const leaves = collectLeaves(tab.rootNode)
       const pane = leaves.find((l) => l.ptyId === ptyId)
       if (pane) {
-        store.setLastAgentKind(agentKind)
-        store.setSessionId(pane.id, sessionId)
+        rememberAgent(agentKind)
+        usePanesStore.setState((s) => ({
+          lastAgentKind: agentKind,
+          tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, pane.id, { sessionId }) } : t),
+        }))
         break
       }
     }
@@ -1294,7 +1313,7 @@ if (typeof window !== 'undefined' && window.ipc) {
         clearPendingRemoteFocus()
       }
     }
-    usePanesStore.setState({ activeWindowId: winId })
+    usePanesStore.setState({ activeWindowId: winId, pendingFocusTarget: null })
   })
 
   // Live sync from a detached window — only the primary window processes this.
@@ -1309,11 +1328,18 @@ if (typeof window !== 'undefined' && window.ipc) {
   })
 
   // A pane has been transferred to this window from another window.
-  window.ipc.on('pane:received', (paneJson: unknown, targetTabId: unknown) => {
+  window.ipc.on('pane:received', (paneJson: unknown, targetTabId: unknown, transferId: unknown) => {
     if (typeof paneJson !== 'string' || typeof targetTabId !== 'string') return
     try {
       const pane = JSON.parse(paneJson) as PaneLeaf
       usePanesStore.getState().addPaneToTab(pane, targetTabId)
+      if (typeof transferId === 'string') {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.ipc.send('pane:received-applied', transferId)
+          })
+        })
+      }
     } catch { /* ignore */ }
   })
 }

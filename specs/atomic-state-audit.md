@@ -2,6 +2,52 @@
 
 Date: 2026-06-12
 
+## Implementation Status
+
+Last updated: 2026-06-12
+
+This section tracks the current code state after the first implementation pass. The original audit findings below are intentionally preserved as historical context.
+
+### Fixed In Current Code
+
+1. Inactive sidebar pane clicks now use the atomic `focusPaneInTab(tabId, paneId)` transition instead of composing `setActiveTab` and `focusPane`.
+2. Shell pane PTY creation now has one owner: `Terminal` creates shell PTYs on mount; `addShellPane` only publishes the shell pane.
+3. Agent pane runtime metadata returned together from `session:new` is committed with a single `updatePane` patch.
+4. `session:detected` now commits the last-agent preference and pane `sessionId` update in one store update.
+5. Cross-window pane transfer is ack-based: the target renderer commits `pane:received` and sends `pane:received-applied` before main moves PTY routing.
+6. `tab:absorb` now validates source and destination windows before releasing the source tab or moving PTYs.
+7. Detached tab ownership has sync versions, ownership generations, and stale-sync tombstones to prevent old detached sync from reclaiming returned/moved tabs.
+9. `window:focus-pane` re-checks tab ownership and ownership generation before focusing a remote window.
+10. Detached tab sync now uses a structured `TabStateSyncPayload` with `{ windowId, tabs, activeTabId, version }`. Main still accepts the legacy positional shape for compatibility.
+11. `zoomedPaneId` is cleared when switching/focusing a tab that does not contain the zoomed pane.
+12. Optimistic remote focus is represented separately as `pendingFocusTarget`; confirmed OS focus remains `activeWindowId`.
+14. `Terminal` updates xterm cursor/theme options when `paneType` changes.
+15. Sidebar pane context close now uses `closePaneInTab(tabId, paneId)`.
+
+### Partially Addressed
+
+8. Detached window ownership is still recorded during `tab:tear-off` before the detached renderer explicitly acks init/adoption. The new generation/tombstone protection reduces stale routing fallout, but ownership is not yet hidden behind an init/adoption ack.
+13. Focus state is improved with separate pending and confirmed focus, but focus sync is still split across `pane:focus-changed` and `window:became-active`. It is not yet a single versioned `{ windowId, tabId, paneId, version }` focus target model broadcast by main.
+
+### Remaining Follow-Up
+
+- Add detached-window init/adoption acknowledgement before a torn-off tab becomes routable/focusable.
+- Convert focus sync to one versioned focus target model instead of combining separate pane-focus and window-focus event streams.
+- Consider a full acked `tab:release-applied` / `tab:receive-applied` transaction for tab absorb. The current implementation validates source before routing and receives optimistically in the destination, but it is not a complete tab-transfer transaction.
+- Restore pane dragging between primary and detached windows. Detached panes shown in the primary sidebar are currently not draggable because `PaneRow` disables `draggable` whenever `onClickOverride` is present, and detached rows use `onClickOverride` for remote focus.
+- Manually verify multi-window behavior in the running app:
+  - No sidebar focus flicker when focusing detached panes.
+  - Clicking inactive-tab sidebar panes highlights only the intended pane.
+  - Closing panes from inactive sidebar tabs works correctly.
+  - Creating shell panes creates exactly one PTY.
+  - Moving panes/tabs across windows does not leave duplicates or stale ownership.
+  - Dragging panes main window <-> detached window works in both directions.
+
+### Verification Completed
+
+- `npm run typecheck` passed after each meaningful implementation group.
+- `npm run build` passed after the implementation pass.
+
 ## Purpose
 
 This audit looks for code paths where user-visible state is published in multiple steps even though the UI treats the result as one transition. The recent detached-sidebar focus flicker was caused by this pattern: `setActiveTab(tabId)` published the destination tab with its old `focusedPaneId`, then `focusPane(paneId)` published the intended pane. Subscribers and IPC saw both states.
@@ -352,6 +398,36 @@ Improvement:
 
 Priority: High.
 
+### 16. Detached sidebar panes are not draggable, blocking pane moves from detached windows
+
+Files:
+- `src/renderer/src/components/Sidebar/TabSections.tsx`
+- `src/renderer/src/components/PaneHeader/index.tsx`
+- `src/renderer/src/components/TabBar/index.tsx`
+- `src/renderer/src/store/panes.ts`
+
+Current shape:
+- The primary sidebar lists panes for both local and detached tabs.
+- Local pane rows are draggable through `PaneRow`.
+- Detached pane rows pass `onClickOverride` / `onMouseDownOverride` so clicks focus the remote window and pane.
+- `PaneRow` sets `draggable={!renaming && !onClickOverride}`.
+- Because detached rows always have `onClickOverride`, detached pane rows cannot start a drag.
+- `PaneHeader` drag handles exist inside detached windows, but those drags only interact with drop targets in the same renderer/window. There is no payload or drop handling for dragging a pane from a detached window into the primary window or another detached window.
+
+Risk:
+- The multi-window spec says pane drag should work on all tabs, local and detached, but the current UI prevents detached-to-main and detached-to-detached pane moves.
+- Users can move local panes to detached tabs from the primary sidebar, but cannot symmetrically move detached panes back or across windows.
+- Any future pane transfer transaction work can appear broken because the source drag cannot be initiated.
+
+Improvement:
+- Separate "click focuses remote pane" from "row is draggable"; detached pane rows should still be draggable.
+- Add a cross-window pane drag payload containing at least `{ pane, sourceTabId, sourceWindowId }` or `{ paneId, sourceTabId, sourceWindowId }`.
+- For detached-pane drags started from the primary sidebar, main can already identify the target detached/local tab, but the source removal must be sent to the owning detached window rather than calling local `removePaneKeepTab`.
+- For drags started inside a detached window, `PaneHeader` should set the cross-window pane payload and target windows should accept it on tab headers / tab bars.
+- Use the existing acked `pane:transfer` flow or extend it so source removal happens only after target commit and PTY routing is moved.
+
+Priority: High.
+
 ## Recommended Refactor Direction
 
 ### A. Introduce explicit transition actions
@@ -417,11 +493,12 @@ Recommended phases:
 2. Remove duplicate shell PTY creation ownership.
 3. Add tab-aware sidebar pane actions, especially close.
 4. Rework pane transfer and tab absorb as acked transactions.
-5. Add sync versions/generations for detached tab ownership.
-6. Split optimistic focus from confirmed focus.
-7. Convert `tab:state-sync` to a typed structured payload.
-8. Validate/clear zoom state on active-tab changes.
-9. Make terminal options respond to pane type changes or replace pane ids on type conversion.
+5. Restore pane dragging main window <-> detached window, including detached-to-main and detached-to-detached source removal.
+6. Add sync versions/generations for detached tab ownership.
+7. Split optimistic focus from confirmed focus.
+8. Convert `tab:state-sync` to a typed structured payload.
+9. Validate/clear zoom state on active-tab changes.
+10. Make terminal options respond to pane type changes or replace pane ids on type conversion.
 
 ## Open Questions
 

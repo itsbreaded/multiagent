@@ -76,6 +76,7 @@ export default function App(): JSX.Element {
   useGlobalKeyboard()
 
   const restoreStartedRef = useRef(false)
+  const detachedSyncVersionRef = useRef(0)
   const [layoutReady, setLayoutReady] = useState(false)
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
@@ -143,7 +144,13 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!isDetachedWindow || !windowId || !layoutReady) return
     const timer = setTimeout(() => {
-      window.ipc.send('tab:state-sync', windowId, JSON.stringify(tabs), activeTabId)
+      detachedSyncVersionRef.current += 1
+      window.ipc.send('tab:state-sync', {
+        windowId,
+        tabs,
+        activeTabId,
+        version: detachedSyncVersionRef.current,
+      })
     }, 300)
     return () => clearTimeout(timer)
   }, [isDetachedWindow, windowId, layoutReady, tabs, activeTabId])
@@ -189,8 +196,11 @@ export default function App(): JSX.Element {
           if (sourceWindowId === windowId) return // intra-window drag
           e.preventDefault()
           e.stopPropagation()
+          receiveTab(tab)
           window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
-            .then(() => { receiveTab(tab) }) // no index = append at end
+            .then((ok) => {
+              if (!ok) usePanesStore.getState().removeTabLocally(tab.id)
+            })
             .catch(console.error)
         } catch { /* ignore */ }
       }}

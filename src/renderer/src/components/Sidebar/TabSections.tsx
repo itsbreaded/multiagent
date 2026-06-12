@@ -29,9 +29,11 @@ export function TabSections(): JSX.Element {
   const detachedWindowActiveTabIds = usePanesStore((s) => s.detachedWindowActiveTabIds)
   const windowId = usePanesStore((s) => s.windowId)
   const activeWindowId = usePanesStore((s) => s.activeWindowId)
+  const pendingFocusTarget = usePanesStore((s) => s.pendingFocusTarget)
   const focusDetachedPaneOptimistically = usePanesStore((s) => s.focusDetachedPaneOptimistically)
   // Local panes are highlighted only when this window has OS focus (or focus is unknown).
-  const localWindowActive = activeWindowId === null || activeWindowId === windowId
+  const effectiveActiveWindowId = pendingFocusTarget?.windowId ?? activeWindowId
+  const localWindowActive = effectiveActiveWindowId === null || effectiveActiveWindowId === windowId
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
 
@@ -85,8 +87,9 @@ export function TabSections(): JSX.Element {
             if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id)
             window.ipc?.invoke('window:focus-for-tab', tab.id).catch(() => {})
           }
-          const isOwnerWindowActive = ownerWindowNumId !== undefined && activeWindowId === ownerWindowNumId
-          const isTabActiveInWindow = ownerWindowId ? detachedWindowActiveTabIds[ownerWindowId] === tab.id : leaves.length > 0
+          const isOwnerWindowActive = ownerWindowNumId !== undefined && effectiveActiveWindowId === ownerWindowNumId
+          const isPendingTab = pendingFocusTarget !== null && pendingFocusTarget.windowId === ownerWindowNumId && pendingFocusTarget.tabId === tab.id
+          const isTabActiveInWindow = isPendingTab || (ownerWindowId ? detachedWindowActiveTabIds[ownerWindowId] === tab.id : leaves.length > 0)
           return (
             <SidebarSection
               key={tab.id}
@@ -130,7 +133,7 @@ export function TabSections(): JSX.Element {
                   key={pane.id}
                   pane={pane}
                   tab={tab}
-                  isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === tab.focusedPaneId}
+                  isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === (isPendingTab ? (pendingFocusTarget?.paneId ?? tab.focusedPaneId) : tab.focusedPaneId)}
                   sessions={sessions}
                   onMouseDownOverride={() => {
                     if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id, pane.id)
@@ -247,9 +250,8 @@ function PaneRow({
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = React.useRef<HTMLInputElement>(null)
 
-  const setActiveTab = usePanesStore((s) => s.setActiveTab)
-  const focusPane = usePanesStore((s) => s.focusPane)
-  const closePane = usePanesStore((s) => s.closePane)
+  const focusPaneInTab = usePanesStore((s) => s.focusPaneInTab)
+  const closePaneInTab = usePanesStore((s) => s.closePaneInTab)
   const movePaneToNewTab = usePanesStore((s) => s.movePaneToNewTab)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
@@ -313,7 +315,7 @@ function PaneRow({
           setHovered(false)
         }}
         onMouseDown={() => { if (!renaming) onMouseDownOverride?.() }}
-        onClick={() => { if (!renaming) { if (onClickOverride) { onClickOverride() } else { setActiveTab(tab.id); focusPane(pane.id) } } }}
+        onClick={() => { if (!renaming) { if (onClickOverride) { onClickOverride() } else { focusPaneInTab(tab.id, pane.id) } } }}
         onDoubleClick={() => startRename()}
         onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
         onMouseEnter={() => setHovered(true)}
@@ -414,7 +416,7 @@ function PaneRow({
           canMoveToNewTab={!isOnlyPane}
           onClose={() => setMenu(null)}
           onRename={() => { startRename(); setMenu(null) }}
-          onClosePane={() => { closePane(pane.id); setMenu(null) }}
+          onClosePane={() => { closePaneInTab(tab.id, pane.id); setMenu(null) }}
           onMoveToNewTab={() => { movePaneToNewTab(pane.id); setMenu(null) }}
         />
       )}

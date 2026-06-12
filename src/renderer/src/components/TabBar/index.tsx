@@ -352,8 +352,11 @@ export function TabBar(): JSX.Element {
       if (sourceWindowId === windowId) return false // Same window — let normal reorder handle it
       e.preventDefault()
       e.stopPropagation()
+      receiveTab(tab, dropIndex)
       window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
-        .then(() => { receiveTab(tab, dropIndex) })
+        .then((ok) => {
+          if (!ok) usePanesStore.getState().removeTabLocally(tab.id)
+        })
         .catch(console.error)
       return true
     } catch {

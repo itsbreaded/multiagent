@@ -83,6 +83,13 @@ export interface Tab {
   detached?: boolean    // true while this tab is living in a separate window
 }
 
+export interface TabStateSyncPayload {
+  windowId: number
+  tabs: Tab[]
+  activeTabId?: string
+  version: number
+}
+
 // Full app state shape (used by renderer Zustand store)
 export interface AppState {
   tabs: Tab[]
@@ -180,17 +187,17 @@ export interface IPCChannels {
   // New window tells main it owns these PTY IDs (routes data here)
   'tab:adopt': (ptyIds: string[]) => void
   // Renderer asks main to absorb a tab dragged from sourceWindowId
-  'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => void
+  'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => boolean
   // Main pushes to source window: remove the tab that was absorbed by another window
   'tab:release': (tabId: string, ownerWindowId?: number) => void
 
   // --- Multi-window: live sync & pane transfer ---
   // Detached window pushes its full tab list to main; main forwards to all other windows
-  'tab:state-sync': (windowId: number, tabsJson: string) => void
+  'tab:state-sync': (payload: TabStateSyncPayload) => void
   // Renderer asks main to move a pane (with its PTY) to a tab in another window
   'pane:transfer': (paneJson: string, targetTabId: string) => boolean
   // Main tells target window a pane is arriving
-  'pane:received': (paneJson: string, targetTabId: string) => void
+  'pane:received': (paneJson: string, targetTabId: string, transferId?: string) => void
   // Renderer asks main to bring a detached tab back to this window
   'tab:bring-home': (tabId: string) => boolean
 
@@ -256,6 +263,7 @@ export type SendChannels =
   | 'pty:write'
   | 'tab:state-sync'
   | 'pane:focus-changed'
+  | 'pane:received-applied'
   | 'pane:focus-remote-applied'
 
 export interface IpcBridge {
