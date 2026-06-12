@@ -90,6 +90,13 @@ export interface TabStateSyncPayload {
   version: number
 }
 
+export interface FocusTarget {
+  windowId: number
+  tabId: string
+  paneId: string
+  version: number
+}
+
 // Full app state shape (used by renderer Zustand store)
 export interface AppState {
   tabs: Tab[]
@@ -180,6 +187,7 @@ export interface IPCChannels {
   'window:get-all-bounds': () => { id: number; x: number; y: number; width: number; height: number }[]
   'window:snap-apply': (targetWindowId: number, side: 'left' | 'right' | 'top' | 'bottom') => void
   'window:snap-zones': (zones: { targetWindowId: number; side: string; x: number; y: number; width: number; height: number }[]) => void
+  'window:focus-state-request': () => void
 
   // --- Multi-window: tab transfer ---
   // Renderer asks main to create a detached window carrying a tab
@@ -205,6 +213,7 @@ export interface IPCChannels {
   'window:focus-pane': (tabId: string, paneId: string) => boolean
   // Main tells a window's renderer to activate a tab/pane (cross-window pane click)
   'pane:focus-remote': (tabId: string, paneId: string, requestId?: string) => void
+  'focus:target-changed': (target: FocusTarget) => void
 
 }
 
@@ -249,6 +258,7 @@ export type EventChannels =
   | 'pty:cwd'
   | 'session:detected'
   | 'window:snap-zones'
+  | 'window:focus-state-request'
   | 'tab:release'
   | 'tab:return'
   | 'tab:state-sync'
@@ -258,12 +268,14 @@ export type EventChannels =
   | 'pane:focus-changed'
   // Broadcast by main whenever a BrowserWindow gains OS focus
   | 'window:became-active'
+  | 'focus:target-changed'
 
 export type SendChannels =
   | 'pty:write'
   | 'tab:state-sync'
   | 'tab:detached-ready'
   | 'pane:focus-changed'
+  | 'focus:target-report'
   | 'pane:received-applied'
   | 'pane:focus-remote-applied'
 

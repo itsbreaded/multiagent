@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentKind, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
+import type { AgentKind, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
@@ -137,6 +137,15 @@ function rememberShellSpawnMode(mode: ShellSpawnMode): void {
   }
 }
 
+function reportCurrentFocusTarget(): void {
+  if (typeof window === 'undefined' || !window.ipc) return
+  const store = usePanesStore.getState()
+  if (store.windowId === null || !store.activeTabId) return
+  const tab = store.tabs.find((t) => t.id === store.activeTabId)
+  const paneId = tab?.focusedPaneId ?? ''
+  window.ipc.send('focus:target-report', store.activeTabId, paneId)
+}
+
 export const RECENT_SECTION_ID = 'recent'
 
 export function tabSidebarSectionId(tabId: string): string {
@@ -150,6 +159,7 @@ interface PanesStore {
   setWindowId: (id: number) => void
   isDetachedWindow: boolean
   activeWindowId: number | null
+  confirmedFocusTarget: FocusTarget | null
   pendingFocusTarget: { windowId: number; tabId: string; paneId?: string } | null
   initDetached: (tab: Tab, ptyIds: string[]) => void
   receiveTab: (tab: Tab, atIndex?: number) => void
@@ -248,6 +258,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setWindowId: (id) => set({ windowId: id }),
   isDetachedWindow: false,
   activeWindowId: null,
+  confirmedFocusTarget: null,
   pendingFocusTarget: null,
 
   detachedWindowTabIds: {},
@@ -302,6 +313,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
       }
     })
+    reportCurrentFocusTarget()
   },
 
   detachTab: (tabId, ownerWindowId) => {
@@ -546,6 +558,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const tab = get().tabs.find((t) => t.id === tabId)
       if (tab) window.ipc.send('pane:focus-changed', windowId, tabId, tab.focusedPaneId)
     }
+    reportCurrentFocusTarget()
   },
 
   renameTab: (tabId, label) => {
@@ -633,6 +646,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
       window.ipc.send('pane:focus-changed', windowId, activeTabId, paneId)
     }
+    reportCurrentFocusTarget()
   },
 
   focusPaneInTab: (tabId, paneId) => {
@@ -651,6 +665,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
       window.ipc.send('pane:focus-changed', windowId, tabId, paneId)
     }
+    reportCurrentFocusTarget()
   },
 
   focusDetachedPaneOptimistically: (windowId, tabId, paneId) => {
@@ -1319,6 +1334,34 @@ if (typeof window !== 'undefined' && window.ipc) {
       }
     }
     usePanesStore.setState({ activeWindowId: winId, pendingFocusTarget: null })
+    if (winId === windowId) reportCurrentFocusTarget()
+  })
+
+  window.ipc.on('window:focus-state-request', () => {
+    reportCurrentFocusTarget()
+  })
+
+  window.ipc.on('focus:target-changed', (target: unknown) => {
+    if (
+      typeof target !== 'object' ||
+      target === null ||
+      typeof (target as FocusTarget).windowId !== 'number' ||
+      typeof (target as FocusTarget).tabId !== 'string' ||
+      typeof (target as FocusTarget).paneId !== 'string' ||
+      typeof (target as FocusTarget).version !== 'number'
+    ) return
+    const next = target as FocusTarget
+    const currentVersion = usePanesStore.getState().confirmedFocusTarget?.version ?? 0
+    if (next.version <= currentVersion) return
+    usePanesStore.setState((s) => ({
+      activeWindowId: next.windowId,
+      confirmedFocusTarget: next,
+      pendingFocusTarget: null,
+      tabs: next.paneId
+        ? s.tabs.map((t) => t.id === next.tabId ? { ...t, focusedPaneId: next.paneId } : t)
+        : s.tabs,
+      detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [String(next.windowId)]: next.tabId },
+    }))
   })
 
   // Live sync from a detached window — only the primary window processes this.

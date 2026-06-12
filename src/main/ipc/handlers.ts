@@ -24,6 +24,7 @@ try {
 
 const COALESCE_DELAY_MS = 5
 let remoteFocusRequestSeq = 0
+let focusTargetVersionSeq = 0
 const GIT_BRANCH_CACHE_MS = 10_000
 
 interface CoalesceEntry {
@@ -146,6 +147,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     })
     win.on('focus', () => {
       windowManager.broadcastAll('window:became-active', win.id)
+      win.webContents.send('window:focus-state-request')
     })
   }
 
@@ -360,6 +362,17 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const senderWin = BrowserWindow.fromWebContents(e.sender)
     if (!senderWin) return
     windowManager.broadcastExcept(senderWin.id, 'pane:focus-changed', windowId, tabId, paneId)
+  })
+
+  ipcMain.on('focus:target-report', (e, tabId: string, paneId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender)
+    if (!senderWin || typeof tabId !== 'string' || typeof paneId !== 'string') return
+    windowManager.broadcastAll('focus:target-changed', {
+      windowId: senderWin.id,
+      tabId,
+      paneId,
+      version: ++focusTargetVersionSeq,
+    })
   })
 
   ipcMain.handle('window:focus-pane', (_e, tabId: string, paneId: string) => {

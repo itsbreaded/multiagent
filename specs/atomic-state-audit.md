@@ -22,16 +22,12 @@ This section tracks the current code state after the first implementation pass. 
 10. Detached tab sync now uses a structured `TabStateSyncPayload` with `{ windowId, tabs, activeTabId, version }`. Main still accepts the legacy positional shape for compatibility.
 11. `zoomedPaneId` is cleared when switching/focusing a tab that does not contain the zoomed pane.
 12. Optimistic remote focus is represented separately as `pendingFocusTarget`; confirmed OS focus remains `activeWindowId`.
+13. Confirmed focus now flows through a main-stamped `FocusTarget` broadcast with `{ windowId, tabId, paneId, version }`; the sidebar uses this target, while `pendingFocusTarget` remains only for in-flight remote focus feedback.
 14. `Terminal` updates xterm cursor/theme options when `paneType` changes.
 15. Sidebar pane context close now uses `closePaneInTab(tabId, paneId)`.
 
-### Partially Addressed
-
-13. Focus state is improved with separate pending and confirmed focus, but focus sync is still split across `pane:focus-changed` and `window:became-active`. It is not yet a single versioned `{ windowId, tabId, paneId, version }` focus target model broadcast by main.
-
 ### Remaining Follow-Up
 
-- Convert focus sync to one versioned focus target model instead of combining separate pane-focus and window-focus event streams.
 - Consider a full acked `tab:release-applied` / `tab:receive-applied` transaction for tab absorb. The current implementation validates source before routing and receives optimistically in the destination, but it is not a complete tab-transfer transaction.
 - Restore pane dragging between primary and detached windows. Detached panes shown in the primary sidebar are currently not draggable because `PaneRow` disables `draggable` whenever `onClickOverride` is present, and detached rows use `onClickOverride` for remote focus.
 - Manually verify multi-window behavior in the running app:
