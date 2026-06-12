@@ -19,6 +19,7 @@ class WindowManager {
   private windows = new Map<number, BrowserWindow>()
   private ptyToWebContentsId = new Map<string, number>()
   public pendingInitData = new Map<number, WindowInitData>()
+  private pendingDetachedWindowTabs = new Map<number, string[]>()
   /** Maps detached window id → tab ids it owns (for tab:return on close) */
   private detachedWindowTabs = new Map<number, string[]>()
   /** Maps tab id → detached window id (for window:focus-for-tab) */
@@ -52,7 +53,10 @@ class WindowManager {
 
   unregister(id: number): void {
     // If a detached window is closing, tell the primary window to return its tabs.
-    const tabIds = this.detachedWindowTabs.get(id)
+    const tabIds = Array.from(new Set([
+      ...(this.detachedWindowTabs.get(id) ?? []),
+      ...(this.pendingDetachedWindowTabs.get(id) ?? []),
+    ]))
     if (tabIds && tabIds.length > 0) {
       // The primary window is the first registered window that is NOT this one.
       const primaryWin = this._getPrimaryWindow(id)
@@ -65,6 +69,7 @@ class WindowManager {
         }
       }
       this.detachedWindowTabs.delete(id)
+      this.pendingDetachedWindowTabs.delete(id)
     }
     this.detachedWindowIds.delete(id)
 
@@ -86,6 +91,24 @@ class WindowManager {
       if (this.tabSyncTombstones.get(tabId) === windowId) this.tabSyncTombstones.delete(tabId)
       this.bumpTabOwnershipGeneration(tabId)
     }
+  }
+
+  prepareDetachedTab(windowId: number, tabIds: string[]): void {
+    const existing = this.pendingDetachedWindowTabs.get(windowId) ?? []
+    this.pendingDetachedWindowTabs.set(windowId, Array.from(new Set([...existing, ...tabIds])))
+  }
+
+  markDetachedTabReady(windowId: number, tabId: string): boolean {
+    const pending = this.pendingDetachedWindowTabs.get(windowId) ?? []
+    if (!pending.includes(tabId)) return false
+    const remaining = pending.filter((id) => id !== tabId)
+    if (remaining.length > 0) {
+      this.pendingDetachedWindowTabs.set(windowId, remaining)
+    } else {
+      this.pendingDetachedWindowTabs.delete(windowId)
+    }
+    this.recordDetachedTab(windowId, [tabId])
+    return true
   }
 
   /** Remove a single tab from routing (used when a tab is absorbed or brought home). */

@@ -346,7 +346,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const tab = JSON.parse(tabJson) as Tab
     const newWin = windowManager.createDetachedWindow(fromWin, screenX, screenY)
     windowManager.pendingInitData.set(newWin.id, { mode: 'detached', tab, ptyIds })
-    windowManager.recordDetachedTab(newWin.id, [tab.id])
+    windowManager.prepareDetachedTab(newWin.id, [tab.id])
     registerWindowHandlers(newWin)
     return { windowId: newWin.id }
   })
@@ -399,10 +399,17 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('tab:adopt', (e, ptyIds: string[]) => {
     const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) return
+    if (!win) return false
     for (const ptyId of ptyIds as string[]) {
       windowManager.routePty(ptyId, win.webContents.id)
     }
+    return true
+  })
+
+  ipcMain.on('tab:detached-ready', (e, tabId: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || typeof tabId !== 'string') return
+    windowManager.markDetachedTabReady(win.id, tabId)
   })
 
   // Live tab state sync: detached window pushes its tab list; we update routing and forward to others.

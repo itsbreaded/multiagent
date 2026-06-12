@@ -261,8 +261,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       sidebarOpen: false,
       sidebarSectionOpen: { [tabSidebarSectionId(tab.id)]: true },
     })
-    if (typeof window !== 'undefined' && window.ipc && ptyIds.length > 0) {
-      void window.ipc.invoke('tab:adopt', ptyIds)
+    if (typeof window !== 'undefined' && window.ipc) {
+      const adoption = ptyIds.length > 0
+        ? window.ipc.invoke('tab:adopt', ptyIds)
+        : Promise.resolve(true)
+      void adoption.then(() => {
+        window.ipc.send('tab:detached-ready', tab.id)
+      }).catch(() => {})
     }
   },
 

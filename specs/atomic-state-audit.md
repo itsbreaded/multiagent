@@ -17,6 +17,7 @@ This section tracks the current code state after the first implementation pass. 
 5. Cross-window pane transfer is ack-based: the target renderer commits `pane:received` and sends `pane:received-applied` before main moves PTY routing.
 6. `tab:absorb` now validates source and destination windows before releasing the source tab or moving PTYs.
 7. Detached tab ownership has sync versions, ownership generations, and stale-sync tombstones to prevent old detached sync from reclaiming returned/moved tabs.
+8. Detached tab ownership is kept pending during `tab:tear-off` and is promoted to routable/focusable ownership only after the detached renderer initializes and acks PTY adoption with `tab:detached-ready`.
 9. `window:focus-pane` re-checks tab ownership and ownership generation before focusing a remote window.
 10. Detached tab sync now uses a structured `TabStateSyncPayload` with `{ windowId, tabs, activeTabId, version }`. Main still accepts the legacy positional shape for compatibility.
 11. `zoomedPaneId` is cleared when switching/focusing a tab that does not contain the zoomed pane.
@@ -26,12 +27,10 @@ This section tracks the current code state after the first implementation pass. 
 
 ### Partially Addressed
 
-8. Detached window ownership is still recorded during `tab:tear-off` before the detached renderer explicitly acks init/adoption. The new generation/tombstone protection reduces stale routing fallout, but ownership is not yet hidden behind an init/adoption ack.
 13. Focus state is improved with separate pending and confirmed focus, but focus sync is still split across `pane:focus-changed` and `window:became-active`. It is not yet a single versioned `{ windowId, tabId, paneId, version }` focus target model broadcast by main.
 
 ### Remaining Follow-Up
 
-- Add detached-window init/adoption acknowledgement before a torn-off tab becomes routable/focusable.
 - Convert focus sync to one versioned focus target model instead of combining separate pane-focus and window-focus event streams.
 - Consider a full acked `tab:release-applied` / `tab:receive-applied` transaction for tab absorb. The current implementation validates source before routing and receives optimistically in the destination, but it is not a complete tab-transfer transaction.
 - Restore pane dragging between primary and detached windows. Detached panes shown in the primary sidebar are currently not draggable because `PaneRow` disables `draggable` whenever `onClickOverride` is present, and detached rows use `onClickOverride` for remote focus.

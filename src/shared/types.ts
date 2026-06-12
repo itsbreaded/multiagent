@@ -185,7 +185,7 @@ export interface IPCChannels {
   // Renderer asks main to create a detached window carrying a tab
   'tab:tear-off': (tabJson: string, ptyIds: string[], screenX: number, screenY: number) => { windowId: number }
   // New window tells main it owns these PTY IDs (routes data here)
-  'tab:adopt': (ptyIds: string[]) => void
+  'tab:adopt': (ptyIds: string[]) => boolean
   // Renderer asks main to absorb a tab dragged from sourceWindowId
   'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => boolean
   // Main pushes to source window: remove the tab that was absorbed by another window
@@ -262,6 +262,7 @@ export type EventChannels =
 export type SendChannels =
   | 'pty:write'
   | 'tab:state-sync'
+  | 'tab:detached-ready'
   | 'pane:focus-changed'
   | 'pane:received-applied'
   | 'pane:focus-remote-applied'
