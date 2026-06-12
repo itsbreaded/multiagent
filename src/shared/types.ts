@@ -182,7 +182,7 @@ export interface IPCChannels {
   // Renderer asks main to absorb a tab dragged from sourceWindowId
   'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => void
   // Main pushes to source window: remove the tab that was absorbed by another window
-  'tab:release': (tabId: string) => void
+  'tab:release': (tabId: string, ownerWindowId?: number) => void
 
   // --- Multi-window: live sync & pane transfer ---
   // Detached window pushes its full tab list to main; main forwards to all other windows
@@ -197,7 +197,7 @@ export interface IPCChannels {
   // Renderer asks main to focus the window owning a tab AND activate a specific pane
   'window:focus-pane': (tabId: string, paneId: string) => boolean
   // Main tells a window's renderer to activate a tab/pane (cross-window pane click)
-  'pane:focus-remote': (tabId: string, paneId: string) => void
+  'pane:focus-remote': (tabId: string, paneId: string, requestId?: string) => void
 
 }
 
@@ -256,6 +256,7 @@ export type SendChannels =
   | 'pty:write'
   | 'tab:state-sync'
   | 'pane:focus-changed'
+  | 'pane:focus-remote-applied'
 
 export interface IpcBridge {
   invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>

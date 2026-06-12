@@ -3,6 +3,17 @@ import type { AgentKind, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDire
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
+let pendingRemoteFocusWindowId: number | null = null
+let pendingRemoteFocusTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearPendingRemoteFocus(): void {
+  pendingRemoteFocusWindowId = null
+  if (pendingRemoteFocusTimer !== null) {
+    clearTimeout(pendingRemoteFocusTimer)
+    pendingRemoteFocusTimer = null
+  }
+}
+
 function uuid(): string {
   return crypto.randomUUID()
 }
@@ -140,7 +151,7 @@ interface PanesStore {
   activeWindowId: number | null
   initDetached: (tab: Tab, ptyIds: string[]) => void
   receiveTab: (tab: Tab, atIndex?: number) => void
-  detachTab: (tabId: string) => void
+  detachTab: (tabId: string, ownerWindowId?: number) => void
   returnTab: (tabId: string) => void
   removeTabLocally: (tabId: string) => void
   syncDetachedTabs: (windowId: number, tabs: Tab[], activeTabId?: string) => void
@@ -180,6 +191,8 @@ interface PanesStore {
 
   // Pane operations
   focusPane: (paneId: string) => void
+  focusPaneInTab: (tabId: string, paneId: string) => void
+  focusDetachedPaneOptimistically: (windowId: number, tabId: string, paneId?: string) => void
   splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string, agentKind?: AgentKind) => Promise<void>
   closePane: (paneId: string) => void
   zoomPane: (paneId: string) => void
@@ -281,7 +294,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  detachTab: (tabId) => {
+  detachTab: (tabId, ownerWindowId) => {
     // Mark as detached — keeps the tab in the store for sidebar navigation.
     // Do NOT dispose xterms: they stay in the off-screen registry so that when
     // the tab returns the terminals reattach with their full scrollback intact.
@@ -291,7 +304,21 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const activeTabId = s.activeTabId === tabId
         ? (nonDetached[nonDetached.length - 1]?.id ?? '')
         : s.activeTabId
-      return { tabs, activeTabId }
+      if (ownerWindowId === undefined) return { tabs, activeTabId }
+      const key = String(ownerWindowId)
+      const detachedWindowTabIds = Object.fromEntries(
+        Object.entries(s.detachedWindowTabIds).map(([wid, ids]) => [
+          wid,
+          wid === key ? ids : ids.filter((id) => id !== tabId),
+        ])
+      )
+      detachedWindowTabIds[key] = Array.from(new Set([...(detachedWindowTabIds[key] ?? []), tabId]))
+      return {
+        tabs,
+        activeTabId,
+        detachedWindowTabIds,
+        detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [key]: tabId },
+      }
     })
   },
 
@@ -590,6 +617,35 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
       window.ipc.send('pane:focus-changed', windowId, activeTabId, paneId)
     }
+  },
+
+  focusPaneInTab: (tabId, paneId) => {
+    const { isDetachedWindow, windowId } = get()
+    set((s) => ({
+      activeTabId: tabId,
+      tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
+    }))
+    if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
+      window.ipc.send('pane:focus-changed', windowId, tabId, paneId)
+    }
+  },
+
+  focusDetachedPaneOptimistically: (windowId, tabId, paneId) => {
+    pendingRemoteFocusWindowId = windowId
+    if (pendingRemoteFocusTimer !== null) clearTimeout(pendingRemoteFocusTimer)
+    pendingRemoteFocusTimer = setTimeout(() => {
+      pendingRemoteFocusWindowId = null
+      pendingRemoteFocusTimer = null
+    }, 1000)
+
+    const key = String(windowId)
+    set((s) => ({
+      activeWindowId: windowId,
+      detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [key]: tabId },
+      tabs: paneId
+        ? s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t)
+        : s.tabs,
+    }))
   },
 
   splitPane: async (paneId, direction, paneType, cwdOverride, agentKind) => {
@@ -1172,13 +1228,13 @@ if (typeof window !== 'undefined' && window.ipc) {
   // Main tells this window to release a tab (it moved to another window).
   // In a detached window: just remove it locally (PTYs stay alive in the destination).
   // In the primary window: mark it as detached so the sidebar still shows it.
-  window.ipc.on('tab:release', (tabId: unknown) => {
+  window.ipc.on('tab:release', (tabId: unknown, ownerWindowId: unknown) => {
     if (typeof tabId !== 'string') return
     const store = usePanesStore.getState()
     if (store.isDetachedWindow) {
       store.removeTabLocally(tabId)
     } else {
-      store.detachTab(tabId)
+      store.detachTab(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined)
     }
   })
 
@@ -1200,11 +1256,17 @@ if (typeof window !== 'undefined' && window.ipc) {
   })
 
   // Cross-window pane click: activate the correct tab and pane in this window's renderer.
-  window.ipc.on('pane:focus-remote', (tabId: unknown, paneId: unknown) => {
+  window.ipc.on('pane:focus-remote', (tabId: unknown, paneId: unknown, requestId: unknown) => {
     if (typeof tabId !== 'string' || typeof paneId !== 'string') return
     const store = usePanesStore.getState()
-    store.setActiveTab(tabId)
-    store.focusPane(paneId)
+    store.focusPaneInTab(tabId, paneId)
+    if (typeof requestId === 'string') {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.ipc.send('pane:focus-remote-applied', requestId)
+        })
+      })
+    }
   })
 
   // Immediate focus update from a detached window — updates the synced tab's
@@ -1221,7 +1283,18 @@ if (typeof window !== 'undefined' && window.ipc) {
 
   // Track which OS window currently has focus — used to show exactly one focused pane.
   window.ipc.on('window:became-active', (winId: unknown) => {
-    if (typeof winId === 'number') usePanesStore.setState({ activeWindowId: winId })
+    if (typeof winId !== 'number') return
+    const { windowId } = usePanesStore.getState()
+    if (pendingRemoteFocusWindowId !== null) {
+      if (winId === pendingRemoteFocusWindowId) {
+        clearPendingRemoteFocus()
+      } else if (winId === windowId) {
+        return
+      } else {
+        clearPendingRemoteFocus()
+      }
+    }
+    usePanesStore.setState({ activeWindowId: winId })
   })
 
   // Live sync from a detached window — only the primary window processes this.

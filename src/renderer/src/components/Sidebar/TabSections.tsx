@@ -29,6 +29,7 @@ export function TabSections(): JSX.Element {
   const detachedWindowActiveTabIds = usePanesStore((s) => s.detachedWindowActiveTabIds)
   const windowId = usePanesStore((s) => s.windowId)
   const activeWindowId = usePanesStore((s) => s.activeWindowId)
+  const focusDetachedPaneOptimistically = usePanesStore((s) => s.focusDetachedPaneOptimistically)
   // Local panes are highlighted only when this window has OS focus (or focus is unknown).
   const localWindowActive = activeWindowId === null || activeWindowId === windowId
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
@@ -78,9 +79,12 @@ export function TabSections(): JSX.Element {
         // Header/pane clicks focus the external window.
         // Pane drag onto header transfers the pane cross-window.
         if (isDetached) {
-          const focusTab = () => window.ipc?.invoke('window:focus-for-tab', tab.id).catch(() => {})
           const ownerWindowId = Object.entries(detachedWindowTabIds).find(([, ids]) => ids.includes(tab.id))?.[0]
           const ownerWindowNumId = ownerWindowId !== undefined ? parseInt(ownerWindowId, 10) : undefined
+          const focusTab = () => {
+            if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id)
+            window.ipc?.invoke('window:focus-for-tab', tab.id).catch(() => {})
+          }
           const isOwnerWindowActive = ownerWindowNumId !== undefined && activeWindowId === ownerWindowNumId
           const isTabActiveInWindow = ownerWindowId ? detachedWindowActiveTabIds[ownerWindowId] === tab.id : leaves.length > 0
           return (
@@ -128,7 +132,13 @@ export function TabSections(): JSX.Element {
                   tab={tab}
                   isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === tab.focusedPaneId}
                   sessions={sessions}
-                  onClickOverride={() => window.ipc?.invoke('window:focus-pane', tab.id, pane.id).catch(() => {})}
+                  onMouseDownOverride={() => {
+                    if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id, pane.id)
+                  }}
+                  onClickOverride={() => {
+                    if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id, pane.id)
+                    window.ipc?.invoke('window:focus-pane', tab.id, pane.id).catch(() => {})
+                  }}
                 />
               ))}
             </SidebarSection>
@@ -220,12 +230,14 @@ function PaneRow({
   tab,
   isFocused,
   sessions,
+  onMouseDownOverride,
   onClickOverride,
 }: {
   pane: PaneLeaf
   tab: Tab
   isFocused: boolean
   sessions: Session[]
+  onMouseDownOverride?: () => void
   onClickOverride?: () => void
 }): JSX.Element {
   const [hovered, setHovered] = useState(false)
@@ -300,6 +312,7 @@ function PaneRow({
           setDropActive(false)
           setHovered(false)
         }}
+        onMouseDown={() => { if (!renaming) onMouseDownOverride?.() }}
         onClick={() => { if (!renaming) { if (onClickOverride) { onClickOverride() } else { setActiveTab(tab.id); focusPane(pane.id) } } }}
         onDoubleClick={() => startRename()}
         onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}

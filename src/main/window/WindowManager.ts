@@ -23,6 +23,7 @@ class WindowManager {
   private detachedWindowTabs = new Map<number, string[]>()
   /** Maps tab id → detached window id (for window:focus-for-tab) */
   private tabToWindowId = new Map<string, number>()
+  private detachedWindowIds = new Set<number>()
 
   private preloadPath: string | null = null
   private rendererUrl: string | null = null
@@ -60,6 +61,7 @@ class WindowManager {
       }
       this.detachedWindowTabs.delete(id)
     }
+    this.detachedWindowIds.delete(id)
 
     this.windows.delete(id)
     for (const [ptyId, wcId] of this.ptyToWebContentsId) {
@@ -101,6 +103,10 @@ class WindowManager {
     for (const id of tabIds) {
       this.tabToWindowId.set(id, windowId)
     }
+  }
+
+  isDetachedWindow(windowId: number): boolean {
+    return this.detachedWindowIds.has(windowId)
   }
 
   /** Returns the window ID that currently owns a tab, or null. */
@@ -210,6 +216,7 @@ class WindowManager {
     win.once('ready-to-show', () => win.show())
 
     this.register(win)
+    this.detachedWindowIds.add(win.id)
     this.startMoveTracking(win)
 
     if (this.onWindowCreated) {

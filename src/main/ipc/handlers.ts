@@ -23,6 +23,7 @@ try {
 }
 
 const COALESCE_DELAY_MS = 5
+let remoteFocusRequestSeq = 0
 const GIT_BRANCH_CACHE_MS = 10_000
 
 interface CoalesceEntry {
@@ -366,9 +367,27 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     if (winId === null) return false
     const win = windowManager.getWindowById(winId)
     if (!win || win.isDestroyed()) return false
-    if (win.isMinimized()) win.restore()
-    win.focus()
-    win.webContents.send('pane:focus-remote', tabId, paneId)
+
+    const requestId = `${Date.now()}:${++remoteFocusRequestSeq}`
+    let settled = false
+    const focusTarget = (): void => {
+      if (settled) return
+      settled = true
+      ipcMain.removeListener('pane:focus-remote-applied', onApplied)
+      if (win.isDestroyed()) return
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    }
+    const onApplied = (event: Electron.IpcMainEvent, ackRequestId: unknown): void => {
+      if (ackRequestId !== requestId) return
+      const ackWin = BrowserWindow.fromWebContents(event.sender)
+      if (!ackWin || ackWin.id !== win.id) return
+      focusTarget()
+    }
+
+    ipcMain.on('pane:focus-remote-applied', onApplied)
+    win.webContents.send('pane:focus-remote', tabId, paneId, requestId)
+    setTimeout(focusTarget, 1000)
     return true
   })
 
@@ -424,6 +443,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ipcMain.handle('tab:absorb', (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
     const toWin = BrowserWindow.fromWebContents(e.sender)
     if (!toWin) return
+    let tab: Tab
+    try {
+      tab = JSON.parse(tabJson) as Tab
+    } catch {
+      return
+    }
 
     for (const ptyId of ptyIds as string[]) {
       windowManager.transferPty(ptyId, toWin)
@@ -432,13 +457,15 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     // Tell source window to release the tab
     const sourceWin = windowManager.getWindowById(sourceWindowId)
     if (sourceWin && !sourceWin.isDestroyed()) {
-      try {
-        const tab = JSON.parse(tabJson) as Tab
-        // Unrecord before sending release so that unregister() won't fire tab:return
-        // if the source window closes immediately after losing its last tab.
-        windowManager.unrecordTab(tab.id)
+      // Unrecord before sending release so that unregister() won't fire tab:return
+      // if the source window closes immediately after losing its last tab.
+      windowManager.unrecordTab(tab.id)
+      if (windowManager.isDetachedWindow(toWin.id)) {
+        windowManager.recordDetachedTab(toWin.id, [tab.id])
+        sourceWin.webContents.send('tab:release', tab.id, toWin.id)
+      } else {
         sourceWin.webContents.send('tab:release', tab.id)
-      } catch { /* malformed JSON */ }
+      }
     }
   })
 

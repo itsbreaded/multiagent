@@ -170,15 +170,18 @@ function tearOffTab(tabId: string, tabs: Tab[]): void {
   const cx = window.screenX + Math.floor(window.outerWidth / 2)
   const cy = window.screenY + 40
   window.ipc.invoke('tab:tear-off', JSON.stringify(tab), ptyIds, cx, cy)
-    .then(() => {
+    .then((result) => {
       const store = usePanesStore.getState()
+      const ownerWindowId = typeof result === 'object' && result !== null && 'windowId' in result && typeof result.windowId === 'number'
+        ? result.windowId
+        : undefined
       // In a detached window the tab moves to a brand-new window — remove it
       // locally rather than marking it as detached (which would corrupt the sync).
       // In the primary window, keep it as detached so the sidebar can show it.
       if (store.isDetachedWindow) {
         store.removeTabLocally(tabId)
       } else {
-        store.detachTab(tabId)
+        store.detachTab(tabId, ownerWindowId)
       }
     })
     .catch(console.error)
@@ -502,11 +505,14 @@ export function TabBar(): JSX.Element {
                   const ptyIds = collectPtyIds(draggedTab)
                   resetDragState()
                   window.ipc.invoke('tab:tear-off', JSON.stringify(draggedTab), ptyIds, e.screenX, e.screenY)
-                    .then(() => {
+                    .then((result) => {
+                      const ownerWindowId = typeof result === 'object' && result !== null && 'windowId' in result && typeof result.windowId === 'number'
+                        ? result.windowId
+                        : undefined
                       if (isDetachedWindow) {
                         usePanesStore.getState().removeTabLocally(draggedTab.id)
                       } else {
-                        detachTab(draggedTab.id)
+                        detachTab(draggedTab.id, ownerWindowId)
                       }
                     })
                     .catch(console.error)
