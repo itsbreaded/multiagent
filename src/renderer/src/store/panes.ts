@@ -134,6 +134,12 @@ export function tabSidebarSectionId(tabId: string): string {
 interface PanesStore {
   tabs: Tab[]
   activeTabId: string
+  windowId: number | null
+  setWindowId: (id: number) => void
+  isDetachedWindow: boolean
+  initDetached: (tab: Tab, ptyIds: string[]) => void
+  receiveTab: (tab: Tab) => void
+  detachTab: (tabId: string) => void
   zoomedPaneId: string | null
   sidebarOpen: boolean
   sidebarWidth: number
@@ -212,6 +218,45 @@ interface PanesStore {
 export const usePanesStore = create<PanesStore>((set, get) => ({
   tabs: [],
   activeTabId: '',
+  windowId: null,
+  setWindowId: (id) => set({ windowId: id }),
+  isDetachedWindow: false,
+
+  initDetached: (tab, ptyIds) => {
+    // The tab already carries the correct ptyId on each leaf node.
+    // Just set state and tell main to route PTY output to this window.
+    set({
+      tabs: [tab],
+      activeTabId: tab.id,
+      isDetachedWindow: true,
+      sidebarSectionOpen: { [tabSidebarSectionId(tab.id)]: true },
+    })
+    if (typeof window !== 'undefined' && window.ipc && ptyIds.length > 0) {
+      void window.ipc.invoke('tab:adopt', ptyIds)
+    }
+  },
+
+  receiveTab: (tab) => {
+    set((s) => ({
+      tabs: [...s.tabs, tab],
+      activeTabId: tab.id,
+      sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
+    }))
+  },
+
+  detachTab: (tabId) => {
+    // Remove tab without killing PTYs (they continue in the target window)
+    const tab = get().tabs.find((t) => t.id === tabId)
+    if (tab?.rootNode) {
+      collectLeafIds(tab.rootNode).forEach((id) => xtermRegistry.dispose(id))
+    }
+    set((s) => {
+      const tabs = s.tabs.filter((t) => t.id !== tabId)
+      const activeTabId = s.activeTabId === tabId ? (tabs[tabs.length - 1]?.id ?? '') : s.activeTabId
+      const { [tabSidebarSectionId(tabId)]: _dropped, ...sidebarSectionOpen } = s.sidebarSectionOpen
+      return { tabs, activeTabId, sidebarSectionOpen }
+    })
+  },
   zoomedPaneId: null,
   sidebarOpen: true,
   sidebarWidth: 220,
@@ -920,7 +965,7 @@ export function normalizeCwdKey(cwd: string): string {
   return cwd.replace(/\//g, '\\').toLowerCase()
 }
 
-// Wire up the pty:cwd event once at module load so CWD changes update pane headers.
+// Wire up module-level IPC listeners once at module load.
 if (typeof window !== 'undefined' && window.ipc) {
   window.ipc.on('pty:cwd', (ptyId: unknown, cwd: unknown) => {
     if (typeof ptyId === 'string' && typeof cwd === 'string') {
@@ -942,6 +987,13 @@ if (typeof window !== 'undefined' && window.ipc) {
         store.setSessionId(pane.id, sessionId)
         break
       }
+    }
+  })
+
+  // Main tells this window to release a tab that was absorbed by another window.
+  window.ipc.on('tab:release', (tabId: unknown) => {
+    if (typeof tabId === 'string') {
+      usePanesStore.getState().detachTab(tabId)
     }
   })
 }

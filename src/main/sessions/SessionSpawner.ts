@@ -97,10 +97,11 @@ function ensureCodexWatcher(sessionsDir: string): void {
 export class SessionSpawner {
   constructor(private ptyManager: PtyManager, private mainWindow: BrowserWindow) {}
 
-  async spawnNew(agentKind: AgentKind, cwd: string): Promise<{ ptyId: string; sessionId: string | null }> {
+  async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null }> {
+    const targetWin = senderWin ?? this.mainWindow
     const ptyId = this.ptyManager.createAgent(cwd, agentKind)
     const startedAt = Date.now()
-    this._watchForNewSession(agentKind, ptyId, cwd, startedAt)
+    this._watchForNewSession(agentKind, ptyId, cwd, startedAt, targetWin)
     this._writeWhenPromptReady(ptyId, `${newSessionCommand(agentKind)}\r`)
     return { ptyId, sessionId: null }
   }
@@ -111,9 +112,9 @@ export class SessionSpawner {
     return { ptyId }
   }
 
-  private _watchForNewSession(agentKind: AgentKind, ptyId: string, cwd: string, startedAt: number): void {
+  private _watchForNewSession(agentKind: AgentKind, ptyId: string, cwd: string, startedAt: number, targetWin: BrowserWindow): void {
     if (agentKind === 'codex') {
-      this._watchForNewCodexSession(ptyId, cwd, startedAt)
+      this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin)
       return
     }
 
@@ -122,7 +123,6 @@ export class SessionSpawner {
 
     ensureSharedWatcher(projectsDir)
 
-    const mainWindow = this.mainWindow
     let cancelled = false
 
     const cleanup = () => {
@@ -143,17 +143,16 @@ export class SessionSpawner {
 
     const timeout = setTimeout(cleanup, 60_000)
 
-    const pending: PendingDetection = { ptyId, mainWindow, cleanup }
+    const pending: PendingDetection = { ptyId, mainWindow: targetWin, cleanup }
     pendingQueue.push(pending)
   }
 
-  private _watchForNewCodexSession(ptyId: string, cwd: string, startedAt: number): void {
+  private _watchForNewCodexSession(ptyId: string, cwd: string, startedAt: number, targetWin: BrowserWindow): void {
     const sessionsDir = codexSessionsDir()
     fs.mkdirSync(sessionsDir, { recursive: true })
 
     ensureCodexWatcher(sessionsDir)
 
-    const mainWindow = this.mainWindow
     let cancelled = false
     let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -188,13 +187,15 @@ export class SessionSpawner {
         if (!match) return
 
         cleanup()
-        mainWindow.webContents.send('session:detected', ptyId, 'codex', match.sessionId)
+        if (!targetWin.isDestroyed()) {
+          targetWin.webContents.send('session:detected', ptyId, 'codex', match.sessionId)
+        }
       })().catch(() => {})
     }, 1_000)
 
     const timeout = setTimeout(cleanup, 60_000)
 
-    const pending: PendingDetection = { ptyId, mainWindow, cleanup }
+    const pending: PendingDetection = { ptyId, mainWindow: targetWin, cleanup }
     codexPendingQueue.push(pending)
   }
 

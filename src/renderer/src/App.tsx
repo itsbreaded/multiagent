@@ -5,6 +5,7 @@ import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
 import { SettingsPanel } from './components/SettingsPanel'
+import { SnapOverlay } from './components/SnapOverlay'
 import { usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
@@ -77,6 +78,7 @@ export default function App(): JSX.Element {
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
+  const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
 
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
@@ -93,28 +95,56 @@ export default function App(): JSX.Element {
     }).catch(() => {})
   }, [setVsCodeAvailable])
 
-  // Restore the saved layout on startup without prompting.
+  // Fetch this window's ID from main so the tab bar can use it for drag-out.
+  const setWindowId = usePanesStore((s) => s.setWindowId)
+  useEffect(() => {
+    window.ipc.invoke('window:get-id').then((id) => {
+      if (typeof id === 'number') setWindowId(id)
+    }).catch(() => {})
+  }, [setWindowId])
+
+  // On startup: check if this is a detached window; if so, skip layout file restore.
   useEffect(() => {
     if (restoreStartedRef.current) return
     restoreStartedRef.current = true
 
-    window.ipc.invoke('layout:load').then((saved) => {
-      const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
-      if (data?.tabs?.length) {
-        void usePanesStore.getState().applyLayout(data)
+    window.ipc.invoke('window:get-init-data').then((initData) => {
+      if (initData && (initData as { mode: string }).mode === 'detached') {
+        const { tab, ptyIds } = initData as { tab: Tab; ptyIds: string[] }
+        usePanesStore.getState().initDetached(tab, ptyIds)
+        setLayoutReady(true)
+        return
       }
-    }).catch(() => {}).finally(() => setLayoutReady(true))
+
+      // Primary window: restore saved layout as before.
+      return window.ipc.invoke('layout:load').then((saved) => {
+        const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
+        if (data?.tabs?.length) {
+          void usePanesStore.getState().applyLayout(data)
+        }
+      }).catch(() => {})
+    }).catch(() => {
+      // Fallback: treat as primary window
+      window.ipc.invoke('layout:load').then((saved) => {
+        const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
+        if (data?.tabs?.length) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          void usePanesStore.getState().applyLayout(data as any)
+        }
+      }).catch(() => {})
+    }).finally(() => setLayoutReady(true))
   }, [])
 
-  // Debounced layout save whenever tabs or sidebar state changes
+  // Debounced layout save — only for the primary window.
   useEffect(() => {
     if (!layoutReady) return
     if (!tabs.length) return
+    if (isDetachedWindow) return  // Detached windows don't overwrite the primary layout file
     const timer = setTimeout(() => {
       window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [layoutReady, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes])
+  }, [layoutReady, isDetachedWindow, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes])
 
   return (
     <div
@@ -159,6 +189,7 @@ export default function App(): JSX.Element {
       {sessionBrowserOpen && <SessionBrowser />}
       {commandPaletteOpen && <CommandPalette />}
       {settingsOpen && <SettingsPanel />}
+      <SnapOverlay />
     </div>
   )
 }

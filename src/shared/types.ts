@@ -166,6 +166,23 @@ export interface IPCChannels {
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
   'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
 
+  // --- Multi-window: window identity / init ---
+  'window:get-id': () => number | null
+  'window:get-init-data': () => { mode: 'detached'; tab: Tab; ptyIds: string[] } | null
+  'window:get-all-bounds': () => { id: number; x: number; y: number; width: number; height: number }[]
+  'window:snap-apply': (targetWindowId: number, side: 'left' | 'right' | 'top' | 'bottom') => void
+  'window:snap-zones': (zones: { targetWindowId: number; side: string; x: number; y: number; width: number; height: number }[]) => void
+
+  // --- Multi-window: tab transfer ---
+  // Renderer asks main to create a detached window carrying a tab
+  'tab:tear-off': (tabJson: string, ptyIds: string[], screenX: number, screenY: number) => { windowId: number }
+  // New window tells main it owns these PTY IDs (routes data here)
+  'tab:adopt': (ptyIds: string[]) => void
+  // Renderer asks main to absorb a tab dragged from sourceWindowId
+  'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => void
+  // Main pushes to source window: remove the tab that was absorbed by another window
+  'tab:release': (tabId: string) => void
+
 }
 
 // Helper type for extracting invoke vs event channels
@@ -191,12 +208,21 @@ export type InvokeChannels =
   | 'mcp:get-settings'
   | 'mcp:save-settings'
   | 'mcp:probe-stdio'
+  | 'window:get-id'
+  | 'window:get-init-data'
+  | 'window:get-all-bounds'
+  | 'window:snap-apply'
+  | 'tab:tear-off'
+  | 'tab:adopt'
+  | 'tab:absorb'
 
 export type EventChannels =
   | 'sessions:updated'
   | 'pty:data'
   | 'pty:cwd'
   | 'session:detected'
+  | 'window:snap-zones'
+  | 'tab:release'
 
 export type SendChannels =
   | 'pty:write'

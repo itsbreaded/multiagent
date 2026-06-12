@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc/handlers'
 import { BrowserViewManager } from './browser/BrowserViewManager'
 import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
+import { windowManager } from './window/WindowManager'
 
 interface WindowState {
   x: number
@@ -84,7 +85,7 @@ async function createWindow(): Promise<void> {
   })
 
   mainWindow.on('close', () => saveWindowState(mainWindow))
-  mainWindow.on('closed', () => app.quit())
+  // Do NOT force-quit on closed — rely on window-all-closed below so secondary windows can outlive the main one.
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     openExternalUrl(details.url)
@@ -100,8 +101,17 @@ async function createWindow(): Promise<void> {
   })
 
   // Wire IPC handlers (sessions, PTY, shell, layout)
-  const cleanup = await registerIpcHandlers(mainWindow)
+  const { cleanup, registerWindowHandlers } = await registerIpcHandlers(mainWindow)
   cleanupFn = cleanup ?? null
+
+  // Configure WindowManager so it can create detached windows with the correct preload/renderer.
+  windowManager.configure(
+    join(__dirname, '../preload/index.js'),
+    is.dev && process.env['ELECTRON_RENDERER_URL'] ? process.env['ELECTRON_RENDERER_URL'] : null,
+    !is.dev ? join(__dirname, '../renderer/index.html') : null,
+    registerWindowHandlers
+  )
+  windowManager.startMoveTracking(mainWindow)
 
   // Set up browser window (MCP-controlled separate window)
   browserViewManager = new BrowserViewManager()

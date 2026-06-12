@@ -11,6 +11,15 @@ import searchIcon from '../../assets/search.png'
 import commandPaletteIcon from '../../assets/commandpallete.png'
 import settingsIcon from '../../assets/settings.png'
 
+const TAB_DRAG_MIME = 'application/x-multiagent-tab'
+
+function collectPtyIds(tab: Tab): string[] {
+  if (!tab.rootNode) return []
+  return collectLeaves(tab.rootNode)
+    .map((l) => l.ptyId)
+    .filter((id): id is string => typeof id === 'string')
+}
+
 // --- Sub-components ---
 
 function BarButton({
@@ -143,6 +152,8 @@ function ContextMenu({
       {item('Rename Tab', () => { onRename(menu.tabId); onClose() })}
       {item(defaultDirLabel, () => { onChangeDefaultDir(menu.tabId); onClose() })}
       {separator()}
+      {item('Move Tab to New Window', () => { tearOffTab(menu.tabId, tabs); onClose() })}
+      {separator()}
       {item('Close Tab', () => { closeTab(menu.tabId); onClose() })}
       {item('Close Other Tabs', () => { closeOtherTabs(menu.tabId); onClose() }, !hasOthers)}
       {item('Close Tabs to the Right', () => { closeTabsToRight(menu.tabId); onClose() }, !hasRight)}
@@ -152,11 +163,23 @@ function ContextMenu({
   )
 }
 
+function tearOffTab(tabId: string, tabs: Tab[]): void {
+  const tab = tabs.find((t) => t.id === tabId)
+  if (!tab) return
+  const ptyIds = collectPtyIds(tab)
+  const cx = window.screenX + Math.floor(window.outerWidth / 2)
+  const cy = window.screenY + 40
+  window.ipc.invoke('tab:tear-off', JSON.stringify(tab), ptyIds, cx, cy)
+    .then(() => { usePanesStore.getState().detachTab(tabId) })
+    .catch(console.error)
+}
+
 // --- TabBar ---
 
 export function TabBar(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const windowId = usePanesStore((s) => s.windowId)
   const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const closeTab = usePanesStore((s) => s.closeTab)
   const addTab = usePanesStore((s) => s.addTab)
@@ -175,11 +198,13 @@ export function TabBar(): JSX.Element {
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
+  const receiveTab = usePanesStore((s) => s.receiveTab)
+  const detachTab = usePanesStore((s) => s.detachTab)
   const sessions = useSessionsStore((s) => s.sessions)
 
   const labels = computeLabels(tabs, sessions)
 
-  // Drag reorder
+  // Intra-window tab reorder state
   const dragIndex = useRef<number | null>(null)
   const dragSideRef = useRef<'left' | 'right' | null>(null)
   const hoverActivateTimer = useRef<number | null>(null)
@@ -188,6 +213,13 @@ export function TabBar(): JSX.Element {
   const [dragSide, setDragSide] = useState<'left' | 'right' | null>(null)
   const [paneDropTabId, setPaneDropTabId] = useState<string | null>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+
+  // Track whether the current drag was handled by a drop inside this window's tab bar
+  const droppedInsideRef = useRef(false)
+  // Cache all window bounds fetched on drag start for use in dragend
+  const allWindowBoundsRef = useRef<{ id: number; x: number; y: number; width: number; height: number }[]>([])
+  // The tab being dragged (for tear-off)
+  const draggingTabRef = useRef<Tab | null>(null)
 
   useEffect(() => {
     const el = tabRefs.current.get(activeTabId)
@@ -282,6 +314,38 @@ export function TabBar(): JSX.Element {
     }, 500)
   }
 
+  function resetDragState(): void {
+    dragIndex.current = null
+    dragSideRef.current = null
+    draggingTabRef.current = null
+    droppedInsideRef.current = false
+    setDragOverIndex(null)
+    setDragSide(null)
+    clearPaneDragHover()
+  }
+
+  // Handle a cross-window tab drop onto this window's tab bar.
+  function handleCrossWindowDrop(e: React.DragEvent): boolean {
+    const data = e.dataTransfer.getData(TAB_DRAG_MIME)
+    if (!data) return false
+    try {
+      const { tab, ptyIds, sourceWindowId } = JSON.parse(data) as {
+        tab: Tab
+        ptyIds: string[]
+        sourceWindowId: number | null
+      }
+      if (sourceWindowId === windowId) return false // Same window — let normal reorder handle it
+      e.preventDefault()
+      e.stopPropagation()
+      window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
+        .then(() => { receiveTab(tab) })
+        .catch(console.error)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   return (
     <div
       style={{
@@ -305,7 +369,7 @@ export function TabBar(): JSX.Element {
 
       <div style={{ width: 1, height: 20, backgroundColor: '#2a2b2e', flexShrink: 0 }} />
 
-      {/* Tab strip */}
+      {/* Tab strip — also accepts cross-window tab drops */}
       <div
         className="tab-strip"
         style={{
@@ -317,6 +381,15 @@ export function TabBar(): JSX.Element {
           overflowY: 'hidden',
           paddingLeft: 6,
           paddingRight: 6,
+        }}
+        onDragOver={(e) => {
+          // Accept cross-window tab drops on the strip background
+          if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+            e.preventDefault()
+          }
+        }}
+        onDrop={(e) => {
+          handleCrossWindowDrop(e)
         }}
       >
         {tabs.map((tab, idx) => {
@@ -330,7 +403,21 @@ export function TabBar(): JSX.Element {
               key={tab.id}
               ref={(el) => { if (el) tabRefs.current.set(tab.id, el); else tabRefs.current.delete(tab.id) }}
               draggable={!isRenaming}
-              onDragStart={() => { dragIndex.current = idx }}
+              onMouseDown={() => {
+                // Pre-fetch all window bounds before drag starts (async, completes before dragend fires)
+                window.ipc.invoke('window:get-all-bounds')
+                  .then((b) => { allWindowBoundsRef.current = b as typeof allWindowBoundsRef.current })
+                  .catch(() => {})
+              }}
+              onDragStart={(e) => {
+                dragIndex.current = idx
+                draggingTabRef.current = tab
+                droppedInsideRef.current = false
+                // Embed tab data for cross-window drops
+                const ptyIds = collectPtyIds(tab)
+                e.dataTransfer.setData(TAB_DRAG_MIME, JSON.stringify({ tab, ptyIds, sourceWindowId: windowId }))
+                e.dataTransfer.effectAllowed = 'move'
+              }}
               onDragOver={(e) => {
                 if (draggedPaneId) {
                   e.preventDefault()
@@ -339,7 +426,11 @@ export function TabBar(): JSX.Element {
                   schedulePaneDragActivation(tab.id)
                   return
                 }
-                e.preventDefault()
+                // Accept cross-window tab drop
+                if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }
                 const rect = e.currentTarget.getBoundingClientRect()
                 const side = e.clientX - rect.left < rect.width / 2 ? 'left' : 'right'
                 dragSideRef.current = side
@@ -353,8 +444,64 @@ export function TabBar(): JSX.Element {
                 }
                 setDragOverIndex(null); setDragSide(null)
               }}
-              onDragEnd={() => { dragIndex.current = null; dragSideRef.current = null; setDragOverIndex(null); setDragSide(null); clearPaneDragHover() }}
+              onDragEnd={(e) => {
+                const draggedTab = draggingTabRef.current
+
+                if (droppedInsideRef.current) {
+                  resetDragState()
+                  return
+                }
+
+                // Check if the drop landed outside this window
+                const winX = window.screenX
+                const winY = window.screenY
+                const winW = window.outerWidth
+                const winH = window.outerHeight
+                const insideThis = (
+                  e.screenX >= winX && e.screenX <= winX + winW &&
+                  e.screenY >= winY && e.screenY <= winY + winH
+                )
+
+                if (insideThis) {
+                  // Dropped inside this window but not on a drop target — cancel
+                  resetDragState()
+                  return
+                }
+
+                // Check if dropped on another app window
+                const insideOtherWindow = allWindowBoundsRef.current
+                  .filter((b) => b.id !== windowId)
+                  .some((b) =>
+                    e.screenX >= b.x && e.screenX <= b.x + b.width &&
+                    e.screenY >= b.y && e.screenY <= b.y + b.height
+                  )
+
+                if (insideOtherWindow) {
+                  // The target window's onDrop will call tab:absorb which triggers tab:release on us.
+                  resetDragState()
+                  return
+                }
+
+                // Dropped outside all windows — tear off into a new window
+                if (draggedTab) {
+                  const ptyIds = collectPtyIds(draggedTab)
+                  resetDragState()
+                  window.ipc.invoke('tab:tear-off', JSON.stringify(draggedTab), ptyIds, e.screenX, e.screenY)
+                    .then(() => { detachTab(draggedTab.id) })
+                    .catch(console.error)
+                } else {
+                  resetDragState()
+                }
+              }}
               onDrop={(e) => {
+                // Handle cross-window drop first
+                if (handleCrossWindowDrop(e)) {
+                  droppedInsideRef.current = true
+                  return
+                }
+
+                droppedInsideRef.current = true
+
                 if (draggedPaneId) {
                   e.preventDefault()
                   e.stopPropagation()
@@ -538,7 +685,8 @@ export function TabBar(): JSX.Element {
         title="Settings"
         active={settingsOpen}
       >
-        <img src={settingsIcon} alt="Settings" style={{ width: 16, height: 16, display: 'block' }} />      </BarButton>
+        <img src={settingsIcon} alt="Settings" style={{ width: 16, height: 16, display: 'block' }} />
+      </BarButton>
 
       {/* Context menu (rendered outside tab strip to avoid overflow clipping) */}
       {contextMenu && (

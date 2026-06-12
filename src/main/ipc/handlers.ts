@@ -11,7 +11,8 @@ import { PtyManager } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
-import type { McpSettings } from '../../shared/types'
+import { windowManager } from '../window/WindowManager'
+import type { McpSettings, Tab } from '../../shared/types'
 
 let vsCodeAvailable = false
 try {
@@ -52,7 +53,10 @@ function parseOsc7(data: string): string | null {
   return cwd || null
 }
 
-export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<() => void> {
+export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
+  cleanup: () => void
+  registerWindowHandlers: (win: BrowserWindow) => void
+}> {
   const index = new SessionIndex()
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
@@ -70,7 +74,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
       data: chunk,
       timer: setTimeout(() => {
         coalesceBuffer.delete(ptyId)
-        mainWindow.webContents.send('pty:data', ptyId, newEntry.data)
+        windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, newEntry.data)
       }, COALESCE_DELAY_MS),
     }
     coalesceBuffer.set(ptyId, newEntry)
@@ -81,9 +85,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     if (!entry) return
     clearTimeout(entry.timer)
     coalesceBuffer.delete(ptyId)
-    mainWindow.webContents.send('pty:data', ptyId, entry.data)
+    windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, entry.data)
   }
-
 
   async function scanAllSessions() {
     const [claudeSessions, codexSessions] = await Promise.all([
@@ -115,10 +118,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     try {
       const inside = await execGit(['rev-parse', '--is-inside-work-tree'], cwd)
       if (inside !== 'true') {
-        gitBranchCache.set(normalizedCwd, {
-          branch: null,
-          expiresAt: Date.now() + GIT_BRANCH_CACHE_MS,
-        })
+        gitBranchCache.set(normalizedCwd, { branch: null, expiresAt: Date.now() + GIT_BRANCH_CACHE_MS })
         return null
       }
 
@@ -133,27 +133,30 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
       branch = null
     }
 
-    gitBranchCache.set(normalizedCwd, {
-      branch,
-      expiresAt: Date.now() + GIT_BRANCH_CACHE_MS,
-    })
+    gitBranchCache.set(normalizedCwd, { branch, expiresAt: Date.now() + GIT_BRANCH_CACHE_MS })
     return branch
   }
 
-  // Send current index state as soon as the renderer finishes loading.
-  mainWindow.webContents.once('did-finish-load', () => {
-    mainWindow.webContents.send('sessions:updated', index.getAll())
-  })
+  // Per-window setup: send current session list when a new window loads.
+  function registerWindowHandlers(win: BrowserWindow): void {
+    win.webContents.once('did-finish-load', () => {
+      win.webContents.send('sessions:updated', index.getAll())
+    })
+  }
+
+  // Register the main window and set up its window-specific handlers.
+  windowManager.register(mainWindow)
+  registerWindowHandlers(mainWindow)
 
   // Initial full scan on startup.
   scanAllSessions().then((sessions) => {
     sessions.forEach((s) => {
       try { index.upsert(s) } catch { /* skip malformed entries */ }
     })
-    mainWindow.webContents.send('sessions:updated', index.getAll())
+    windowManager.broadcastAll('sessions:updated', index.getAll())
   }).catch((err) => {
     console.error('[MultiAgent] Session scan failed:', err)
-    mainWindow.webContents.send('sessions:updated', [])
+    windowManager.broadcastAll('sessions:updated', [])
   })
 
   const projectsDir = path.join(os.homedir(), '.claude', 'projects')
@@ -171,7 +174,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
       const json = JSON.stringify(all)
       if (json !== lastSessionsJson) {
         lastSessionsJson = json
-        mainWindow.webContents.send('sessions:updated', all)
+        windowManager.broadcastAll('sessions:updated', all)
       }
     } catch (err) {
       console.error('[MultiAgent] pollSessions error:', err)
@@ -180,25 +183,21 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
 
   const contentTimer = setInterval(() => { void pollSessions() }, 5000)
 
-  // PTY data -> renderer
-  // OSC 7 is parsed immediately (CWD side-effect stays real-time).
-  // Display data is coalesced over a 5ms window before enqueueing so that
-  // rapid bursts produce fewer xterm.write() calls, letting the RAF render
-  // debouncer coalesce more dirty rows into a single frame.
+  // PTY data → renderer, coalesced over 5ms window; OSC 7 parsed immediately for CWD.
   ptyManager.on('data', (ptyId: string, data: string) => {
     coalesePtyOutput(ptyId, data)
     if (data.includes('\x1b]7;')) {
       const cwd = parseOsc7(data)
-      if (cwd) mainWindow.webContents.send('pty:cwd', ptyId, cwd)
+      if (cwd) windowManager.sendToWindowForPty(ptyId, 'pty:cwd', ptyId, cwd)
     }
   })
 
   ptyManager.on('exit', (ptyId: string, exitCode: number) => {
     flushCoalesceEntry(ptyId)
     if (exitCode !== 0) {
-      const msg = `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`
-      mainWindow.webContents.send('pty:data', ptyId, msg)
+      windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`)
     }
+    windowManager.unroutePty(ptyId)
   })
 
   // --- IPC handlers ---
@@ -221,15 +220,26 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     return null
   })
 
-  ipcMain.handle('session:new', (_e, agentKind, cwd: string) => spawner.spawnNew(agentKind, cwd))
+  ipcMain.handle('session:new', async (e, agentKind, cwd: string) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
+    const result = await spawner.spawnNew(agentKind, cwd, senderWin)
+    windowManager.routePty(result.ptyId, senderWin.webContents.id)
+    return result
+  })
 
-  ipcMain.handle('session:resume', (_e, agentKind, sessionId: string, cwd: string) =>
-    spawner.spawnResume(agentKind, sessionId, cwd)
-  )
+  ipcMain.handle('session:resume', async (e, agentKind, sessionId: string, cwd: string) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
+    const result = await spawner.spawnResume(agentKind, sessionId, cwd)
+    windowManager.routePty(result.ptyId, senderWin.webContents.id)
+    return result
+  })
 
-  ipcMain.handle('pty:create', (_e, cwd: string) => ({
-    ptyId: ptyManager.createShell(cwd)
-  }))
+  ipcMain.handle('pty:create', (e, cwd: string) => {
+    const ptyId = ptyManager.createShell(cwd)
+    const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
+    windowManager.routePty(ptyId, senderWin.webContents.id)
+    return { ptyId }
+  })
 
   ipcMain.on('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
 
@@ -238,7 +248,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     return ptyManager.resize(ptyId, cols, rows)
   })
 
-  ipcMain.handle('pty:kill', (_e, ptyId: string) => ptyManager.kill(ptyId))
+  ipcMain.handle('pty:kill', (_e, ptyId: string) => {
+    windowManager.unroutePty(ptyId)
+    return ptyManager.kill(ptyId)
+  })
 
   ipcMain.handle('shell:open-folder', (_e, folderPath: string) => shell.openPath(folderPath))
 
@@ -255,15 +268,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
   ipcMain.handle('git:branch', (_e, cwd: string) => resolveGitBranch(cwd))
 
   ipcMain.handle('shell:open-vscode', (_e, cwd: string) => {
-    // shell.openExternal goes through ShellExecuteEx which properly transfers
-    // foreground focus to VS Code. spawn() with detached:true cannot steal focus
-    // from Electron due to Windows focus-stealing prevention.
-    // encodeURI preserves the drive colon and slashes but encodes spaces/specials.
     shell.openExternal(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
   })
 
-  ipcMain.handle('dialog:pick-directory', async (_e, title?: string, defaultPath?: string) => {
-    const result = await dialog.showOpenDialog(mainWindow, {
+  ipcMain.handle('dialog:pick-directory', async (e, title?: string, defaultPath?: string) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
+    const result = await dialog.showOpenDialog(senderWin, {
       title: title ?? 'Select Directory',
       properties: ['openDirectory'],
       defaultPath: defaultPath || os.homedir(),
@@ -302,12 +312,74 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<()
     return { tools }
   })
 
-  return () => {
-    clearInterval(contentTimer)
-    for (const entry of coalesceBuffer.values()) clearTimeout(entry.timer)
-    coalesceBuffer.clear()
-    index.close()
-    ptyManager.destroy()
+  // --- Multi-window IPC ---
+
+  ipcMain.handle('window:get-id', (e) => {
+    return BrowserWindow.fromWebContents(e.sender)?.id ?? null
+  })
+
+  ipcMain.handle('window:get-init-data', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win) return null
+    const data = windowManager.pendingInitData.get(win.id)
+    if (data) windowManager.pendingInitData.delete(win.id)
+    return data ?? null
+  })
+
+  ipcMain.handle('window:get-all-bounds', () => {
+    return windowManager.getAllBounds()
+  })
+
+  ipcMain.handle('window:snap-apply', (e, targetWindowId: number, side: 'left' | 'right' | 'top' | 'bottom') => {
+    const fromWin = BrowserWindow.fromWebContents(e.sender)
+    if (!fromWin) return
+    windowManager.applySnap(fromWin, targetWindowId, side)
+  })
+
+  ipcMain.handle('tab:tear-off', async (e, tabJson: string, ptyIds: string[], screenX: number, screenY: number) => {
+    const fromWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
+    const tab = JSON.parse(tabJson) as Tab
+    const newWin = windowManager.createDetachedWindow(fromWin, screenX, screenY)
+    windowManager.pendingInitData.set(newWin.id, { mode: 'detached', tab, ptyIds })
+    registerWindowHandlers(newWin)
+    return { windowId: newWin.id }
+  })
+
+  ipcMain.handle('tab:adopt', (e, ptyIds: string[]) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win) return
+    for (const ptyId of ptyIds as string[]) {
+      windowManager.routePty(ptyId, win.webContents.id)
+    }
+  })
+
+  ipcMain.handle('tab:absorb', (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
+    const toWin = BrowserWindow.fromWebContents(e.sender)
+    if (!toWin) return
+
+    for (const ptyId of ptyIds as string[]) {
+      windowManager.transferPty(ptyId, toWin)
+    }
+
+    // Tell source window to release the tab
+    const sourceWin = windowManager.getWindowById(sourceWindowId)
+    if (sourceWin && !sourceWin.isDestroyed()) {
+      try {
+        const tab = JSON.parse(tabJson) as Tab
+        sourceWin.webContents.send('tab:release', tab.id)
+      } catch { /* malformed JSON */ }
+    }
+  })
+
+  return {
+    cleanup: () => {
+      clearInterval(contentTimer)
+      for (const entry of coalesceBuffer.values()) clearTimeout(entry.timer)
+      coalesceBuffer.clear()
+      index.close()
+      ptyManager.destroy()
+    },
+    registerWindowHandlers,
   }
 }
 

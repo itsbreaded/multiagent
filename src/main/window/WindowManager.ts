@@ -1,0 +1,227 @@
+import { BrowserWindow } from 'electron'
+
+export interface WindowInitData {
+  mode: 'detached'
+  tab: object
+  ptyIds: string[]
+}
+
+export interface SnapZone {
+  targetWindowId: number
+  side: 'left' | 'right' | 'top' | 'bottom'
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+class WindowManager {
+  private windows = new Map<number, BrowserWindow>()
+  private ptyToWebContentsId = new Map<string, number>()
+  public pendingInitData = new Map<number, WindowInitData>()
+
+  private preloadPath: string | null = null
+  private rendererUrl: string | null = null
+  private rendererFile: string | null = null
+  private onWindowCreated: ((win: BrowserWindow) => void) | null = null
+
+  configure(
+    preloadPath: string,
+    rendererUrl: string | null,
+    rendererFile: string | null,
+    onWindowCreated: (win: BrowserWindow) => void
+  ): void {
+    this.preloadPath = preloadPath
+    this.rendererUrl = rendererUrl
+    this.rendererFile = rendererFile
+    this.onWindowCreated = onWindowCreated
+  }
+
+  register(win: BrowserWindow): void {
+    this.windows.set(win.id, win)
+    win.once('closed', () => this.unregister(win.id))
+  }
+
+  unregister(id: number): void {
+    this.windows.delete(id)
+    for (const [ptyId, wcId] of this.ptyToWebContentsId) {
+      const win = this.getWindowByWebContentsId(wcId)
+      if (!win || win.id === id) {
+        this.ptyToWebContentsId.delete(ptyId)
+      }
+    }
+  }
+
+  routePty(ptyId: string, webContentsId: number): void {
+    this.ptyToWebContentsId.set(ptyId, webContentsId)
+  }
+
+  transferPty(ptyId: string, toWin: BrowserWindow): void {
+    this.ptyToWebContentsId.set(ptyId, toWin.webContents.id)
+  }
+
+  unroutePty(ptyId: string): void {
+    this.ptyToWebContentsId.delete(ptyId)
+  }
+
+  sendToWindowForPty(ptyId: string, channel: string, ...args: unknown[]): void {
+    const wcId = this.ptyToWebContentsId.get(ptyId)
+    if (wcId === undefined) return
+    const win = this.getWindowByWebContentsId(wcId)
+    if (!win || win.isDestroyed()) return
+    win.webContents.send(channel, ...args)
+  }
+
+  broadcastAll(channel: string, ...args: unknown[]): void {
+    for (const win of this.windows.values()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, ...args)
+      }
+    }
+  }
+
+  getAllBounds(): { id: number; x: number; y: number; width: number; height: number }[] {
+    return Array.from(this.windows.values())
+      .filter((w) => !w.isDestroyed())
+      .map((w) => {
+        const b = w.getBounds()
+        return { id: w.id, x: b.x, y: b.y, width: b.width, height: b.height }
+      })
+  }
+
+  getWindowById(id: number): BrowserWindow | null {
+    return this.windows.get(id) ?? null
+  }
+
+  getWindowByWebContentsId(wcId: number): BrowserWindow | null {
+    for (const win of this.windows.values()) {
+      if (!win.isDestroyed() && win.webContents.id === wcId) return win
+    }
+    return null
+  }
+
+  createDetachedWindow(fromWin: BrowserWindow, screenX: number, screenY: number): BrowserWindow {
+    if (!this.preloadPath) throw new Error('WindowManager not configured — call configure() first')
+
+    const fromBounds = fromWin.getBounds()
+    const width = Math.max(800, Math.floor(fromBounds.width * 0.6))
+    const height = fromBounds.height
+
+    const win = new BrowserWindow({
+      x: Math.max(0, screenX - Math.floor(width / 2)),
+      y: Math.max(0, screenY - 20),
+      width,
+      height,
+      show: false,
+      autoHideMenuBar: true,
+      frame: process.platform !== 'darwin',
+      titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+      webPreferences: {
+        preload: this.preloadPath,
+        sandbox: false,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+
+    win.once('ready-to-show', () => win.show())
+
+    this.register(win)
+    this.startMoveTracking(win)
+
+    if (this.onWindowCreated) {
+      this.onWindowCreated(win)
+    }
+
+    if (this.rendererUrl) {
+      void win.loadURL(this.rendererUrl)
+    } else if (this.rendererFile) {
+      void win.loadFile(this.rendererFile)
+    }
+
+    return win
+  }
+
+  startMoveTracking(win: BrowserWindow): void {
+    let moveTimer: NodeJS.Timeout | null = null
+
+    win.on('move', () => {
+      if (moveTimer) clearTimeout(moveTimer)
+      moveTimer = setTimeout(() => {
+        moveTimer = null
+        if (win.isDestroyed()) return
+        const snapZones = this.computeSnapZones(win)
+        if (snapZones.length > 0) {
+          win.webContents.send('window:snap-zones', snapZones)
+        }
+      }, 200)
+    })
+  }
+
+  computeSnapZones(win: BrowserWindow): SnapZone[] {
+    if (win.isDestroyed()) return []
+    const THRESHOLD = 60
+    const bounds = win.getBounds()
+    const zones: SnapZone[] = []
+
+    for (const other of this.windows.values()) {
+      if (other.id === win.id || other.isDestroyed()) continue
+      const ob = other.getBounds()
+
+      // Moving window's right edge near other's left edge → snap left of other
+      if (Math.abs(bounds.x + bounds.width - ob.x) < THRESHOLD) {
+        const oTop = Math.max(bounds.y, ob.y)
+        const oBot = Math.min(bounds.y + bounds.height, ob.y + ob.height)
+        if (oBot - oTop > 80) {
+          zones.push({ targetWindowId: other.id, side: 'left', x: ob.x - 10, y: ob.y, width: 10, height: ob.height })
+        }
+      }
+
+      // Moving window's left edge near other's right edge → snap right of other
+      if (Math.abs(bounds.x - (ob.x + ob.width)) < THRESHOLD) {
+        const oTop = Math.max(bounds.y, ob.y)
+        const oBot = Math.min(bounds.y + bounds.height, ob.y + ob.height)
+        if (oBot - oTop > 80) {
+          zones.push({ targetWindowId: other.id, side: 'right', x: ob.x + ob.width, y: ob.y, width: 10, height: ob.height })
+        }
+      }
+    }
+
+    return zones
+  }
+
+  applySnap(
+    fromWin: BrowserWindow,
+    toWindowId: number,
+    side: 'left' | 'right' | 'top' | 'bottom'
+  ): void {
+    const toWin = this.getWindowById(toWindowId)
+    if (!toWin || fromWin.isDestroyed() || toWin.isDestroyed()) return
+
+    const fromB = fromWin.getBounds()
+    const toB = toWin.getBounds()
+
+    switch (side) {
+      case 'left': {
+        // fromWin snaps to the left of toWin
+        fromWin.setBounds({ x: toB.x - fromB.width, y: toB.y, width: fromB.width, height: toB.height })
+        break
+      }
+      case 'right': {
+        // fromWin snaps to the right of toWin
+        fromWin.setBounds({ x: toB.x + toB.width, y: toB.y, width: fromB.width, height: toB.height })
+        break
+      }
+      case 'top': {
+        fromWin.setBounds({ x: toB.x, y: toB.y - fromB.height, width: toB.width, height: fromB.height })
+        break
+      }
+      case 'bottom': {
+        fromWin.setBounds({ x: toB.x, y: toB.y + toB.height, width: toB.width, height: fromB.height })
+        break
+      }
+    }
+  }
+}
+
+export const windowManager = new WindowManager()
