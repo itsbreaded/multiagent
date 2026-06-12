@@ -216,7 +216,7 @@ export function TabSections(): JSX.Element {
                 pane={pane}
                 tab={tab}
                 sourceWindowId={windowId ?? undefined}
-                isFocused={localWindowActive && isActive && pane.id === (effectiveFocusTarget?.windowId === windowId && effectiveFocusTarget.tabId === tab.id ? effectiveFocusTarget.paneId : tab.focusedPaneId)}
+                isFocused={localWindowActive && isActive && pane.id === tab.focusedPaneId}
                 sessions={sessions}
               />
             ))}

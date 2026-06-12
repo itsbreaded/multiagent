@@ -22,7 +22,7 @@ This section tracks the current code state after the first implementation pass. 
 10. Detached tab sync now uses a structured `TabStateSyncPayload` with `{ windowId, tabs, activeTabId, version }`. Main still accepts the legacy positional shape for compatibility.
 11. `zoomedPaneId` is cleared when switching/focusing a tab that does not contain the zoomed pane.
 12. Optimistic remote focus is represented separately as `pendingFocusTarget`; confirmed OS focus remains `activeWindowId`.
-13. Confirmed focus now flows through a main-stamped `FocusTarget` broadcast with `{ windowId, tabId, paneId, version }`; the sidebar uses this target, while `pendingFocusTarget` remains only for in-flight remote focus feedback.
+13. Confirmed remote/detached focus now flows through a main-stamped `FocusTarget` broadcast with `{ windowId, tabId, paneId, version }`; local sidebar pane highlights still derive from the tab's committed `focusedPaneId` so local `focusPaneInTab` remains visually atomic.
 14. `Terminal` updates xterm cursor/theme options when `paneType` changes.
 15. Sidebar pane context close now uses `closePaneInTab(tabId, paneId)`.
 16. Pane drags now carry a cross-window pane payload with source window/tab identity; detached sidebar rows remain draggable, pane headers provide the payload, tab bars/content accept cross-window pane drops, and main removes/moves the pane in the owning renderer after target commit.
