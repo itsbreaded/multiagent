@@ -97,6 +97,14 @@ export interface FocusTarget {
   version: number
 }
 
+export interface PaneTransferPayload {
+  pane: PaneLeaf
+  sourceTabId: string
+  sourceWindowId: number
+  targetTabId: string
+  targetWindowId?: number
+}
+
 // Full app state shape (used by renderer Zustand store)
 export interface AppState {
   tabs: Tab[]
@@ -203,9 +211,11 @@ export interface IPCChannels {
   // Detached window pushes its full tab list to main; main forwards to all other windows
   'tab:state-sync': (payload: TabStateSyncPayload) => void
   // Renderer asks main to move a pane (with its PTY) to a tab in another window
-  'pane:transfer': (paneJson: string, targetTabId: string) => boolean
+  'pane:transfer': (payload: PaneTransferPayload) => boolean
   // Main tells target window a pane is arriving
   'pane:received': (paneJson: string, targetTabId: string, transferId?: string) => void
+  'pane:remove-remote': (paneId: string) => void
+  'pane:move-remote': (paneId: string, targetTabId: string) => void
   // Renderer asks main to bring a detached tab back to this window
   'tab:bring-home': (tabId: string) => boolean
 
@@ -263,6 +273,8 @@ export type EventChannels =
   | 'tab:return'
   | 'tab:state-sync'
   | 'pane:received'
+  | 'pane:remove-remote'
+  | 'pane:move-remote'
   | 'pane:focus-remote'
   // Immediate focus-change notification (bypasses the debounced tab:state-sync)
   | 'pane:focus-changed'

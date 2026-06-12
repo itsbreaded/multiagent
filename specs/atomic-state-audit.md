@@ -25,11 +25,11 @@ This section tracks the current code state after the first implementation pass. 
 13. Confirmed focus now flows through a main-stamped `FocusTarget` broadcast with `{ windowId, tabId, paneId, version }`; the sidebar uses this target, while `pendingFocusTarget` remains only for in-flight remote focus feedback.
 14. `Terminal` updates xterm cursor/theme options when `paneType` changes.
 15. Sidebar pane context close now uses `closePaneInTab(tabId, paneId)`.
+16. Pane drags now carry a cross-window pane payload with source window/tab identity; detached sidebar rows remain draggable, pane headers provide the payload, tab bars/content accept cross-window pane drops, and main removes/moves the pane in the owning renderer after target commit.
 
 ### Remaining Follow-Up
 
 - Consider a full acked `tab:release-applied` / `tab:receive-applied` transaction for tab absorb. The current implementation validates source before routing and receives optimistically in the destination, but it is not a complete tab-transfer transaction.
-- Restore pane dragging between primary and detached windows. Detached panes shown in the primary sidebar are currently not draggable because `PaneRow` disables `draggable` whenever `onClickOverride` is present, and detached rows use `onClickOverride` for remote focus.
 - Manually verify multi-window behavior in the running app:
   - No sidebar focus flicker when focusing detached panes.
   - Clicking inactive-tab sidebar panes highlights only the intended pane.

@@ -9,6 +9,7 @@ import { SnapOverlay } from './components/SnapOverlay'
 import { usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
+import { decodePaneDragPayload, PANE_DRAG_MIME } from './utils/paneDrag'
 import type { Tab } from '../../shared/types'
 
 function useGlobalKeyboard() {
@@ -83,6 +84,7 @@ export default function App(): JSX.Element {
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const receiveTab = usePanesStore((s) => s.receiveTab)
+  const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
 
   const tabs = usePanesStore((s) => s.tabs)
   const windowId = usePanesStore((s) => s.windowId)
@@ -184,9 +186,20 @@ export default function App(): JSX.Element {
         color: '#d4d4d4',
       }}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) e.preventDefault()
+        if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(PANE_DRAG_MIME)) e.preventDefault()
       }}
       onDrop={(e) => {
+        const panePayload = decodePaneDragPayload(e.dataTransfer)
+        if (panePayload && activeTabId && windowId !== null) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (panePayload.sourceWindowId === windowId) {
+            movePaneToTab(panePayload.pane.id, activeTabId)
+          } else {
+            window.ipc.invoke('pane:transfer', { ...panePayload, targetTabId: activeTabId, targetWindowId: windowId }).catch(console.error)
+          }
+          return
+        }
         const data = e.dataTransfer.getData(TAB_DRAG_MIME)
         if (!data) return
         try {

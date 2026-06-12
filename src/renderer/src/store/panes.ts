@@ -1390,5 +1390,15 @@ if (typeof window !== 'undefined' && window.ipc) {
       }
     } catch { /* ignore */ }
   })
+
+  window.ipc.on('pane:remove-remote', (paneId: unknown) => {
+    if (typeof paneId !== 'string') return
+    usePanesStore.getState().removePaneKeepTab(paneId)
+  })
+
+  window.ipc.on('pane:move-remote', (paneId: unknown, targetTabId: unknown) => {
+    if (typeof paneId !== 'string' || typeof targetTabId !== 'string') return
+    usePanesStore.getState().movePaneToTab(paneId, targetTabId)
+  })
 }
 

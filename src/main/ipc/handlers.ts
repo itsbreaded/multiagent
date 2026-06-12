@@ -12,7 +12,7 @@ import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { McpSettings, Tab } from '../../shared/types'
+import type { McpSettings, PaneTransferPayload, Tab } from '../../shared/types'
 
 let vsCodeAvailable = false
 try {
@@ -455,13 +455,20 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   // Move a pane (with its PTY) to a tab in another window.
-  ipcMain.handle('pane:transfer', async (_e, paneJson: string, targetTabId: string) => {
+  ipcMain.handle('pane:transfer', async (e, payload: PaneTransferPayload) => {
     try {
-      const pane = JSON.parse(paneJson) as { ptyId?: string }
-      const targetWindowId = windowManager.getWindowIdForTab(targetTabId)
+      const senderWin = BrowserWindow.fromWebContents(e.sender)
+      if (!senderWin || !payload?.pane || typeof payload.targetTabId !== 'string') return false
+      const targetWindowId = payload.targetWindowId ?? windowManager.getWindowIdForTab(payload.targetTabId) ?? senderWin.id
       if (targetWindowId === null) return false
       const toWin = windowManager.getWindowById(targetWindowId)
       if (!toWin || toWin.isDestroyed()) return false
+      const sourceWin = windowManager.getWindowById(payload.sourceWindowId)
+      if (!sourceWin || sourceWin.isDestroyed()) return false
+      if (payload.sourceWindowId === targetWindowId) {
+        sourceWin.webContents.send('pane:move-remote', payload.pane.id, payload.targetTabId)
+        return true
+      }
       const transferId = `${Date.now()}:${Math.random().toString(36).slice(2)}`
       const committed = await new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => {
@@ -477,10 +484,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
           resolve(true)
         }
         ipcMain.on('pane:received-applied', onApplied)
-        toWin.webContents.send('pane:received', paneJson, targetTabId, transferId)
+        toWin.webContents.send('pane:received', JSON.stringify(payload.pane), payload.targetTabId, transferId)
       })
       if (!committed || toWin.isDestroyed()) return false
-      if (pane.ptyId) windowManager.transferPty(pane.ptyId, toWin)
+      if (payload.pane.ptyId) windowManager.transferPty(payload.pane.ptyId, toWin)
+      sourceWin.webContents.send('pane:remove-remote', payload.pane.id)
       return true
     } catch {
       return false

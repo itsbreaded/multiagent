@@ -7,6 +7,7 @@ import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
+import { encodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
@@ -37,6 +38,8 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const activeTab = usePanesStore((s) => s.activeTab())
+  const activeTabId = usePanesStore((s) => s.activeTabId)
+  const windowId = usePanesStore((s) => s.windowId)
 
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
@@ -92,6 +95,9 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           e.stopPropagation()
           e.dataTransfer.effectAllowed = 'move'
           e.dataTransfer.setData('text/plain', pane.id)
+          if (windowId !== null && activeTabId) {
+            e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: activeTabId, sourceWindowId: windowId }))
+          }
           setDraggedPane(pane.id)
         }}
         onDragEnd={() => setDraggedPane(null)}

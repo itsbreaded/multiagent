@@ -7,6 +7,7 @@ import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
+import { decodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
 import searchIcon from '../../assets/search.png'
 import commandPaletteIcon from '../../assets/commandpallete.png'
 import settingsIcon from '../../assets/settings.png'
@@ -364,6 +365,20 @@ export function TabBar(): JSX.Element {
     }
   }
 
+  function handlePaneDrop(e: React.DragEvent, targetTabId: string): boolean {
+    const payload = decodePaneDragPayload(e.dataTransfer)
+    if (!payload || windowId === null) return false
+    e.preventDefault()
+    e.stopPropagation()
+    if (payload.sourceWindowId === windowId) {
+      movePaneToTab(payload.pane.id, targetTabId)
+    } else {
+      window.ipc.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId: windowId }).catch(console.error)
+    }
+    clearPaneDragHover()
+    return true
+  }
+
   return (
     <div
       style={{
@@ -405,7 +420,7 @@ export function TabBar(): JSX.Element {
         }}
         onDragOver={(e) => {
           // Accept cross-window tab drops on the strip background
-          if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+          if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(PANE_DRAG_MIME)) {
             e.preventDefault()
           }
         }}
@@ -447,6 +462,12 @@ export function TabBar(): JSX.Element {
                   schedulePaneDragActivation(tab.id)
                   return
                 }
+                if (e.dataTransfer.types.includes(PANE_DRAG_MIME)) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setPaneDropTabId(tab.id)
+                  return
+                }
                 // Accept cross-window tab drop
                 if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
                   e.preventDefault()
@@ -458,8 +479,8 @@ export function TabBar(): JSX.Element {
                 setDragOverIndex(idx)
                 setDragSide(side)
               }}
-              onDragLeave={() => {
-                if (draggedPaneId) {
+              onDragLeave={(e) => {
+                if (draggedPaneId || e.dataTransfer.types.includes(PANE_DRAG_MIME)) {
                   clearPaneDragHover()
                   return
                 }
@@ -529,6 +550,11 @@ export function TabBar(): JSX.Element {
                 const crossSide = dragSideRef.current ?? 'right'
                 const crossDropIndex = crossSide === 'right' ? idx + 1 : idx
                 if (handleCrossWindowDrop(e, crossDropIndex)) {
+                  droppedInsideRef.current = true
+                  return
+                }
+
+                if (handlePaneDrop(e, tab.id)) {
                   droppedInsideRef.current = true
                   return
                 }

@@ -5,6 +5,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
 import { displayGitBranch } from '../../utils/git'
+import { decodePaneDragPayload, encodePaneDragPayload, PANE_DRAG_MIME, type PaneDragPayload } from '../../utils/paneDrag'
 import { DirPicker } from '../DirPicker'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
@@ -23,7 +24,6 @@ export function TabSections(): JSX.Element {
   const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
-  const removePaneKeepTab = usePanesStore((s) => s.removePaneKeepTab)
   const findPaneInAnyTab = usePanesStore((s) => s.findPaneInAnyTab)
   const detachedWindowTabIds = usePanesStore((s) => s.detachedWindowTabIds)
   const detachedWindowActiveTabIds = usePanesStore((s) => s.detachedWindowActiveTabIds)
@@ -57,6 +57,18 @@ export function TabSections(): JSX.Element {
   function commitRename() {
     if (renamingTabId) renameTab(renamingTabId, renameValue)
     setRenamingTabId(null)
+  }
+
+  function transferPaneToTab(payload: PaneDragPayload, targetTabId: string, targetWindowId: number): void {
+    if (payload.sourceWindowId === targetWindowId) {
+      if (payload.sourceWindowId === windowId) {
+        movePaneToTab(payload.pane.id, targetTabId)
+      } else {
+        window.ipc?.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId }).catch(console.error)
+      }
+      return
+    }
+    window.ipc?.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId }).catch(console.error)
   }
 
   useEffect(() => {
@@ -111,7 +123,7 @@ export function TabSections(): JSX.Element {
               }
               headerDropActive={dropTabId === tab.id}
               onHeaderDragOver={(e) => {
-                if (!draggedPaneId) return
+                if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
                 e.preventDefault()
                 e.stopPropagation()
                 setDropTabId(tab.id)
@@ -120,14 +132,18 @@ export function TabSections(): JSX.Element {
                 if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
               }}
               onHeaderDrop={(e) => {
-                if (!draggedPaneId) return
+                const payload = decodePaneDragPayload(e.dataTransfer)
+                if (!draggedPaneId && !payload) return
                 e.preventDefault()
                 e.stopPropagation()
-                const pane = findPaneInAnyTab(draggedPaneId)
-                if (pane) {
-                  window.ipc?.invoke('pane:transfer', JSON.stringify(pane), tab.id)
-                    .then((ok) => { if (ok) removePaneKeepTab(draggedPaneId) })
-                    .catch(console.error)
+                if (payload && ownerWindowNumId !== undefined) {
+                  transferPaneToTab(payload, tab.id, ownerWindowNumId)
+                } else if (draggedPaneId) {
+                  const pane = findPaneInAnyTab(draggedPaneId)
+                  const sourceWindowId = windowId
+                  if (pane && sourceWindowId !== null && ownerWindowNumId !== undefined) {
+                    transferPaneToTab({ pane, sourceTabId: activeTabId, sourceWindowId }, tab.id, ownerWindowNumId)
+                  }
                 }
                 setDropTabId(null)
               }}
@@ -137,6 +153,7 @@ export function TabSections(): JSX.Element {
                   key={pane.id}
                   pane={pane}
                   tab={tab}
+                  sourceWindowId={ownerWindowNumId}
                   isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === (focusTargetForTab?.paneId ?? tab.focusedPaneId)}
                   sessions={sessions}
                   onMouseDownOverride={() => {
@@ -172,7 +189,7 @@ export function TabSections(): JSX.Element {
             onRenameCancel={() => setRenamingTabId(null)}
             headerDropActive={dropTabId === tab.id}
             onHeaderDragOver={(e) => {
-              if (!draggedPaneId) return
+              if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
               e.preventDefault()
               e.stopPropagation()
               setDropTabId(tab.id)
@@ -181,10 +198,15 @@ export function TabSections(): JSX.Element {
               if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
             }}
             onHeaderDrop={(e) => {
-              if (!draggedPaneId) return
+              const payload = decodePaneDragPayload(e.dataTransfer)
+              if (!draggedPaneId && !payload) return
               e.preventDefault()
               e.stopPropagation()
-              movePaneToTab(draggedPaneId, tab.id)
+              if (payload && windowId !== null) {
+                transferPaneToTab(payload, tab.id, windowId)
+              } else if (draggedPaneId) {
+                movePaneToTab(draggedPaneId, tab.id)
+              }
               setDropTabId(null)
             }}
           >
@@ -193,6 +215,7 @@ export function TabSections(): JSX.Element {
                 key={pane.id}
                 pane={pane}
                 tab={tab}
+                sourceWindowId={windowId ?? undefined}
                 isFocused={localWindowActive && isActive && pane.id === (effectiveFocusTarget?.windowId === windowId && effectiveFocusTarget.tabId === tab.id ? effectiveFocusTarget.paneId : tab.focusedPaneId)}
                 sessions={sessions}
               />
@@ -235,6 +258,7 @@ export function TabSections(): JSX.Element {
 function PaneRow({
   pane,
   tab,
+  sourceWindowId,
   isFocused,
   sessions,
   onMouseDownOverride,
@@ -242,6 +266,7 @@ function PaneRow({
 }: {
   pane: PaneLeaf
   tab: Tab
+  sourceWindowId?: number
   isFocused: boolean
   sessions: Session[]
   onMouseDownOverride?: () => void
@@ -288,12 +313,13 @@ function PaneRow({
   return (
     <>
       <div
-        draggable={!renaming && !onClickOverride}
+        draggable={!renaming && sourceWindowId !== undefined}
         onDragStart={(e) => {
-          if (renaming) return
+          if (renaming || sourceWindowId === undefined) return
           e.stopPropagation()
           e.dataTransfer.effectAllowed = 'move'
           e.dataTransfer.setData('text/plain', pane.id)
+          e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: tab.id, sourceWindowId }))
           setDraggedPane(pane.id)
         }}
         onDragEnd={() => setDraggedPane(null)}
