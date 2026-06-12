@@ -200,6 +200,7 @@ export function TabBar(): JSX.Element {
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
   const receiveTab = usePanesStore((s) => s.receiveTab)
   const detachTab = usePanesStore((s) => s.detachTab)
+  const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const sessions = useSessionsStore((s) => s.sessions)
 
   const labels = computeLabels(tabs, sessions)
@@ -358,16 +359,19 @@ export function TabBar(): JSX.Element {
         overflow: 'hidden',
       }}
     >
-      {/* Sidebar toggle */}
-      <BarButton
-        onClick={toggleSidebar}
-        title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
-        active={sidebarOpen}
-      >
-        ≡
-      </BarButton>
-
-      <div style={{ width: 1, height: 20, backgroundColor: '#2a2b2e', flexShrink: 0 }} />
+      {/* Sidebar toggle — hidden in detached windows (content-only mode) */}
+      {!isDetachedWindow && (
+        <>
+          <BarButton
+            onClick={toggleSidebar}
+            title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
+            active={sidebarOpen}
+          >
+            ≡
+          </BarButton>
+          <div style={{ width: 1, height: 20, backgroundColor: '#2a2b2e', flexShrink: 0 }} />
+        </>
+      )}
 
       {/* Tab strip — also accepts cross-window tab drops */}
       <div

@@ -225,10 +225,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   initDetached: (tab, ptyIds) => {
     // The tab already carries the correct ptyId on each leaf node.
     // Just set state and tell main to route PTY output to this window.
+    // Sidebar is closed by default — detached windows are content-only.
     set({
       tabs: [tab],
       activeTabId: tab.id,
       isDetachedWindow: true,
+      sidebarOpen: false,
       sidebarSectionOpen: { [tabSidebarSectionId(tab.id)]: true },
     })
     if (typeof window !== 'undefined' && window.ipc && ptyIds.length > 0) {

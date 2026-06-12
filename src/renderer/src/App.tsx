@@ -185,10 +185,10 @@ export default function App(): JSX.Element {
         </div>
       </div>
 
-      {/* Overlays */}
-      {sessionBrowserOpen && <SessionBrowser />}
-      {commandPaletteOpen && <CommandPalette />}
-      {settingsOpen && <SettingsPanel />}
+      {/* Overlays — workspace tools only shown in the primary window */}
+      {!isDetachedWindow && sessionBrowserOpen && <SessionBrowser />}
+      {!isDetachedWindow && commandPaletteOpen && <CommandPalette />}
+      {!isDetachedWindow && settingsOpen && <SettingsPanel />}
       <SnapOverlay />
     </div>
   )
