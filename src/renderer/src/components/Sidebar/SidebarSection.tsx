@@ -10,7 +10,7 @@ interface SidebarSectionProps {
   onOpenChange?: (open: boolean) => void
   onTitleClick?: () => void
   onTitleDoubleClick?: () => void
-  children: React.ReactNode
+  children?: React.ReactNode
   onContextMenu?: React.MouseEventHandler<HTMLDivElement>
   renaming?: boolean
   renameValue?: string
@@ -21,6 +21,7 @@ interface SidebarSectionProps {
   onHeaderDragLeave?: React.DragEventHandler<HTMLDivElement>
   onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
   headerDropActive?: boolean
+  titleSuffix?: React.ReactNode
   style?: React.CSSProperties
   contentStyle?: React.CSSProperties
   contentClassName?: string
@@ -45,6 +46,7 @@ export function SidebarSection({
   onHeaderDragLeave,
   onHeaderDrop,
   headerDropActive,
+  titleSuffix,
   style,
   contentStyle,
   contentClassName,
@@ -134,6 +136,7 @@ export function SidebarSection({
             {count}
           </span>
         )}
+        {titleSuffix && !renaming && titleSuffix}
       </div>
       {open && <div className={contentClassName} style={contentStyle}>{children}</div>}
     </div>

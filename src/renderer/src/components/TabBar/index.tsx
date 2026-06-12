@@ -170,7 +170,17 @@ function tearOffTab(tabId: string, tabs: Tab[]): void {
   const cx = window.screenX + Math.floor(window.outerWidth / 2)
   const cy = window.screenY + 40
   window.ipc.invoke('tab:tear-off', JSON.stringify(tab), ptyIds, cx, cy)
-    .then(() => { usePanesStore.getState().detachTab(tabId) })
+    .then(() => {
+      const store = usePanesStore.getState()
+      // In a detached window the tab moves to a brand-new window — remove it
+      // locally rather than marking it as detached (which would corrupt the sync).
+      // In the primary window, keep it as detached so the sidebar can show it.
+      if (store.isDetachedWindow) {
+        store.removeTabLocally(tabId)
+      } else {
+        store.detachTab(tabId)
+      }
+    })
     .catch(console.error)
 }
 
@@ -326,7 +336,8 @@ export function TabBar(): JSX.Element {
   }
 
   // Handle a cross-window tab drop onto this window's tab bar.
-  function handleCrossWindowDrop(e: React.DragEvent): boolean {
+  // dropIndex is the visual insertion index among local tabs (undefined = append at end).
+  function handleCrossWindowDrop(e: React.DragEvent, dropIndex?: number): boolean {
     const data = e.dataTransfer.getData(TAB_DRAG_MIME)
     if (!data) return false
     try {
@@ -339,7 +350,7 @@ export function TabBar(): JSX.Element {
       e.preventDefault()
       e.stopPropagation()
       window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
-        .then(() => { receiveTab(tab) })
+        .then(() => { receiveTab(tab, dropIndex) })
         .catch(console.error)
       return true
     } catch {
@@ -396,7 +407,7 @@ export function TabBar(): JSX.Element {
           handleCrossWindowDrop(e)
         }}
       >
-        {tabs.map((tab, idx) => {
+        {tabs.filter((t) => !t.detached).map((tab, idx) => {
           const isActive = tab.id === activeTabId
           const label = labels.get(tab.id) ?? 'Shell'
           const live = hasAgentPane(tab)
@@ -491,15 +502,24 @@ export function TabBar(): JSX.Element {
                   const ptyIds = collectPtyIds(draggedTab)
                   resetDragState()
                   window.ipc.invoke('tab:tear-off', JSON.stringify(draggedTab), ptyIds, e.screenX, e.screenY)
-                    .then(() => { detachTab(draggedTab.id) })
+                    .then(() => {
+                      if (isDetachedWindow) {
+                        usePanesStore.getState().removeTabLocally(draggedTab.id)
+                      } else {
+                        detachTab(draggedTab.id)
+                      }
+                    })
                     .catch(console.error)
                 } else {
                   resetDragState()
                 }
               }}
               onDrop={(e) => {
-                // Handle cross-window drop first
-                if (handleCrossWindowDrop(e)) {
+                // Handle cross-window drop first, honoring the cursor position.
+                // dragSideRef is set by onDragOver on this element regardless of drag source.
+                const crossSide = dragSideRef.current ?? 'right'
+                const crossDropIndex = crossSide === 'right' ? idx + 1 : idx
+                if (handleCrossWindowDrop(e, crossDropIndex)) {
                   droppedInsideRef.current = true
                   return
                 }
@@ -697,7 +717,7 @@ export function TabBar(): JSX.Element {
         <div id="tab-context-menu">
           <ContextMenu
             menu={contextMenu}
-            tabs={tabs}
+            tabs={tabs.filter((t) => !t.detached)}
             onClose={() => setContextMenu(null)}
             onRename={startRename}
             onChangeDefaultDir={(tabId) => setDirPickerState(tabId)}

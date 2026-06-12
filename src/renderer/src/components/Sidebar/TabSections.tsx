@@ -23,6 +23,14 @@ export function TabSections(): JSX.Element {
   const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
+  const removePaneKeepTab = usePanesStore((s) => s.removePaneKeepTab)
+  const findPaneInAnyTab = usePanesStore((s) => s.findPaneInAnyTab)
+  const detachedWindowTabIds = usePanesStore((s) => s.detachedWindowTabIds)
+  const detachedWindowActiveTabIds = usePanesStore((s) => s.detachedWindowActiveTabIds)
+  const windowId = usePanesStore((s) => s.windowId)
+  const activeWindowId = usePanesStore((s) => s.activeWindowId)
+  // Local panes are highlighted only when this window has OS focus (or focus is unknown).
+  const localWindowActive = activeWindowId === null || activeWindowId === windowId
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
 
@@ -64,6 +72,68 @@ export function TabSections(): JSX.Element {
         const isRenaming = renamingTabId === tab.id
         const sectionId = tabSidebarSectionId(tab.id)
         const open = sidebarSectionOpen[sectionId] ?? sidebarSectionOpen[tab.id] ?? isActive
+        const isDetached = !!tab.detached
+
+        // Detached tabs: same visual treatment as local tabs.
+        // Header/pane clicks focus the external window.
+        // Pane drag onto header transfers the pane cross-window.
+        if (isDetached) {
+          const focusTab = () => window.ipc?.invoke('window:focus-for-tab', tab.id).catch(() => {})
+          const ownerWindowId = Object.entries(detachedWindowTabIds).find(([, ids]) => ids.includes(tab.id))?.[0]
+          const ownerWindowNumId = ownerWindowId !== undefined ? parseInt(ownerWindowId, 10) : undefined
+          const isOwnerWindowActive = ownerWindowNumId !== undefined && activeWindowId === ownerWindowNumId
+          const isTabActiveInWindow = ownerWindowId ? detachedWindowActiveTabIds[ownerWindowId] === tab.id : leaves.length > 0
+          return (
+            <SidebarSection
+              key={tab.id}
+              title={label}
+              count={leaves.length > 1 ? leaves.length : undefined}
+              open={open}
+              onOpenChange={(next) => setSidebarSectionOpen(sectionId, next)}
+              onTitleClick={focusTab}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
+              }}
+              titleSuffix={
+                <span title="In separate window — click to focus" style={{ fontSize: 11, color: '#5a6050', marginLeft: 4, flexShrink: 0 }}>↗</span>
+              }
+              headerDropActive={dropTabId === tab.id}
+              onHeaderDragOver={(e) => {
+                if (!draggedPaneId) return
+                e.preventDefault()
+                e.stopPropagation()
+                setDropTabId(tab.id)
+              }}
+              onHeaderDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
+              }}
+              onHeaderDrop={(e) => {
+                if (!draggedPaneId) return
+                e.preventDefault()
+                e.stopPropagation()
+                const pane = findPaneInAnyTab(draggedPaneId)
+                if (pane) {
+                  window.ipc?.invoke('pane:transfer', JSON.stringify(pane), tab.id)
+                    .then((ok) => { if (ok) removePaneKeepTab(draggedPaneId) })
+                    .catch(console.error)
+                }
+                setDropTabId(null)
+              }}
+            >
+              {leaves.map((pane) => (
+                <PaneRow
+                  key={pane.id}
+                  pane={pane}
+                  tab={tab}
+                  isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === tab.focusedPaneId}
+                  sessions={sessions}
+                  onClickOverride={() => window.ipc?.invoke('window:focus-pane', tab.id, pane.id).catch(() => {})}
+                />
+              ))}
+            </SidebarSection>
+          )
+        }
 
         return (
           <SidebarSection
@@ -106,7 +176,7 @@ export function TabSections(): JSX.Element {
                 key={pane.id}
                 pane={pane}
                 tab={tab}
-                isFocused={isActive && pane.id === tab.focusedPaneId}
+                isFocused={localWindowActive && isActive && pane.id === tab.focusedPaneId}
                 sessions={sessions}
               />
             ))}
@@ -150,11 +220,13 @@ function PaneRow({
   tab,
   isFocused,
   sessions,
+  onClickOverride,
 }: {
   pane: PaneLeaf
   tab: Tab
   isFocused: boolean
   sessions: Session[]
+  onClickOverride?: () => void
 }): JSX.Element {
   const [hovered, setHovered] = useState(false)
   const [dropActive, setDropActive] = useState(false)
@@ -198,7 +270,7 @@ function PaneRow({
   return (
     <>
       <div
-        draggable={!renaming}
+        draggable={!renaming && !onClickOverride}
         onDragStart={(e) => {
           if (renaming) return
           e.stopPropagation()
@@ -228,7 +300,7 @@ function PaneRow({
           setDropActive(false)
           setHovered(false)
         }}
-        onClick={() => { if (!renaming) { setActiveTab(tab.id); focusPane(pane.id) } }}
+        onClick={() => { if (!renaming) { if (onClickOverride) { onClickOverride() } else { setActiveTab(tab.id); focusPane(pane.id) } } }}
         onDoubleClick={() => startRename()}
         onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
         onMouseEnter={() => setHovered(true)}
@@ -426,6 +498,7 @@ function TabContextMenu({
   onChangeDefaultDir: (id: string) => void
 }): JSX.Element {
   const tab = tabs.find((t) => t.id === tabId)
+  const isDetached = !!tab?.detached
   const defaultDirLabel = tab?.defaultCwd
     ? `Change Default Directory  (${tab.defaultCwd.split(/[\\/]/).pop()})`
     : 'Set Default Directory'
@@ -448,7 +521,16 @@ function TabContextMenu({
       <div style={menuStyles.backdrop} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
       <div style={{ ...menuStyles.panel, left: x, top: y, minWidth: 200 }}>
         {btn('Rename', () => { onRename(tabId); onClose() })}
-        {btn(defaultDirLabel, () => { onChangeDefaultDir(tabId); onClose() })}
+        {!isDetached && btn(defaultDirLabel, () => { onChangeDefaultDir(tabId); onClose() })}
+        {isDetached && (
+          <>
+            <div style={{ ...menuStyles.separator, margin: '4px 0' }} />
+            {btn('Bring to This Window', () => {
+              window.ipc?.invoke('tab:bring-home', tabId).catch(console.error)
+              onClose()
+            })}
+          </>
+        )}
         <div style={{ ...menuStyles.separator, margin: '4px 0' }} />
         {btn('Close tab', () => onCloseTab(tabId), true)}
       </div>

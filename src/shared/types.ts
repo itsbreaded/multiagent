@@ -80,6 +80,7 @@ export interface Tab {
   focusedPaneId: string
   customLabel?: string  // user-set via rename; overrides auto-generated label when present
   defaultCwd?: string   // tab-scoped starting directory for new panes
+  detached?: boolean    // true while this tab is living in a separate window
 }
 
 // Full app state shape (used by renderer Zustand store)
@@ -183,6 +184,21 @@ export interface IPCChannels {
   // Main pushes to source window: remove the tab that was absorbed by another window
   'tab:release': (tabId: string) => void
 
+  // --- Multi-window: live sync & pane transfer ---
+  // Detached window pushes its full tab list to main; main forwards to all other windows
+  'tab:state-sync': (windowId: number, tabsJson: string) => void
+  // Renderer asks main to move a pane (with its PTY) to a tab in another window
+  'pane:transfer': (paneJson: string, targetTabId: string) => boolean
+  // Main tells target window a pane is arriving
+  'pane:received': (paneJson: string, targetTabId: string) => void
+  // Renderer asks main to bring a detached tab back to this window
+  'tab:bring-home': (tabId: string) => boolean
+
+  // Renderer asks main to focus the window owning a tab AND activate a specific pane
+  'window:focus-pane': (tabId: string, paneId: string) => boolean
+  // Main tells a window's renderer to activate a tab/pane (cross-window pane click)
+  'pane:focus-remote': (tabId: string, paneId: string) => void
+
 }
 
 // Helper type for extracting invoke vs event channels
@@ -215,6 +231,10 @@ export type InvokeChannels =
   | 'tab:tear-off'
   | 'tab:adopt'
   | 'tab:absorb'
+  | 'window:focus-for-tab'
+  | 'pane:transfer'
+  | 'tab:bring-home'
+  | 'window:focus-pane'
 
 export type EventChannels =
   | 'sessions:updated'
@@ -223,9 +243,19 @@ export type EventChannels =
   | 'session:detected'
   | 'window:snap-zones'
   | 'tab:release'
+  | 'tab:return'
+  | 'tab:state-sync'
+  | 'pane:received'
+  | 'pane:focus-remote'
+  // Immediate focus-change notification (bypasses the debounced tab:state-sync)
+  | 'pane:focus-changed'
+  // Broadcast by main whenever a BrowserWindow gains OS focus
+  | 'window:became-active'
 
 export type SendChannels =
   | 'pty:write'
+  | 'tab:state-sync'
+  | 'pane:focus-changed'
 
 export interface IpcBridge {
   invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>

@@ -70,6 +70,8 @@ function useGlobalKeyboard() {
   ])
 }
 
+const TAB_DRAG_MIME = 'application/x-multiagent-tab'
+
 export default function App(): JSX.Element {
   useGlobalKeyboard()
 
@@ -79,8 +81,10 @@ export default function App(): JSX.Element {
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
+  const receiveTab = usePanesStore((s) => s.receiveTab)
 
   const tabs = usePanesStore((s) => s.tabs)
+  const windowId = usePanesStore((s) => s.windowId)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const sidebarPanelSizes = usePanesStore((s) => s.sidebarPanelSizes)
@@ -135,6 +139,21 @@ export default function App(): JSX.Element {
     }).finally(() => setLayoutReady(true))
   }, [])
 
+  // Detached window: push tab state to primary on every change (debounced).
+  useEffect(() => {
+    if (!isDetachedWindow || !windowId || !layoutReady) return
+    const timer = setTimeout(() => {
+      window.ipc.send('tab:state-sync', windowId, JSON.stringify(tabs), activeTabId)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [isDetachedWindow, windowId, layoutReady, tabs, activeTabId])
+
+  // Detached window: close itself when all tabs are gone.
+  useEffect(() => {
+    if (!isDetachedWindow || !layoutReady) return
+    if (tabs.length === 0) window.close()
+  }, [isDetachedWindow, layoutReady, tabs])
+
   // Debounced layout save — only for the primary window.
   useEffect(() => {
     if (!layoutReady) return
@@ -156,6 +175,24 @@ export default function App(): JSX.Element {
         overflow: 'hidden',
         backgroundColor: '#0e1011',
         color: '#d4d4d4',
+      }}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) e.preventDefault()
+      }}
+      onDrop={(e) => {
+        const data = e.dataTransfer.getData(TAB_DRAG_MIME)
+        if (!data) return
+        try {
+          const { tab, ptyIds, sourceWindowId } = JSON.parse(data) as {
+            tab: Tab; ptyIds: string[]; sourceWindowId: number | null
+          }
+          if (sourceWindowId === windowId) return // intra-window drag
+          e.preventDefault()
+          e.stopPropagation()
+          window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
+            .then(() => { receiveTab(tab) }) // no index = append at end
+            .catch(console.error)
+        } catch { /* ignore */ }
       }}
     >
       {/* Main content row */}

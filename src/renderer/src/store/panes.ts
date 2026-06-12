@@ -137,9 +137,18 @@ interface PanesStore {
   windowId: number | null
   setWindowId: (id: number) => void
   isDetachedWindow: boolean
+  activeWindowId: number | null
   initDetached: (tab: Tab, ptyIds: string[]) => void
-  receiveTab: (tab: Tab) => void
+  receiveTab: (tab: Tab, atIndex?: number) => void
   detachTab: (tabId: string) => void
+  returnTab: (tabId: string) => void
+  removeTabLocally: (tabId: string) => void
+  syncDetachedTabs: (windowId: number, tabs: Tab[], activeTabId?: string) => void
+  addPaneToTab: (pane: PaneLeaf, tabId: string) => void
+  removePaneKeepTab: (paneId: string) => void
+  findPaneInAnyTab: (paneId: string) => PaneLeaf | undefined
+  detachedWindowTabIds: Record<string, string[]>
+  detachedWindowActiveTabIds: Record<string, string>
   zoomedPaneId: string | null
   sidebarOpen: boolean
   sidebarWidth: number
@@ -221,11 +230,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   windowId: null,
   setWindowId: (id) => set({ windowId: id }),
   isDetachedWindow: false,
+  activeWindowId: null,
+
+  detachedWindowTabIds: {},
+  detachedWindowActiveTabIds: {},
 
   initDetached: (tab, ptyIds) => {
-    // The tab already carries the correct ptyId on each leaf node.
-    // Just set state and tell main to route PTY output to this window.
-    // Sidebar is closed by default — detached windows are content-only.
     set({
       tabs: [tab],
       activeTabId: tab.id,
@@ -238,26 +248,172 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
-  receiveTab: (tab) => {
-    set((s) => ({
-      tabs: [...s.tabs, tab],
-      activeTabId: tab.id,
-      sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
-    }))
+  receiveTab: (tab, atIndex) => {
+    set((s) => {
+      // If this tab was previously torn off from this window it still exists as detached:true.
+      // Un-mark it rather than appending a duplicate. Preserve existing data (synced rootNode/ptyIds).
+      const existing = s.tabs.find((t) => t.id === tab.id)
+      const base = existing ? { ...existing, detached: false } : { ...tab, detached: false }
+      const rest = s.tabs.filter((t) => t.id !== tab.id)
+
+      let newTabs: typeof rest
+      if (atIndex === undefined) {
+        newTabs = [...rest, base]
+      } else {
+        // Insert at the atIndex-th position among the non-detached (visible) tabs in `rest`.
+        let localCount = 0
+        let insertAt = rest.length
+        for (let i = 0; i < rest.length; i++) {
+          if (!rest[i].detached) {
+            if (localCount === atIndex) { insertAt = i; break }
+            localCount++
+          }
+        }
+        newTabs = [...rest]
+        newTabs.splice(insertAt, 0, base)
+      }
+
+      return {
+        tabs: newTabs,
+        activeTabId: tab.id,
+        sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
+      }
+    })
   },
 
   detachTab: (tabId) => {
-    // Remove tab without killing PTYs (they continue in the target window)
-    const tab = get().tabs.find((t) => t.id === tabId)
-    if (tab?.rootNode) {
-      collectLeafIds(tab.rootNode).forEach((id) => xtermRegistry.dispose(id))
-    }
+    // Mark as detached — keeps the tab in the store for sidebar navigation.
+    // Do NOT dispose xterms: they stay in the off-screen registry so that when
+    // the tab returns the terminals reattach with their full scrollback intact.
+    set((s) => {
+      const tabs = s.tabs.map((t) => t.id === tabId ? { ...t, detached: true } : t)
+      const nonDetached = tabs.filter((t) => !t.detached)
+      const activeTabId = s.activeTabId === tabId
+        ? (nonDetached[nonDetached.length - 1]?.id ?? '')
+        : s.activeTabId
+      return { tabs, activeTabId }
+    })
+  },
+
+  returnTab: (tabId) => {
+    // Move the returning tab to the end of the tab bar and un-mark it.
+    set((s) => {
+      const tab = s.tabs.find((t) => t.id === tabId)
+      if (!tab) return s
+      const rest = s.tabs.filter((t) => t.id !== tabId)
+      return {
+        tabs: [...rest, { ...tab, detached: false }],
+        activeTabId: tabId,
+        sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tabId)]: true },
+      }
+    })
+  },
+
+  removeTabLocally: (tabId) => {
+    // Remove the tab without marking as detached and without killing PTYs.
+    // Used in detached windows when a tab is transferred to another window.
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== tabId)
-      const activeTabId = s.activeTabId === tabId ? (tabs[tabs.length - 1]?.id ?? '') : s.activeTabId
-      const { [tabSidebarSectionId(tabId)]: _dropped, ...sidebarSectionOpen } = s.sidebarSectionOpen
+      const activeTabId = s.activeTabId === tabId
+        ? (tabs[tabs.length - 1]?.id ?? '')
+        : s.activeTabId
+      const { [tabSidebarSectionId(tabId)]: _r, ...sidebarSectionOpen } = s.sidebarSectionOpen
       return { tabs, activeTabId, sidebarSectionOpen }
     })
+  },
+
+  syncDetachedTabs: (windowId, incomingTabs, activeTabId) => {
+    // Dispose xterms for tabs that were genuinely closed inside the detached window.
+    // Guard: only dispose if the tab is still detached in our store. A tab that has
+    // already been received/returned as local (detached:false) must not be disposed —
+    // its Terminal may already be mounting and the xterm is live in the DOM.
+    const key = String(windowId)
+    const prevIds = get().detachedWindowTabIds[key] ?? []
+    const newIds = new Set(incomingTabs.map((t) => t.id))
+    for (const removedId of prevIds.filter((id) => !newIds.has(id))) {
+      const tab = get().tabs.find((t) => t.id === removedId)
+      if (tab?.rootNode && tab.detached) collectLeafIds(tab.rootNode).forEach((paneId) => xtermRegistry.dispose(paneId))
+    }
+
+    set((s) => {
+      const key = String(windowId)
+      const prevIds = new Set(s.detachedWindowTabIds[key] ?? [])
+      const newIds = new Set(incomingTabs.map((t) => t.id))
+
+      // Only remove a tab if:
+      //   (a) it was previously owned by this window AND is no longer in the new list
+      //   (b) it is still marked detached in our store (not already returned/absorbed as local)
+      //   (c) no OTHER window's detachedWindowTabIds currently claims it
+      const removedIds = [...prevIds].filter((id) => {
+        if (newIds.has(id)) return false
+        const existing = s.tabs.find((t) => t.id === id)
+        if (!existing || !existing.detached) return false  // already local — never delete
+        for (const [wid, wids] of Object.entries(s.detachedWindowTabIds)) {
+          if (wid !== key && wids.includes(id)) return false  // another window owns it now
+        }
+        return true
+      })
+
+      // Remove tabs genuinely closed in the detached window
+      let tabs = s.tabs.filter((t) => !removedIds.includes(t.id))
+
+      // Update existing or insert new entries, all marked detached.
+      // Never overwrite a tab that is already local (detached:false) — that means a
+      // receiveTab/returnTab already claimed it; the sync is stale.
+      for (const incoming of incomingTabs) {
+        const idx = tabs.findIndex((t) => t.id === incoming.id)
+        const synced: Tab = { ...incoming, detached: true }
+        if (idx >= 0) {
+          if (!tabs[idx].detached) continue  // already local — ignore stale sync
+          tabs = [...tabs.slice(0, idx), synced, ...tabs.slice(idx + 1)]
+        } else {
+          tabs = [...tabs, synced]
+        }
+      }
+
+      const detachedWindowTabIds = {
+        ...s.detachedWindowTabIds,
+        [key]: incomingTabs.map((t) => t.id),
+      }
+
+      const detachedWindowActiveTabIds = activeTabId
+        ? { ...s.detachedWindowActiveTabIds, [key]: activeTabId }
+        : s.detachedWindowActiveTabIds
+
+      const newActiveTabId = removedIds.includes(s.activeTabId)
+        ? (tabs.filter((t) => !t.detached).slice(-1)[0]?.id ?? '')
+        : s.activeTabId
+
+      return { tabs, detachedWindowTabIds, detachedWindowActiveTabIds, activeTabId: newActiveTabId }
+    })
+  },
+
+  addPaneToTab: (pane, tabId) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (t.id !== tabId) return t
+        if (!t.rootNode) return { ...t, rootNode: pane, focusedPaneId: pane.id }
+        return { ...t, rootNode: makeSplit('vertical', t.rootNode, pane), focusedPaneId: pane.id }
+      }),
+    }))
+  },
+
+  removePaneKeepTab: (paneId) => {
+    // Remove the pane from whichever tab it's in; leave the tab open (blank if last pane).
+    xtermRegistry.dispose(paneId)
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (!t.rootNode || !findLeaf(t.rootNode, paneId)) return t
+        const newRoot = removeLeaf(t.rootNode, paneId)
+        if (!newRoot) return { ...t, rootNode: undefined, focusedPaneId: '' }
+        const leafIds = collectLeafIds(newRoot)
+        return {
+          ...t,
+          rootNode: newRoot,
+          focusedPaneId: t.focusedPaneId === paneId ? (leafIds[0] ?? '') : t.focusedPaneId,
+        }
+      }),
+    }))
   },
   zoomedPaneId: null,
   sidebarOpen: true,
@@ -339,7 +495,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  setActiveTab: (tabId) => set({ activeTabId: tabId }),
+  setActiveTab: (tabId) => {
+    set({ activeTabId: tabId })
+    // Immediately notify other windows when the active tab changes in a detached window.
+    const { isDetachedWindow, windowId } = get()
+    if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
+      const tab = get().tabs.find((t) => t.id === tabId)
+      if (tab) window.ipc.send('pane:focus-changed', windowId, tabId, tab.focusedPaneId)
+    }
+  },
 
   renameTab: (tabId, label) => {
     set((s) => ({
@@ -415,12 +579,17 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   focusPane: (paneId) => {
+    const { isDetachedWindow, windowId, activeTabId } = get()
     set((s) => {
       const tabs = s.tabs.map((t) =>
         t.id === s.activeTabId ? { ...t, focusedPaneId: paneId } : t
       )
       return { tabs }
     })
+    // Immediately notify other windows — don't wait for the debounced tab:state-sync.
+    if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
+      window.ipc.send('pane:focus-changed', windowId, activeTabId, paneId)
+    }
   },
 
   splitPane: async (paneId, direction, paneType, cwdOverride, agentKind) => {
@@ -961,6 +1130,16 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
     return undefined
   },
+
+  findPaneInAnyTab: (paneId) => {
+    const s = get()
+    for (const tab of s.tabs) {
+      if (!tab.rootNode) continue
+      const leaf = findLeaf(tab.rootNode, paneId)
+      if (leaf) return leaf
+    }
+    return undefined
+  },
 }))
 
 export function normalizeCwdKey(cwd: string): string {
@@ -975,8 +1154,6 @@ if (typeof window !== 'undefined' && window.ipc) {
     }
   })
 
-  // When the main process detects a new agent session file, link it to the pane
-  // so the session can be persisted and auto-resumed on next launch.
   window.ipc.on('session:detected', (ptyId: unknown, agentKind: unknown, sessionId: unknown) => {
     if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex') || typeof sessionId !== 'string') return
     const store = usePanesStore.getState()
@@ -992,11 +1169,79 @@ if (typeof window !== 'undefined' && window.ipc) {
     }
   })
 
-  // Main tells this window to release a tab that was absorbed by another window.
+  // Main tells this window to release a tab (it moved to another window).
+  // In a detached window: just remove it locally (PTYs stay alive in the destination).
+  // In the primary window: mark it as detached so the sidebar still shows it.
   window.ipc.on('tab:release', (tabId: unknown) => {
-    if (typeof tabId === 'string') {
-      usePanesStore.getState().detachTab(tabId)
+    if (typeof tabId !== 'string') return
+    const store = usePanesStore.getState()
+    if (store.isDetachedWindow) {
+      store.removeTabLocally(tabId)
+    } else {
+      store.detachTab(tabId)
     }
+  })
+
+  // Main tells the primary window to un-mark a tab and move it to the end of the tab bar.
+  window.ipc.on('tab:return', (tabId: unknown) => {
+    if (typeof tabId !== 'string') return
+    usePanesStore.getState().returnTab(tabId)
+    // Re-adopt the PTYs for this tab so main routes PTY output to this window again.
+    // (PTY routing was deleted by unregister() when the detached window closed.)
+    const tab = usePanesStore.getState().tabs.find((t) => t.id === tabId)
+    if (tab?.rootNode) {
+      const ptyIds = collectLeaves(tab.rootNode)
+        .map((l) => l.ptyId)
+        .filter((id): id is string => typeof id === 'string')
+      if (ptyIds.length > 0) {
+        void window.ipc.invoke('tab:adopt', ptyIds)
+      }
+    }
+  })
+
+  // Cross-window pane click: activate the correct tab and pane in this window's renderer.
+  window.ipc.on('pane:focus-remote', (tabId: unknown, paneId: unknown) => {
+    if (typeof tabId !== 'string' || typeof paneId !== 'string') return
+    const store = usePanesStore.getState()
+    store.setActiveTab(tabId)
+    store.focusPane(paneId)
+  })
+
+  // Immediate focus update from a detached window — updates the synced tab's
+  // focusedPaneId without waiting for the debounced tab:state-sync.
+  window.ipc.on('pane:focus-changed', (windowId: unknown, tabId: unknown, paneId: unknown) => {
+    if (typeof windowId !== 'number' || typeof tabId !== 'string' || typeof paneId !== 'string') return
+    const store = usePanesStore.getState()
+    if (store.isDetachedWindow) return
+    usePanesStore.setState((s) => ({
+      tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
+      detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [String(windowId)]: tabId },
+    }))
+  })
+
+  // Track which OS window currently has focus — used to show exactly one focused pane.
+  window.ipc.on('window:became-active', (winId: unknown) => {
+    if (typeof winId === 'number') usePanesStore.setState({ activeWindowId: winId })
+  })
+
+  // Live sync from a detached window — only the primary window processes this.
+  window.ipc.on('tab:state-sync', (windowId: unknown, tabsJson: unknown, activeTabId: unknown) => {
+    if (typeof windowId !== 'number' || typeof tabsJson !== 'string') return
+    const store = usePanesStore.getState()
+    if (store.isDetachedWindow) return  // only primary merges syncs
+    try {
+      const tabs = JSON.parse(tabsJson) as Tab[]
+      store.syncDetachedTabs(windowId, tabs, typeof activeTabId === 'string' ? activeTabId : undefined)
+    } catch { /* ignore malformed */ }
+  })
+
+  // A pane has been transferred to this window from another window.
+  window.ipc.on('pane:received', (paneJson: unknown, targetTabId: unknown) => {
+    if (typeof paneJson !== 'string' || typeof targetTabId !== 'string') return
+    try {
+      const pane = JSON.parse(paneJson) as PaneLeaf
+      usePanesStore.getState().addPaneToTab(pane, targetTabId)
+    } catch { /* ignore */ }
   })
 }
 

@@ -85,7 +85,12 @@ async function createWindow(): Promise<void> {
   })
 
   mainWindow.on('close', () => saveWindowState(mainWindow))
-  // Do NOT force-quit on closed — rely on window-all-closed below so secondary windows can outlive the main one.
+  mainWindow.on('closed', () => {
+    // Close all detached windows so PTYs and timers are cleaned up promptly.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.close()
+    }
+  })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     openExternalUrl(details.url)

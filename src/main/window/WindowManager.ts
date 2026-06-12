@@ -19,6 +19,10 @@ class WindowManager {
   private windows = new Map<number, BrowserWindow>()
   private ptyToWebContentsId = new Map<string, number>()
   public pendingInitData = new Map<number, WindowInitData>()
+  /** Maps detached window id → tab ids it owns (for tab:return on close) */
+  private detachedWindowTabs = new Map<number, string[]>()
+  /** Maps tab id → detached window id (for window:focus-for-tab) */
+  private tabToWindowId = new Map<string, number>()
 
   private preloadPath: string | null = null
   private rendererUrl: string | null = null
@@ -43,6 +47,20 @@ class WindowManager {
   }
 
   unregister(id: number): void {
+    // If a detached window is closing, tell the primary window to return its tabs.
+    const tabIds = this.detachedWindowTabs.get(id)
+    if (tabIds && tabIds.length > 0) {
+      // The primary window is the first registered window that is NOT this one.
+      const primaryWin = this._getPrimaryWindow(id)
+      if (primaryWin && !primaryWin.isDestroyed()) {
+        for (const tabId of tabIds) {
+          primaryWin.webContents.send('tab:return', tabId)
+          this.tabToWindowId.delete(tabId)
+        }
+      }
+      this.detachedWindowTabs.delete(id)
+    }
+
     this.windows.delete(id)
     for (const [ptyId, wcId] of this.ptyToWebContentsId) {
       const win = this.getWindowByWebContentsId(wcId)
@@ -50,6 +68,71 @@ class WindowManager {
         this.ptyToWebContentsId.delete(ptyId)
       }
     }
+  }
+
+  /** Record that a detached window owns the given tab IDs (appends; used on tear-off). */
+  recordDetachedTab(windowId: number, tabIds: string[]): void {
+    const existing = this.detachedWindowTabs.get(windowId) ?? []
+    this.detachedWindowTabs.set(windowId, [...existing, ...tabIds])
+    for (const tabId of tabIds) {
+      this.tabToWindowId.set(tabId, windowId)
+    }
+  }
+
+  /** Remove a single tab from routing (used when a tab is absorbed or brought home). */
+  unrecordTab(tabId: string): void {
+    const windowId = this.tabToWindowId.get(tabId)
+    if (windowId === undefined) return
+    this.tabToWindowId.delete(tabId)
+    const existing = this.detachedWindowTabs.get(windowId)
+    if (existing) {
+      this.detachedWindowTabs.set(windowId, existing.filter((id) => id !== tabId))
+    }
+  }
+
+  /** Replace the full tab list for a window (used on live-sync updates). */
+  recordDetachedTabsForWindow(windowId: number, tabIds: string[]): void {
+    const old = this.detachedWindowTabs.get(windowId) ?? []
+    // Remove stale mappings
+    for (const id of old) {
+      if (!tabIds.includes(id)) this.tabToWindowId.delete(id)
+    }
+    this.detachedWindowTabs.set(windowId, tabIds)
+    for (const id of tabIds) {
+      this.tabToWindowId.set(id, windowId)
+    }
+  }
+
+  /** Returns the window ID that currently owns a tab, or null. */
+  getWindowIdForTab(tabId: string): number | null {
+    return this.tabToWindowId.get(tabId) ?? null
+  }
+
+  broadcastExcept(excludeId: number, channel: string, ...args: unknown[]): void {
+    for (const [id, win] of this.windows) {
+      if (id !== excludeId && !win.isDestroyed()) {
+        win.webContents.send(channel, ...args)
+      }
+    }
+  }
+
+  /** Focus the window that owns a given tab. Returns true if found. */
+  focusWindowForTab(tabId: string): boolean {
+    const winId = this.tabToWindowId.get(tabId)
+    if (winId === undefined) return false
+    const win = this.windows.get(winId)
+    if (!win || win.isDestroyed()) return false
+    if (win.isMinimized()) win.restore()
+    win.focus()
+    return true
+  }
+
+  /** Returns the first registered window that is NOT the given window id (i.e. the primary). */
+  private _getPrimaryWindow(excludeId: number): BrowserWindow | null {
+    for (const [id, win] of this.windows) {
+      if (id !== excludeId && !win.isDestroyed()) return win
+    }
+    return null
   }
 
   routePty(ptyId: string, webContentsId: number): void {

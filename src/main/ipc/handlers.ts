@@ -137,10 +137,14 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return branch
   }
 
-  // Per-window setup: send current session list when a new window loads.
+  // Per-window setup: send current session list when a new window loads,
+  // and broadcast to all windows whenever this window gains OS focus.
   function registerWindowHandlers(win: BrowserWindow): void {
     win.webContents.once('did-finish-load', () => {
       win.webContents.send('sessions:updated', index.getAll())
+    })
+    win.on('focus', () => {
+      windowManager.broadcastAll('window:became-active', win.id)
     })
   }
 
@@ -341,8 +345,31 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const tab = JSON.parse(tabJson) as Tab
     const newWin = windowManager.createDetachedWindow(fromWin, screenX, screenY)
     windowManager.pendingInitData.set(newWin.id, { mode: 'detached', tab, ptyIds })
+    windowManager.recordDetachedTab(newWin.id, [tab.id])
     registerWindowHandlers(newWin)
     return { windowId: newWin.id }
+  })
+
+  ipcMain.handle('window:focus-for-tab', (_e, tabId: string) => {
+    return windowManager.focusWindowForTab(tabId)
+  })
+
+  // Immediate focus relay: detached window clicked a pane → broadcast to all other windows.
+  ipcMain.on('pane:focus-changed', (e, windowId: number, tabId: string, paneId: string) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender)
+    if (!senderWin) return
+    windowManager.broadcastExcept(senderWin.id, 'pane:focus-changed', windowId, tabId, paneId)
+  })
+
+  ipcMain.handle('window:focus-pane', (_e, tabId: string, paneId: string) => {
+    const winId = windowManager.getWindowIdForTab(tabId)
+    if (winId === null) return false
+    const win = windowManager.getWindowById(winId)
+    if (!win || win.isDestroyed()) return false
+    if (win.isMinimized()) win.restore()
+    win.focus()
+    win.webContents.send('pane:focus-remote', tabId, paneId)
+    return true
   })
 
   ipcMain.handle('tab:adopt', (e, ptyIds: string[]) => {
@@ -351,6 +378,47 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     for (const ptyId of ptyIds as string[]) {
       windowManager.routePty(ptyId, win.webContents.id)
     }
+  })
+
+  // Live tab state sync: detached window pushes its tab list; we update routing and forward to others.
+  ipcMain.on('tab:state-sync', (e, windowId: number, tabsJson: string, activeTabId?: string) => {
+    const senderWin = BrowserWindow.fromWebContents(e.sender)
+    if (!senderWin) return
+    try {
+      const tabs = JSON.parse(tabsJson) as Array<{ id: string }>
+      windowManager.recordDetachedTabsForWindow(senderWin.id, tabs.map((t) => t.id))
+    } catch { /* ignore malformed */ }
+    windowManager.broadcastExcept(senderWin.id, 'tab:state-sync', windowId, tabsJson, activeTabId)
+  })
+
+  // Move a pane (with its PTY) to a tab in another window.
+  ipcMain.handle('pane:transfer', (_e, paneJson: string, targetTabId: string) => {
+    try {
+      const pane = JSON.parse(paneJson) as { ptyId?: string }
+      const targetWindowId = windowManager.getWindowIdForTab(targetTabId)
+      if (targetWindowId === null) return false
+      const toWin = windowManager.getWindowById(targetWindowId)
+      if (!toWin || toWin.isDestroyed()) return false
+      if (pane.ptyId) windowManager.transferPty(pane.ptyId, toWin)
+      toWin.webContents.send('pane:received', paneJson, targetTabId)
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  // Pull a detached tab back to the requesting window.
+  ipcMain.handle('tab:bring-home', (e, tabId: string) => {
+    const targetWindowId = windowManager.getWindowIdForTab(tabId)
+    if (targetWindowId === null) return false
+    const sourceWin = windowManager.getWindowById(targetWindowId)
+    if (!sourceWin || sourceWin.isDestroyed()) return false
+    // Unrecord before sending release so stale syncs and unregister() don't re-process this tab.
+    windowManager.unrecordTab(tabId)
+    sourceWin.webContents.send('tab:release', tabId)
+    const callerWin = BrowserWindow.fromWebContents(e.sender)
+    callerWin?.webContents.send('tab:return', tabId)
+    return true
   })
 
   ipcMain.handle('tab:absorb', (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
@@ -366,6 +434,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     if (sourceWin && !sourceWin.isDestroyed()) {
       try {
         const tab = JSON.parse(tabJson) as Tab
+        // Unrecord before sending release so that unregister() won't fire tab:return
+        // if the source window closes immediately after losing its last tab.
+        windowManager.unrecordTab(tab.id)
         sourceWin.webContents.send('tab:release', tab.id)
       } catch { /* malformed JSON */ }
     }
