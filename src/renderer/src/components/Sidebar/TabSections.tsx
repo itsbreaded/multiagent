@@ -178,7 +178,7 @@ function PaneRow({
     ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
     : null
   const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges, isFocused)
-  const branch = showGitBranchBadges ? displayGitBranch(session?.gitBranch) ?? displayGitBranch(cwdBranch) : null
+  const branch = showGitBranchBadges ? displayGitBranch(cwdBranch) ?? displayGitBranch(session?.gitBranch) : null
   const isOnlyPane = !tab.rootNode || collectLeaves(tab.rootNode).length <= 1
 
   React.useEffect(() => {

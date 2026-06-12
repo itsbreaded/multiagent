@@ -148,13 +148,13 @@ export function Sidebar(): JSX.Element {
       {/* Action buttons */}
       <div style={sidebarStyles.actionRow}>
         <SplitSpawnButton
-          label={<><AgentIcon agentKind={lastAgentKind} size={16} /> Session</>}
+          label={<><AgentIcon agentKind={lastAgentKind} size={14} /> Session</>}
           title={`Start ${agentLabel(lastAgentKind)} session`}
           onMain={() => spawn('agent', 'vertical', smartCwd(), lastAgentKind)}
           onDropdown={(e) => setSpawnMenu({ type: 'agent', x: e.clientX, y: e.clientY })}
         />
         <SplitSpawnButton
-          label={<><ShellIcon size={16} /> Shell</>}
+          label={<><ShellIcon size={14} /> Shell</>}
           title="Open shell"
           dropdownTitle="Choose shell location"
           onMain={spawnShellFromSavedMode}
@@ -288,7 +288,7 @@ function SplitSpawnButton({
       <button
         onClick={onMain}
         title={title}
-        style={{ flex: 1, background: 'none', border: 'none', borderRight: border.default, color: base.color, fontSize: base.fontSize, fontWeight: base.fontWeight, cursor: 'pointer', padding: base.padding, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+        style={{ flex: 1, minWidth: 0, background: 'none', border: 'none', borderRight: border.default, color: base.color, fontSize: base.fontSize, fontWeight: base.fontWeight, cursor: 'pointer', padding: base.padding, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >
@@ -297,7 +297,7 @@ function SplitSpawnButton({
       <button
         onClick={onDropdown}
         title={dropdownTitle}
-        style={{ flex: '0 0 26px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+        style={{ flex: '0 0 22px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >

@@ -183,12 +183,12 @@ export const menuStyles = {
 
 export const controlStyles = {
   sidebarButton: {
-    padding: '6px 6px',
+    padding: '5px 4px',
     backgroundColor: ui.color.control,
     border: border.default,
     borderRadius: ui.radius.md,
     color: ui.color.text,
-    fontSize: 12,
+    fontSize: 11,
     cursor: 'pointer',
     fontWeight: 500,
     textAlign: 'center',
