@@ -218,6 +218,8 @@ export interface IPCChannels {
   'pane:move-remote': (paneId: string, targetTabId: string) => void
   // Renderer asks main to bring a detached tab back to this window
   'tab:bring-home': (tabId: string) => boolean
+  // Detached window asks main to reattach (move) one of its own tabs back to the primary window
+  'tab:reattach-home': (tabId: string) => boolean
 
   // Renderer asks main to focus the window owning a tab AND activate a specific pane
   'window:focus-pane': (tabId: string, paneId: string) => boolean
@@ -260,6 +262,7 @@ export type InvokeChannels =
   | 'window:focus-for-tab'
   | 'pane:transfer'
   | 'tab:bring-home'
+  | 'tab:reattach-home'
   | 'window:focus-pane'
 
 export type EventChannels =

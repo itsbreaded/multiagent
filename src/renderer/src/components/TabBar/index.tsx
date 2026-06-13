@@ -76,6 +76,7 @@ interface ContextMenuState {
 function ContextMenu({
   menu,
   tabs,
+  isDetachedWindow,
   onClose,
   onRename,
   onChangeDefaultDir,
@@ -86,6 +87,7 @@ function ContextMenu({
 }: {
   menu: ContextMenuState
   tabs: Tab[]
+  isDetachedWindow: boolean
   onClose: () => void
   onRename: (tabId: string) => void
   onChangeDefaultDir: (tabId: string) => void
@@ -153,7 +155,9 @@ function ContextMenu({
       {item('Rename Tab', () => { onRename(menu.tabId); onClose() })}
       {item(defaultDirLabel, () => { onChangeDefaultDir(menu.tabId); onClose() })}
       {separator()}
-      {item('Move Tab to New Window', () => { tearOffTab(menu.tabId, tabs); onClose() })}
+      {isDetachedWindow
+        ? item('Reattach to Main Window', () => { reattachHome(menu.tabId); onClose() })
+        : item('Move Tab to New Window', () => { tearOffTab(menu.tabId, tabs); onClose() })}
       {separator()}
       {item('Close Tab', () => { closeTab(menu.tabId); onClose() })}
       {item('Close Other Tabs', () => { closeOtherTabs(menu.tabId); onClose() }, !hasOthers)}
@@ -162,6 +166,12 @@ function ContextMenu({
       {item('Duplicate Tab', () => { duplicateTab(menu.tabId); onClose() })}
     </div>
   )
+}
+
+// Move a detached window's own tab back to the primary window. Main sends this
+// window tab:release (which removes it locally) and the primary tab:return.
+function reattachHome(tabId: string): void {
+  window.ipc.invoke('tab:reattach-home', tabId).catch(console.error)
 }
 
 function tearOffTab(tabId: string, tabs: Tab[]): void {
@@ -753,6 +763,7 @@ export function TabBar(): JSX.Element {
           <ContextMenu
             menu={contextMenu}
             tabs={tabs.filter((t) => !t.detached)}
+            isDetachedWindow={isDetachedWindow}
             onClose={() => setContextMenu(null)}
             onRename={startRename}
             onChangeDefaultDir={(tabId) => setDirPickerState(tabId)}

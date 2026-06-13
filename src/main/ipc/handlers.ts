@@ -510,6 +510,21 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return true
   })
 
+  // Reattach: a detached window moves one of its own tabs back to the primary window.
+  // Mirror of tab:bring-home, but the SENDER is the source (the detached window) and the
+  // destination is the primary window. Unrecording first means the detached window's
+  // close-time return (if this empties it) and any in-flight sync won't duplicate the tab.
+  ipcMain.handle('tab:reattach-home', (e, tabId: string) => {
+    const callerWin = BrowserWindow.fromWebContents(e.sender)
+    if (!callerWin) return false
+    const primaryWin = windowManager.getPrimaryWindow()
+    if (!primaryWin || primaryWin.isDestroyed() || primaryWin.id === callerWin.id) return false
+    windowManager.unrecordTab(tabId)
+    callerWin.webContents.send('tab:release', tabId)
+    primaryWin.webContents.send('tab:return', tabId)
+    return true
+  })
+
   ipcMain.handle('tab:absorb', async (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
     const toWin = BrowserWindow.fromWebContents(e.sender)
     if (!toWin) return false

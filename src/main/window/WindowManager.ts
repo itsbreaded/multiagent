@@ -192,6 +192,14 @@ class WindowManager {
     return null
   }
 
+  /** Returns the primary (non-detached) window — the original window tabs reattach to. */
+  getPrimaryWindow(): BrowserWindow | null {
+    for (const [id, win] of this.windows) {
+      if (!this.detachedWindowIds.has(id) && !win.isDestroyed()) return win
+    }
+    return null
+  }
+
   routePty(ptyId: string, webContentsId: number): void {
     this.ptyToWebContentsId.set(ptyId, webContentsId)
   }
