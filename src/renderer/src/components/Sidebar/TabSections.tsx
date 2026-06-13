@@ -29,12 +29,14 @@ export function TabSections(): JSX.Element {
   const detachedWindowActiveTabIds = usePanesStore((s) => s.detachedWindowActiveTabIds)
   const windowId = usePanesStore((s) => s.windowId)
   const activeWindowId = usePanesStore((s) => s.activeWindowId)
-  const confirmedFocusTarget = usePanesStore((s) => s.confirmedFocusTarget)
   const pendingFocusTarget = usePanesStore((s) => s.pendingFocusTarget)
+  const localFocusArmed = usePanesStore((s) => s.localFocusArmed)
   const focusDetachedPaneOptimistically = usePanesStore((s) => s.focusDetachedPaneOptimistically)
-  // Local panes are highlighted only when this window has OS focus (or focus is unknown).
-  const effectiveFocusTarget = pendingFocusTarget ?? confirmedFocusTarget
-  const effectiveActiveWindowId = effectiveFocusTarget?.windowId ?? activeWindowId
+  const focusLocalPaneFromSidebar = usePanesStore((s) => s.focusLocalPaneFromSidebar)
+  // Which window is effectively active: pending remote click wins, otherwise OS focus.
+  // Only one window shows a highlighted pane at a time — confirmedFocusTarget is
+  // intentionally excluded so that OS focus changes immediately de-highlight the old window.
+  const effectiveActiveWindowId = pendingFocusTarget?.windowId ?? activeWindowId
   const localWindowActive = effectiveActiveWindowId === null || effectiveActiveWindowId === windowId
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
@@ -102,8 +104,8 @@ export function TabSections(): JSX.Element {
             window.ipc?.invoke('window:focus-for-tab', tab.id).catch(() => {})
           }
           const isOwnerWindowActive = ownerWindowNumId !== undefined && effectiveActiveWindowId === ownerWindowNumId
-          const focusTargetForTab = effectiveFocusTarget !== null && effectiveFocusTarget.windowId === ownerWindowNumId && effectiveFocusTarget.tabId === tab.id
-            ? effectiveFocusTarget
+          const focusTargetForTab = pendingFocusTarget !== null && pendingFocusTarget.windowId === ownerWindowNumId && pendingFocusTarget.tabId === tab.id
+            ? pendingFocusTarget
             : null
           const isTabActiveInWindow = focusTargetForTab !== null || (ownerWindowId ? detachedWindowActiveTabIds[ownerWindowId] === tab.id : leaves.length > 0)
           return (
@@ -216,8 +218,10 @@ export function TabSections(): JSX.Element {
                 pane={pane}
                 tab={tab}
                 sourceWindowId={windowId ?? undefined}
-                isFocused={localWindowActive && isActive && pane.id === tab.focusedPaneId}
+                isFocused={localWindowActive && localFocusArmed && isActive && pane.id === tab.focusedPaneId}
                 sessions={sessions}
+                onMouseDownOverride={() => focusLocalPaneFromSidebar(tab.id, pane.id)}
+                onClickOverride={() => focusLocalPaneFromSidebar(tab.id, pane.id)}
               />
             ))}
           </SidebarSection>

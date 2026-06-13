@@ -6,13 +6,31 @@ import * as xtermRegistry from '../utils/xtermRegistry'
 let pendingRemoteFocusWindowId: number | null = null
 let pendingRemoteFocusTimer: ReturnType<typeof setTimeout> | null = null
 
+// Local sidebar focus arming. When OS focus moves into this window FROM another
+// window, the local sidebar highlight is disarmed until we know which pane is
+// actually focused — otherwise the stale focusedPaneId flashes before a pending
+// click resolves (and two windows can briefly highlight at once during the
+// cross-window became-active skew). It is re-armed by an explicit local focus
+// action, or by a short grace timer for plain window activation.
+let localRearmTimer: ReturnType<typeof setTimeout> | null = null
+// One-shot: set on a local sidebar pane mousedown so the became-active that the OS
+// fires for this same click does not disarm the highlight we are about to set.
+// became-active consumes it; the timer is a backstop so it can never linger and
+// wrongly suppress a later, unrelated cross-window disarm (e.g. when the pane was
+// clicked while this window was already active, so no became-active follows).
+let skipNextActivationDisarm = false
+let skipDisarmClearTimer: ReturnType<typeof setTimeout> | null = null
+const LOCAL_REARM_MS = 150
+const SKIP_DISARM_TTL_MS = 400
+
 function clearPendingRemoteFocus(): void {
   pendingRemoteFocusWindowId = null
   if (pendingRemoteFocusTimer !== null) {
     clearTimeout(pendingRemoteFocusTimer)
     pendingRemoteFocusTimer = null
   }
-  usePanesStore.setState({ pendingFocusTarget: null })
+  // pendingFocusTarget is intentionally not cleared here — it should remain visible
+  // until focus:target-changed arrives with the confirmed target, or the timeout fires.
 }
 
 function uuid(): string {
@@ -161,6 +179,9 @@ interface PanesStore {
   activeWindowId: number | null
   confirmedFocusTarget: FocusTarget | null
   pendingFocusTarget: { windowId: number; tabId: string; paneId?: string } | null
+  // Whether this window's local sidebar pane highlight may be shown. Disarmed
+  // transiently when OS focus arrives from another window (see notes above).
+  localFocusArmed: boolean
   initDetached: (tab: Tab, ptyIds: string[]) => void
   receiveTab: (tab: Tab, atIndex?: number) => void
   detachTab: (tabId: string, ownerWindowId?: number) => void
@@ -204,6 +225,7 @@ interface PanesStore {
   // Pane operations
   focusPane: (paneId: string) => void
   focusPaneInTab: (tabId: string, paneId: string) => void
+  focusLocalPaneFromSidebar: (tabId: string, paneId: string) => void
   focusDetachedPaneOptimistically: (windowId: number, tabId: string, paneId?: string) => void
   splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string, agentKind?: AgentKind) => Promise<void>
   closePane: (paneId: string) => void
@@ -260,6 +282,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   activeWindowId: null,
   confirmedFocusTarget: null,
   pendingFocusTarget: null,
+  localFocusArmed: true,
 
   detachedWindowTabIds: {},
   detachedWindowActiveTabIds: {},
@@ -640,7 +663,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const tabs = s.tabs.map((t) =>
         t.id === s.activeTabId ? { ...t, focusedPaneId: paneId } : t
       )
-      return { tabs }
+      return { tabs, localFocusArmed: true }
     })
     // Immediately notify other windows — don't wait for the debounced tab:state-sync.
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
@@ -660,6 +683,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         activeTabId: tabId,
         tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
         zoomedPaneId,
+        localFocusArmed: true,
       }
     })
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
@@ -668,12 +692,25 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     reportCurrentFocusTarget()
   },
 
+  // Local sidebar pane click. Mark the upcoming OS activation as click-driven so
+  // it does not disarm the highlight, then focus the pane (which arms it).
+  focusLocalPaneFromSidebar: (tabId, paneId) => {
+    skipNextActivationDisarm = true
+    if (skipDisarmClearTimer !== null) clearTimeout(skipDisarmClearTimer)
+    skipDisarmClearTimer = setTimeout(() => {
+      skipNextActivationDisarm = false
+      skipDisarmClearTimer = null
+    }, SKIP_DISARM_TTL_MS)
+    get().focusPaneInTab(tabId, paneId)
+  },
+
   focusDetachedPaneOptimistically: (windowId, tabId, paneId) => {
     pendingRemoteFocusWindowId = windowId
     if (pendingRemoteFocusTimer !== null) clearTimeout(pendingRemoteFocusTimer)
     pendingRemoteFocusTimer = setTimeout(() => {
       pendingRemoteFocusWindowId = null
       pendingRemoteFocusTimer = null
+      usePanesStore.setState({ pendingFocusTarget: null })
     }, 1000)
 
     const key = String(windowId)
@@ -1326,17 +1363,56 @@ if (typeof window !== 'undefined' && window.ipc) {
   // Track which OS window currently has focus — used to show exactly one focused pane.
   window.ipc.on('window:became-active', (winId: unknown) => {
     if (typeof winId !== 'number') return
-    const { windowId } = usePanesStore.getState()
+    const { windowId, activeWindowId: prevActive } = usePanesStore.getState()
+
+    // Disarm the local sidebar highlight only when focus genuinely moves into THIS
+    // window from a different window. Plain re-focus of an already-active window and
+    // first focus at startup (prevActive === null) keep the highlight armed, so the
+    // single-window case is never affected. A click on a local sidebar pane sets
+    // skipNextActivationDisarm so the activation it triggers does not disarm.
+    const movedHereFromOtherWindow =
+      winId === windowId && prevActive !== null && prevActive !== windowId
+    const disarm = movedHereFromOtherWindow && !skipNextActivationDisarm
+    if (winId === windowId) skipNextActivationDisarm = false
+
+    if (disarm) {
+      // Re-arm shortly after, so plain window activation still restores the last
+      // focused pane. An intervening explicit focus arms it immediately and the
+      // guard below leaves that alone. The content focus ring stays visible
+      // throughout, so this only briefly defers the sidebar row highlight.
+      if (localRearmTimer !== null) clearTimeout(localRearmTimer)
+      localRearmTimer = setTimeout(() => {
+        localRearmTimer = null
+        const s = usePanesStore.getState()
+        if (s.activeWindowId === s.windowId && !s.localFocusArmed) {
+          usePanesStore.setState({ localFocusArmed: true })
+        }
+      }, LOCAL_REARM_MS)
+    }
+
     if (pendingRemoteFocusWindowId !== null) {
       if (winId === pendingRemoteFocusWindowId) {
+        // The correct remote window received OS focus. Clear the guard but keep
+        // pendingFocusTarget visible — focus:target-changed will replace it with
+        // the confirmed target once the detached window acks the focused pane.
         clearPendingRemoteFocus()
+        usePanesStore.setState({ activeWindowId: winId })
+        return
       } else if (winId === windowId) {
+        if (disarm) usePanesStore.setState({ localFocusArmed: false })
         return
       } else {
+        // A third window got focus; the pending focus request is stale.
         clearPendingRemoteFocus()
+        usePanesStore.setState({ activeWindowId: winId, pendingFocusTarget: null })
+        return
       }
     }
-    usePanesStore.setState({ activeWindowId: winId, pendingFocusTarget: null })
+    usePanesStore.setState({
+      activeWindowId: winId,
+      pendingFocusTarget: null,
+      ...(disarm ? { localFocusArmed: false } : {}),
+    })
     if (winId === windowId) reportCurrentFocusTarget()
   })
 
@@ -1359,8 +1435,15 @@ if (typeof window !== 'undefined' && window.ipc) {
     usePanesStore.setState((s) => ({
       activeWindowId: next.windowId,
       confirmedFocusTarget: next,
-      pendingFocusTarget: null,
-      tabs: next.paneId
+      // Only clear pendingFocusTarget when the confirmed target is for the same window
+      // we were targeting. If a stale self-focus report from the main window arrives
+      // after the user has already clicked a detached pane (pendingFocusTarget set),
+      // leave pendingFocusTarget intact so the sidebar doesn't flash the wrong pane.
+      pendingFocusTarget: s.pendingFocusTarget?.windowId === next.windowId ? null : s.pendingFocusTarget,
+      // Only sync focusedPaneId for tabs owned by a different window.
+      // For the local window, focusPaneInTab is the ground truth — overwriting here
+      // with a stale self-focus report would revert a pane click that already fired.
+      tabs: next.paneId && next.windowId !== s.windowId
         ? s.tabs.map((t) => t.id === next.tabId ? { ...t, focusedPaneId: next.paneId } : t)
         : s.tabs,
       detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [String(next.windowId)]: next.tabId },
