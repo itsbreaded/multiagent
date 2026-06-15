@@ -97,10 +97,8 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   }, [])
 
   const handlePaste = useCallback(() => {
-    const ptyId = ptyIdRef.current
-    if (!ptyId) return
     navigator.clipboard.readText().then((text) => {
-      if (text) window.ipc.send('pty:write', ptyId, text)
+      if (text) xtermRef.current?.paste(text)
     }).catch(() => {})
     setContextMenu(null)
   }, [])
@@ -192,12 +190,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
       // Ctrl+Shift+V: paste from clipboard
       if (mod && e.shiftKey && e.code === 'KeyV') {
-        const ptyId = ptyIdRef.current
-        if (ptyId) {
-          navigator.clipboard.readText().then((text) => {
-            if (text) window.ipc.send('pty:write', ptyId, text)
-          }).catch(() => {})
-        }
+        navigator.clipboard.readText().then((text) => {
+          if (text) xterm.paste(text)
+        }).catch(() => {})
         return stop()
       }
 
