@@ -487,7 +487,14 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
         ipcMain.on('pane:received-applied', onApplied)
         toWin.webContents.send('pane:received', JSON.stringify(payload.pane), payload.targetTabId, transferId)
       })
-      if (!committed || toWin.isDestroyed()) return false
+      if (!committed || toWin.isDestroyed()) {
+        // The target optimistically added the pane on pane:received but the transfer never
+        // committed (no PTY routing will follow). Tell it to discard the pane so it does not
+        // linger as a dead, output-less duplicate. The source still holds its working pane.
+        // See specs/atomic-state-audit-followup #2.
+        if (!toWin.isDestroyed()) toWin.webContents.send('pane:transfer-rolledback', payload.pane.id)
+        return false
+      }
       if (payload.pane.ptyId) windowManager.transferPty(payload.pane.ptyId, toWin)
       sourceWin.webContents.send('pane:remove-remote', payload.pane.id)
       return true
@@ -560,6 +567,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
         releaseId,
       )
     })
+    // On failure the source has NOT yet touched its copy of the tab (it only acked the
+    // release; finalize is deferred to tab:absorb-committed below), so there is nothing to
+    // roll back here — the absorber discards its optimistic copy on the falsy result.
     if (!released || toWin.isDestroyed()) return false
 
     windowManager.unrecordTab(tab.id)
@@ -568,6 +578,16 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
     for (const ptyId of ptyIds as string[]) {
       windowManager.transferPty(ptyId, toWin)
+    }
+    // PTYs are now routed to the absorbing window; only now is it safe for the source to
+    // drop/detach its copy. Without this commit the source either lost the tab before the
+    // transfer was confirmed (data loss) or never released it at all.
+    if (!sourceWin.isDestroyed()) {
+      sourceWin.webContents.send(
+        'tab:absorb-committed',
+        tab.id,
+        windowManager.isDetachedWindow(toWin.id) ? toWin.id : undefined,
+      )
     }
     return true
   })

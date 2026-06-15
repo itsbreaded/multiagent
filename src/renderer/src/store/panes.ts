@@ -1304,16 +1304,37 @@ if (typeof window !== 'undefined' && window.ipc) {
   // Main tells this window to release a tab (it moved to another window).
   // In a detached window: just remove it locally (PTYs stay alive in the destination).
   // In the primary window: mark it as detached so the sidebar still shows it.
+  //
+  // Two-phase (absorb) vs one-phase (bring-home / reattach-home):
+  // - With a releaseId, this is the absorb handshake. We only ACK here and DEFER the actual
+  //   removal/detach to tab:absorb-committed. Acting now would permanently lose the tab (and
+  //   orphan its PTYs) if the absorb later timed out — the source dropped its copy and the
+  //   absorber rolled back its optimistic copy. See specs/atomic-state-audit-followup #1.
+  // - Without a releaseId (bring-home / reattach-home), there is no commit step, so apply
+  //   immediately as before.
   window.ipc.on('tab:release', (tabId: unknown, ownerWindowId: unknown, releaseId: unknown) => {
     if (typeof tabId !== 'string') return
+    if (typeof releaseId === 'string') {
+      window.ipc.send('tab:release-applied', releaseId)
+      return
+    }
     const store = usePanesStore.getState()
     if (store.isDetachedWindow) {
       store.removeTabLocally(tabId)
     } else {
       store.detachTab(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined)
     }
-    if (typeof releaseId === 'string') {
-      window.ipc.send('tab:release-applied', releaseId)
+  })
+
+  // Absorb committed: the PTYs have been transferred to the absorbing window, so it is now
+  // safe to finalize releasing our copy of the tab (deferred from tab:release above).
+  window.ipc.on('tab:absorb-committed', (tabId: unknown, ownerWindowId: unknown) => {
+    if (typeof tabId !== 'string') return
+    const store = usePanesStore.getState()
+    if (store.isDetachedWindow) {
+      store.removeTabLocally(tabId)
+    } else {
+      store.detachTab(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined)
     }
   })
 
@@ -1478,6 +1499,13 @@ if (typeof window !== 'undefined' && window.ipc) {
   })
 
   window.ipc.on('pane:remove-remote', (paneId: unknown) => {
+    if (typeof paneId !== 'string') return
+    usePanesStore.getState().removePaneKeepTab(paneId)
+  })
+
+  // The transfer that delivered this pane (via pane:received) never committed; discard the
+  // optimistically-added pane so it does not linger without PTY output.
+  window.ipc.on('pane:transfer-rolledback', (paneId: unknown) => {
     if (typeof paneId !== 'string') return
     usePanesStore.getState().removePaneKeepTab(paneId)
   })

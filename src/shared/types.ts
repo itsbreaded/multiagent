@@ -206,6 +206,9 @@ export interface IPCChannels {
   'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => boolean
   // Main pushes to source window: remove the tab that was absorbed by another window
   'tab:release': (tabId: string, ownerWindowId?: number, releaseId?: string) => void
+  // Main confirms to the source window that an absorb committed (PTYs transferred); only now
+  // may the source finalize removal/detach of the released tab. Mirrors pane:remove-remote.
+  'tab:absorb-committed': (tabId: string, ownerWindowId?: number) => void
 
   // --- Multi-window: live sync & pane transfer ---
   // Detached window pushes its full tab list to main; main forwards to all other windows
@@ -215,6 +218,9 @@ export interface IPCChannels {
   // Main tells target window a pane is arriving
   'pane:received': (paneJson: string, targetTabId: string, transferId?: string) => void
   'pane:remove-remote': (paneId: string) => void
+  // Main tells the target window to discard a pane it optimistically added via pane:received
+  // because the transfer never committed (ack timeout / window destroyed). Avoids a dead pane.
+  'pane:transfer-rolledback': (paneId: string) => void
   'pane:move-remote': (paneId: string, targetTabId: string) => void
   // Renderer asks main to bring a detached tab back to this window
   'tab:bring-home': (tabId: string) => boolean
@@ -273,10 +279,12 @@ export type EventChannels =
   | 'window:snap-zones'
   | 'window:focus-state-request'
   | 'tab:release'
+  | 'tab:absorb-committed'
   | 'tab:return'
   | 'tab:state-sync'
   | 'pane:received'
   | 'pane:remove-remote'
+  | 'pane:transfer-rolledback'
   | 'pane:move-remote'
   | 'pane:focus-remote'
   // Immediate focus-change notification (bypasses the debounced tab:state-sync)
