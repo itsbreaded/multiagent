@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { AppChrome } from './components/AppChrome'
+import { LeftChrome } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
@@ -85,6 +86,7 @@ export default function App(): JSX.Element {
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const receiveTab = usePanesStore((s) => s.receiveTab)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
+  const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
 
   const tabs = usePanesStore((s) => s.tabs)
   const windowId = usePanesStore((s) => s.windowId)
@@ -174,6 +176,8 @@ export default function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [layoutReady, isDetachedWindow, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes])
 
+  const isWrapLayout = tabOverflowMode === 'wrap' && !isDetachedWindow
+
   return (
     <div
       style={{
@@ -218,33 +222,55 @@ export default function App(): JSX.Element {
         } catch { /* ignore */ }
       }}
     >
-      <AppChrome />
-
-      {/* Main content row */}
-      <div
-        style={{
-          display: 'flex',
-          flex: 1,
-          minHeight: 0,
-          minWidth: 0,
-          overflow: 'hidden',
-        }}
-      >
-        <Sidebar />
-
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <PaneGrid />
+      {isWrapLayout ? (
+        /* Wrap mode: left column (LeftChrome + Sidebar) || right column (tab strip + content) */
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+          {/* Left column */}
+          <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+            <LeftChrome withBorderBottom />
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
+              <Sidebar />
+            </div>
+          </div>
+          {/* Right column */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <AppChrome />
+            <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <PaneGrid />
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <>
+          <AppChrome />
+
+          {/* Main content row */}
+          <div
+            style={{
+              display: 'flex',
+              flex: 1,
+              minHeight: 0,
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <Sidebar />
+
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }}
+            >
+              <PaneGrid />
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Overlays — workspace tools only shown in the primary window */}
       {!isDetachedWindow && sessionBrowserOpen && <SessionBrowser />}

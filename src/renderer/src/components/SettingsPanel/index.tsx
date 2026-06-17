@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
+import { ui } from '../../styles/theme'
 import {
   DEFAULT_HOTKEYS,
   buildHotkeys,
@@ -28,6 +29,8 @@ export function SettingsPanel(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
   const setShowGitBranchBadges = useSettingsStore((s) => s.setShowGitBranchBadges)
+  const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
+  const setTabOverflowMode = useSettingsStore((s) => s.setTabOverflowMode)
   const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
   const setHotkeyOverride = useSettingsStore((s) => s.setHotkeyOverride)
   const resetHotkeyOverride = useSettingsStore((s) => s.resetHotkeyOverride)
@@ -40,7 +43,7 @@ export function SettingsPanel(): JSX.Element {
 
   const customizedCount = Object.keys(hotkeyOverrides).length
   const sections = useMemo(() => [
-    { id: 'appearance' as const, label: 'Appearance', count: 1 },
+    { id: 'appearance' as const, label: 'Appearance', count: 2 },
     { id: 'hotkeys' as const,    label: 'Hotkeys',    count: customizedCount },
     { id: 'mcp' as const,        label: 'MCP',        count: 0, experimental: true },
     { id: 'general' as const,    label: 'General',    count: 0 },
@@ -101,6 +104,7 @@ export function SettingsPanel(): JSX.Element {
 
   const normalizedQuery = query.trim().toLowerCase()
   const showBranchSetting = !normalizedQuery || 'git branch badges tabs panes'.includes(normalizedQuery)
+  const showOverflowSetting = !normalizedQuery || 'tab overflow scroll wrap rows'.includes(normalizedQuery)
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
@@ -240,7 +244,7 @@ export function SettingsPanel(): JSX.Element {
             {activeSection === 'appearance' && (
               <>
                 <SectionLabel>Appearance</SectionLabel>
-                {showBranchSetting ? (
+                {showBranchSetting && (
                   <SettingRow
                     title="Git branch badges"
                     description="Show the current branch beside tab default directories and pane directories."
@@ -254,7 +258,38 @@ export function SettingsPanel(): JSX.Element {
                       Enabled
                     </label>
                   </SettingRow>
-                ) : (
+                )}
+                {showOverflowSetting && (
+                  <SettingRow
+                    title="Tab overflow"
+                    description="Scroll keeps tabs in a single row; Wrap grows to additional rows."
+                  >
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {(['scroll', 'wrap'] as const).map((mode) => {
+                        const isActive = tabOverflowMode === mode
+                        return (
+                          <button
+                            key={mode}
+                            onClick={() => setTabOverflowMode(mode)}
+                            style={{
+                              padding: '4px 12px',
+                              background: isActive ? ui.color.control : 'none',
+                              border: `1px solid ${isActive ? ui.color.accent : ui.color.border}`,
+                              borderRadius: ui.radius.sm,
+                              color: isActive ? ui.color.text : ui.color.textMuted,
+                              fontSize: 12,
+                              cursor: 'pointer',
+                              fontWeight: isActive ? 500 : 400,
+                            }}
+                          >
+                            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </SettingRow>
+                )}
+                {!showBranchSetting && !showOverflowSetting && (
                   <EmptyMessage>No settings match your search.</EmptyMessage>
                 )}
               </>

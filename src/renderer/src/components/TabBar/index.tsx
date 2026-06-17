@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
+import { useSettingsStore } from '../../store/settings'
 import type { Tab } from '../../../../shared/types'
 import { computeLabels, collectLeaves } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
@@ -8,8 +9,10 @@ import { HOTKEYS } from '../../utils/hotkeys'
 import { decodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
 import { ui, border } from '../../styles/theme'
 import searchIcon from '../../assets/search.png'
-import commandPaletteIcon from '../../assets/commandpallete.png'
+import bookIcon from '../../assets/book.png'
 import settingsIcon from '../../assets/settings.png'
+import leftPanelOpenedIcon from '../../assets/leftpanelopened.png'
+import leftPanelClosedIcon from '../../assets/leftpanelclosed.png'
 import minimizeIcon from '../../assets/minimize.png'
 import maximizeIcon from '../../assets/maximize.png'
 import closeIcon from '../../assets/close.png'
@@ -280,6 +283,77 @@ function tearOffTab(tabId: string, tabs: Tab[]): void {
     .catch(console.error)
 }
 
+// --- LeftChrome ---
+// Exported so App.tsx can render it in a separate column in wrap mode.
+
+export function LeftChrome({ withBorderBottom = false }: { withBorderBottom?: boolean }): JSX.Element {
+  const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
+  const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
+  const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
+  const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
+  const toggleCommandPalette = usePanesStore((s) => s.toggleCommandPalette)
+  const toggleSettings = usePanesStore((s) => s.toggleSettings)
+  const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
+  const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
+  const settingsOpen = usePanesStore((s) => s.settingsOpen)
+
+  const isMac = isMacPlatform()
+  const leftChromePadding = 4
+  const controlClusterWidth = ui.chrome.controlSize * 4 + 8
+  const leftChromeWidth = sidebarOpen ? sidebarWidth : controlClusterWidth + (isMac ? 80 : 0)
+
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) startWindowDrag(e) }}
+      onDoubleClick={(e) => { if (e.target === e.currentTarget) window.ipc.invoke('window:toggle-maximize').catch(console.error) }}
+      style={{
+        width: leftChromeWidth,
+        minWidth: leftChromeWidth,
+        height: ui.chrome.height,
+        backgroundColor: ui.chrome.background,
+        paddingLeft: isMac ? 80 : leftChromePadding,
+        paddingRight: leftChromePadding,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0,
+        borderRight: border.default,
+        borderBottom: withBorderBottom ? border.default : undefined,
+        overflow: 'hidden',
+        flexShrink: 0,
+        ...appRegion('drag'),
+      }}
+    >
+      <BarButton
+        onClick={toggleSidebar}
+        title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
+      >
+        <img src={sidebarOpen ? leftPanelClosedIcon : leftPanelOpenedIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+      </BarButton>
+      <BarButton
+        onClick={toggleSessionBrowser}
+        title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
+        active={sessionBrowserOpen}
+      >
+        <img src={bookIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+      </BarButton>
+      <BarButton
+        onClick={toggleCommandPalette}
+        title={`Command palette (${HOTKEYS.commandPalette.display})`}
+        active={commandPaletteOpen}
+      >
+        <img src={searchIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+      </BarButton>
+      <BarButton
+        onClick={toggleSettings}
+        title="Settings"
+        active={settingsOpen}
+      >
+        <img src={settingsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+      </BarButton>
+    </div>
+  )
+}
+
 // --- TabBar ---
 
 export function TabBar(): JSX.Element {
@@ -309,14 +383,47 @@ export function TabBar(): JSX.Element {
   const detachTab = usePanesStore((s) => s.detachTab)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const sessions = useSessionsStore((s) => s.sessions)
+  const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
   const isMac = isMacPlatform()
   const isWindows = isWindowsPlatform()
-  const leftChromePadding = 2
-  const controlClusterWidth = ui.chrome.controlSize * 4 + 5
+  const leftChromePadding = 4
+  const controlClusterWidth = ui.chrome.controlSize * 4 + 8
   const leftChromeWidth = sidebarOpen ? sidebarWidth : controlClusterWidth + (isMac ? 80 : 0)
   const nativeWindowControlsWidth = isWindows ? ui.chrome.windowControlWidth * 3 : 0
 
   const labels = computeLabels(tabs, sessions)
+
+  // Scroll mode arrow state
+  const stripRef = useRef<HTMLDivElement>(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+
+  const updateScrollState = useCallback(() => {
+    const strip = stripRef.current
+    if (!strip || tabOverflowMode !== 'scroll') {
+      setCanScrollLeft(false)
+      setCanScrollRight(false)
+      return
+    }
+    setCanScrollLeft(strip.scrollLeft > 0)
+    setCanScrollRight(strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1)
+  }, [tabOverflowMode])
+
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    strip.addEventListener('scroll', updateScrollState, { passive: true })
+    const ro = new ResizeObserver(updateScrollState)
+    ro.observe(strip)
+    return () => {
+      strip.removeEventListener('scroll', updateScrollState)
+      ro.disconnect()
+    }
+  }, [updateScrollState])
+
+  useEffect(() => {
+    updateScrollState()
+  }, [tabs.length, sidebarOpen, tabOverflowMode, updateScrollState])
 
   // Intra-window tab reorder state
   const dragIndex = useRef<number | null>(null)
@@ -336,9 +443,10 @@ export function TabBar(): JSX.Element {
   const draggingTabRef = useRef<Tab | null>(null)
 
   useEffect(() => {
+    if (tabOverflowMode === 'wrap') return
     const el = tabRefs.current.get(activeTabId)
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [activeTabId])
+  }, [activeTabId, tabOverflowMode])
 
   useEffect(() => {
     return () => {
@@ -487,19 +595,22 @@ export function TabBar(): JSX.Element {
         if (e.target === e.currentTarget) startWindowDrag(e)
       }}
       style={{
-        height: isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height,
-        backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
+        height: tabOverflowMode === 'wrap' ? 'auto' : (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height),
+        minHeight: tabOverflowMode === 'wrap' ? (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height) : undefined,
+        // In wrap mode the root is transparent — each child carries its own background so the
+        // left chrome area does not visually grow beyond the first row.
+        backgroundColor: tabOverflowMode === 'wrap' ? 'transparent' : (isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background),
         borderBottom: border.default,
         display: 'flex',
-        alignItems: 'center',
+        alignItems: tabOverflowMode === 'wrap' ? 'flex-start' : 'center',
         flexShrink: 0,
-        overflow: 'hidden',
+        overflow: tabOverflowMode === 'wrap' ? 'visible' : 'hidden',
         paddingLeft: isDetachedWindow && isMac ? 80 : 0,
         ...appRegion('drag'),
       }}
     >
-      {/* Sidebar toggle — hidden in detached windows (content-only mode) */}
-      {!isDetachedWindow && (
+      {/* Sidebar toggle — hidden in detached windows and in wrap mode (rendered by App.tsx in a separate column) */}
+      {!isDetachedWindow && tabOverflowMode !== 'wrap' && (
         <div
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) startWindowDrag(e)
@@ -510,7 +621,8 @@ export function TabBar(): JSX.Element {
           style={{
             width: leftChromeWidth,
             minWidth: leftChromeWidth,
-            height: '100%',
+            height: isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height,
+            backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
             paddingLeft: isMac ? 80 : leftChromePadding,
             paddingRight: leftChromePadding,
             display: 'flex',
@@ -525,62 +637,75 @@ export function TabBar(): JSX.Element {
           <BarButton
             onClick={toggleSidebar}
             title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
-            active={sidebarOpen}
           >
-            ≡
+            <img src={sidebarOpen ? leftPanelClosedIcon : leftPanelOpenedIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
           </BarButton>
-          <div style={{ width: 1, height: 20, backgroundColor: ui.color.border, flexShrink: 0, margin: 0 }} />
           <BarButton
             onClick={toggleSessionBrowser}
             title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
             active={sessionBrowserOpen}
           >
-            <img src={searchIcon} alt="Search" style={{ width: 16, height: 16, display: 'block' }} />
+            <img src={bookIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
           </BarButton>
           <BarButton
             onClick={toggleCommandPalette}
             title={`Command palette (${HOTKEYS.commandPalette.display})`}
             active={commandPaletteOpen}
           >
-            <img src={commandPaletteIcon} alt="Command palette" style={{ width: 16, height: 16, display: 'block' }} />
+            <img src={searchIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
           </BarButton>
           <BarButton
             onClick={toggleSettings}
             title="Settings"
             active={settingsOpen}
           >
-            <img src={settingsIcon} alt="Settings" style={{ width: 16, height: 16, display: 'block' }} />
+            <img src={settingsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
           </BarButton>
         </div>
       )}
 
-      {/* Tab strip — also accepts cross-window tab drops */}
+      {/* Tab strip wrapper — relative-positioned for arrow buttons */}
       <div
-        className="tab-strip"
         style={{
-          flex: '0 1 auto',
+          position: 'relative',
+          flex: tabOverflowMode === 'wrap' ? '1 1 0%' : '0 1 auto',
           minWidth: 0,
-          maxWidth: '100%',
+          maxWidth: tabOverflowMode === 'wrap' ? undefined : '100%',
+          height: tabOverflowMode === 'wrap' ? 'auto' : '100%',
+          alignSelf: tabOverflowMode === 'wrap' ? 'flex-start' : undefined,
+          backgroundColor: tabOverflowMode === 'wrap' ? (isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background) : undefined,
           display: 'flex',
           alignItems: 'center',
-          gap: 2,
-          overflowX: 'auto',
-          overflowY: 'hidden',
-          paddingLeft: isDetachedWindow ? 0 : 2,
-          paddingRight: 6,
-          height: '100%',
-          ...appRegion('no-drag'),
-        }}
-        onDragOver={(e) => {
-          // Accept cross-window tab drops on the strip background
-          if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(PANE_DRAG_MIME)) {
-            e.preventDefault()
-          }
-        }}
-        onDrop={(e) => {
-          handleCrossWindowDrop(e)
         }}
       >
+        {/* Tab strip — also accepts cross-window tab drops */}
+        <div
+          ref={stripRef}
+          className="tab-strip"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: tabOverflowMode === 'wrap' ? 'wrap' : 'nowrap',
+            gap: 2,
+            overflowX: tabOverflowMode === 'wrap' ? 'visible' : 'auto',
+            overflowY: tabOverflowMode === 'wrap' ? 'visible' : 'hidden',
+            paddingLeft: isDetachedWindow ? 0 : 2,
+            paddingRight: 6,
+            height: tabOverflowMode === 'wrap' ? 'auto' : '100%',
+            ...appRegion('no-drag'),
+          }}
+          onDragOver={(e) => {
+            // Accept cross-window tab drops on the strip background
+            if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(PANE_DRAG_MIME)) {
+              e.preventDefault()
+            }
+          }}
+          onDrop={(e) => {
+            handleCrossWindowDrop(e)
+          }}
+        >
         {tabs.filter((t) => !t.detached).map((tab, idx) => {
           const isActive = tab.id === activeTabId
           const label = labels.get(tab.id) ?? 'Shell'
@@ -747,7 +872,9 @@ export function TabBar(): JSX.Element {
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
               style={{
-                height: 28,
+                height: tabOverflowMode === 'wrap'
+                  ? (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height)
+                  : 28,
                 minWidth: 86,
                 maxWidth: 180,
                 padding: '0 9px',
@@ -859,41 +986,148 @@ export function TabBar(): JSX.Element {
           )
         })}
 
-        <button
-          onClick={() => { const id = addTab(); startRename(id) }}
-          title={`New tab (${HOTKEYS.newTab.display})`}
-          style={{
-            marginLeft: 4,
-            width: 24,
-            height: 24,
-            borderRadius: 4,
-            border: `1px dashed ${ui.color.border}`,
-            backgroundColor: 'transparent',
-            color: ui.color.textDim,
-            cursor: 'pointer',
-            fontSize: 16,
+        {tabOverflowMode === 'wrap' && (
+          <button
+            onClick={() => { const id = addTab(); startRename(id) }}
+            title={`New tab (${HOTKEYS.newTab.display})`}
+            style={{
+              marginLeft: 4,
+              width: 24,
+              height: 24,
+              borderRadius: 4,
+              border: `1px dashed ${ui.color.border}`,
+              backgroundColor: 'transparent',
+              color: ui.color.textDim,
+              cursor: 'pointer',
+              fontSize: 16,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              flexShrink: 0,
+              alignSelf: 'center',
+              ...appRegion('no-drag'),
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
+          >
+            +
+          </button>
+        )}
+
+        </div>{/* end tab-strip */}
+
+        {/* Left scroll arrow */}
+        {tabOverflowMode === 'scroll' && canScrollLeft && (
+          <div style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            height: '100%',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            flexShrink: 0,
-            ...appRegion('no-drag'),
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
-        >
-          +
-        </button>
-      </div>
+            background: `linear-gradient(to right, ${isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background} 55%, transparent)`,
+            paddingRight: 4,
+            pointerEvents: 'none',
+          }}>
+            <div style={{ pointerEvents: 'auto' }}>
+              <BarButton
+                onClick={() => {
+                  const strip = stripRef.current
+                  if (strip) strip.scrollBy({ left: -(strip.clientWidth * 0.8), behavior: 'smooth' })
+                }}
+                title="Scroll tabs left"
+              >
+                ‹
+              </BarButton>
+            </div>
+          </div>
+        )}
+
+        {/* Right scroll arrow */}
+        {tabOverflowMode === 'scroll' && canScrollRight && (
+          <div style={{
+            position: 'absolute',
+            right: 0,
+            top: 0,
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            background: `linear-gradient(to left, ${isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background} 55%, transparent)`,
+            paddingLeft: 4,
+            pointerEvents: 'none',
+          }}>
+            <div style={{ pointerEvents: 'auto' }}>
+              <BarButton
+                onClick={() => {
+                  const strip = stripRef.current
+                  if (strip) strip.scrollBy({ left: strip.clientWidth * 0.8, behavior: 'smooth' })
+                }}
+                title="Scroll tabs right"
+              >
+                ›
+              </BarButton>
+            </div>
+          </div>
+        )}
+      </div>{/* end strip wrapper */}
+
+      {/* New tab button — only rendered here in scroll mode; wrap mode renders it inside the tab strip */}
+      {tabOverflowMode !== 'wrap' && (
+        <div style={{
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+        }}>
+          <button
+            onClick={() => { const id = addTab(); startRename(id) }}
+            title={`New tab (${HOTKEYS.newTab.display})`}
+            style={{
+              marginLeft: 4,
+              width: 24,
+              height: 24,
+              borderRadius: 4,
+              border: `1px dashed ${ui.color.border}`,
+              backgroundColor: 'transparent',
+              color: ui.color.textDim,
+              cursor: 'pointer',
+              fontSize: 16,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              flexShrink: 0,
+              ...appRegion('no-drag'),
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
+          >
+            +
+          </button>
+        </div>
+      )}
 
 
       <div
-        style={{ flex: 1, minWidth: 24, height: '100%', ...appRegion('drag') }}
+        style={{
+          flex: tabOverflowMode === 'wrap' ? 0 : 1,
+          minWidth: tabOverflowMode === 'wrap' ? 0 : 24,
+          height: isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height,
+          alignSelf: tabOverflowMode === 'wrap' ? 'flex-start' : undefined,
+          backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
+          ...appRegion('drag'),
+        }}
         onMouseDown={startWindowDrag}
         onDoubleClick={() => { window.ipc.invoke('window:toggle-maximize').catch(console.error) }}
       />
       {nativeWindowControlsWidth > 0 && (
-        <div style={{ width: nativeWindowControlsWidth, height: '100%', flexShrink: 0 }} />
+        <div style={{
+          width: nativeWindowControlsWidth,
+          height: tabOverflowMode === 'wrap' ? undefined : (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height),
+          alignSelf: tabOverflowMode === 'wrap' ? 'stretch' : undefined,
+          flexShrink: 0,
+          backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
+        }} />
       )}
       <WindowControls />
 
