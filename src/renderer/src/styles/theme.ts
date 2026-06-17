@@ -35,6 +35,16 @@ export const ui = {
     menuBackdrop: 200,
     menu: 201,
   },
+  chrome: {
+    height: 42,
+    detachedHeight: 34,
+    background: '#111315',
+    backgroundDetached: '#121416',
+    tabActive: '#1e2022',
+    tabInactiveHover: '#1a1b1e',
+    controlSize: 32,
+    windowControlWidth: 46,
+  },
   className: {
     darkScrollbar: 'dark-scrollbar',
   },

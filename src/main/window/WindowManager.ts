@@ -262,8 +262,11 @@ class WindowManager {
       height,
       show: false,
       autoHideMenuBar: true,
-      frame: process.platform !== 'darwin',
-      titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+      frame: false,
+      titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : process.platform === 'win32' ? 'hidden' : 'default',
+      titleBarOverlay: process.platform === 'win32'
+        ? { color: '#121416', symbolColor: '#c9cdd1', height: 34 }
+        : false,
       webPreferences: {
         preload: this.preloadPath,
         sandbox: false,

@@ -68,9 +68,11 @@ async function createWindow(): Promise<void> {
     height: state.height,
     show: false,
     autoHideMenuBar: true,
-    // Use standard frame on Windows, frameless on macOS
-    frame: process.platform !== 'darwin',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    frame: false,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : process.platform === 'win32' ? 'hidden' : 'default',
+    titleBarOverlay: process.platform === 'win32'
+      ? { color: '#111315', symbolColor: '#c9cdd1', height: 42 }
+      : false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

@@ -5,14 +5,25 @@ import type { Tab } from '../../../../shared/types'
 import { computeLabels, collectLeaves } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
-import { useGitBranch } from '../../hooks/useGitBranch'
-import { useSettingsStore } from '../../store/settings'
 import { decodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
+import { ui, border } from '../../styles/theme'
 import searchIcon from '../../assets/search.png'
 import commandPaletteIcon from '../../assets/commandpallete.png'
 import settingsIcon from '../../assets/settings.png'
+import minimizeIcon from '../../assets/minimize.png'
+import maximizeIcon from '../../assets/maximize.png'
+import closeIcon from '../../assets/close.png'
 
 const TAB_DRAG_MIME = 'application/x-multiagent-tab'
+
+function appRegion(value: 'drag' | 'no-drag'): React.CSSProperties {
+  return { WebkitAppRegion: value } as React.CSSProperties
+}
+
+function startWindowDrag(e: React.MouseEvent): void {
+  if (e.button !== 0) return
+  window.ipc.invoke('window:start-drag').catch(() => {})
+}
 
 function collectPtyIds(tab: Tab): string[] {
   if (!tab.rootNode) return []
@@ -39,34 +50,105 @@ function BarButton({
       onClick={onClick}
       title={title}
       style={{
-        background: active ? '#242528' : 'none',
+        background: active ? ui.color.control : 'none',
         border: 'none',
-        color: active ? '#c9cdd1' : '#5a5c61',
+        color: active ? ui.color.text : ui.color.textDim,
         cursor: 'pointer',
-        padding: '0 8px',
-        height: '100%',
+        padding: 0,
+        width: ui.chrome.controlSize,
+        height: ui.chrome.controlSize,
         fontSize: 16,
         lineHeight: 1,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
-        borderRadius: 0,
+        borderRadius: ui.radius.md,
+        ...appRegion('no-drag'),
       }}
       onMouseEnter={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color = '#c9cdd1'
-        ;(e.currentTarget as HTMLButtonElement).style.background = '#242528'
+        ;(e.currentTarget as HTMLButtonElement).style.color = ui.color.text
+        ;(e.currentTarget as HTMLButtonElement).style.background = ui.color.control
       }}
       onMouseLeave={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color = active ? '#c9cdd1' : '#5a5c61'
-        ;(e.currentTarget as HTMLButtonElement).style.background = active ? '#242528' : 'none'
+        ;(e.currentTarget as HTMLButtonElement).style.color = active ? ui.color.text : ui.color.textDim
+        ;(e.currentTarget as HTMLButtonElement).style.background = active ? ui.color.control : 'none'
       }}
     >
       {children}
     </button>
   )
 }
+function isMacPlatform(): boolean {
+  return /Mac/i.test(window.navigator.platform)
+}
 
+function isWindowsPlatform(): boolean {
+  return /Windows/i.test(window.navigator.userAgent)
+}
+
+function WindowControls(): JSX.Element | null {
+  const [isMaximized, setIsMaximized] = useState(false)
+
+  useEffect(() => {
+    if (isMacPlatform() || isWindowsPlatform()) return
+    window.ipc.invoke('window:is-maximized')
+      .then((value) => setIsMaximized(value === true))
+      .catch(() => {})
+    return window.ipc.on('window:maximized-changed', (value) => {
+      setIsMaximized(value === true)
+    })
+  }, [])
+
+  if (isMacPlatform() || isWindowsPlatform()) return null
+
+  const buttonStyle: React.CSSProperties = {
+    width: ui.chrome.windowControlWidth,
+    height: '100%',
+    border: 'none',
+    background: 'transparent',
+    color: ui.color.textMuted,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    lineHeight: 1,
+    cursor: 'default',
+    ...appRegion('no-drag'),
+  }
+
+  return (
+    <div style={{ height: '100%', display: 'flex', alignItems: 'stretch', flexShrink: 0, ...appRegion('no-drag') }}>
+      <button
+        title="Minimize"
+        style={buttonStyle}
+        onClick={() => { window.ipc.invoke('window:minimize').catch(console.error) }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = ui.color.control; e.currentTarget.style.color = ui.color.text }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = ui.color.textMuted }}
+      >
+        <img src={minimizeIcon} alt="" style={{ width: 12, height: 12, display: 'block' }} />
+      </button>
+      <button
+        title={isMaximized ? 'Restore' : 'Maximize'}
+        style={buttonStyle}
+        onClick={() => { window.ipc.invoke('window:toggle-maximize').catch(console.error) }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = ui.color.control; e.currentTarget.style.color = ui.color.text }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = ui.color.textMuted }}
+      >
+        <img src={maximizeIcon} alt="" style={{ width: 12, height: 12, display: 'block' }} />
+      </button>
+      <button
+        title="Close"
+        style={buttonStyle}
+        onClick={() => { window.ipc.invoke('window:close').catch(console.error) }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = '#c42b1c'; e.currentTarget.style.color = '#ffffff' }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = ui.color.textMuted }}
+      >
+        <img src={closeIcon} alt="" style={{ width: 12, height: 12, display: 'block', filter: 'brightness(0) invert(1)' }} />
+      </button>
+    </div>
+  )
+}
 interface ContextMenuState {
   tabId: string
   x: number
@@ -213,6 +295,7 @@ export function TabBar(): JSX.Element {
   const closeOtherTabs = usePanesStore((s) => s.closeOtherTabs)
   const closeTabsToRight = usePanesStore((s) => s.closeTabsToRight)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
+  const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
   const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
   const toggleCommandPalette = usePanesStore((s) => s.toggleCommandPalette)
@@ -226,6 +309,12 @@ export function TabBar(): JSX.Element {
   const detachTab = usePanesStore((s) => s.detachTab)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const sessions = useSessionsStore((s) => s.sessions)
+  const isMac = isMacPlatform()
+  const isWindows = isWindowsPlatform()
+  const leftChromePadding = 2
+  const controlClusterWidth = ui.chrome.controlSize * 4 + 5
+  const leftChromeWidth = sidebarOpen ? sidebarWidth : controlClusterWidth + (isMac ? 80 : 0)
+  const nativeWindowControlsWidth = isWindows ? ui.chrome.windowControlWidth * 3 : 0
 
   const labels = computeLabels(tabs, sessions)
 
@@ -391,19 +480,48 @@ export function TabBar(): JSX.Element {
 
   return (
     <div
+      onDoubleClick={(e) => {
+        if (e.target === e.currentTarget) window.ipc.invoke('window:toggle-maximize').catch(console.error)
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) startWindowDrag(e)
+      }}
       style={{
-        height: 36,
-        backgroundColor: '#141517',
-        borderBottom: '1px solid #2a2b2e',
+        height: isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height,
+        backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
+        borderBottom: border.default,
         display: 'flex',
         alignItems: 'center',
         flexShrink: 0,
         overflow: 'hidden',
+        paddingLeft: isDetachedWindow && isMac ? 80 : 0,
+        ...appRegion('drag'),
       }}
     >
       {/* Sidebar toggle — hidden in detached windows (content-only mode) */}
       {!isDetachedWindow && (
-        <>
+        <div
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) startWindowDrag(e)
+          }}
+          onDoubleClick={(e) => {
+            if (e.target === e.currentTarget) window.ipc.invoke('window:toggle-maximize').catch(console.error)
+          }}
+          style={{
+            width: leftChromeWidth,
+            minWidth: leftChromeWidth,
+            height: '100%',
+            paddingLeft: isMac ? 80 : leftChromePadding,
+            paddingRight: leftChromePadding,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0,
+            borderRight: border.default,
+            overflow: 'hidden',
+            flexShrink: 0,
+            ...appRegion('drag'),
+          }}
+        >
           <BarButton
             onClick={toggleSidebar}
             title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
@@ -411,22 +529,47 @@ export function TabBar(): JSX.Element {
           >
             ≡
           </BarButton>
-          <div style={{ width: 1, height: 20, backgroundColor: '#2a2b2e', flexShrink: 0 }} />
-        </>
+          <div style={{ width: 1, height: 20, backgroundColor: ui.color.border, flexShrink: 0, margin: 0 }} />
+          <BarButton
+            onClick={toggleSessionBrowser}
+            title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
+            active={sessionBrowserOpen}
+          >
+            <img src={searchIcon} alt="Search" style={{ width: 16, height: 16, display: 'block' }} />
+          </BarButton>
+          <BarButton
+            onClick={toggleCommandPalette}
+            title={`Command palette (${HOTKEYS.commandPalette.display})`}
+            active={commandPaletteOpen}
+          >
+            <img src={commandPaletteIcon} alt="Command palette" style={{ width: 16, height: 16, display: 'block' }} />
+          </BarButton>
+          <BarButton
+            onClick={toggleSettings}
+            title="Settings"
+            active={settingsOpen}
+          >
+            <img src={settingsIcon} alt="Settings" style={{ width: 16, height: 16, display: 'block' }} />
+          </BarButton>
+        </div>
       )}
 
       {/* Tab strip — also accepts cross-window tab drops */}
       <div
         className="tab-strip"
         style={{
-          flex: 1,
+          flex: '0 1 auto',
+          minWidth: 0,
+          maxWidth: '100%',
           display: 'flex',
           alignItems: 'center',
           gap: 2,
           overflowX: 'auto',
           overflowY: 'hidden',
-          paddingLeft: 6,
+          paddingLeft: isDetachedWindow ? 0 : 2,
           paddingRight: 6,
+          height: '100%',
+          ...appRegion('no-drag'),
         }}
         onDragOver={(e) => {
           // Accept cross-window tab drops on the strip background
@@ -598,36 +741,45 @@ export function TabBar(): JSX.Element {
               }}
               onClick={() => !isRenaming && setActiveTab(tab.id)}
               onAuxClick={(e) => { if (e.button === 1) closeTab(tab.id) }}
-              onDoubleClick={() => startRename(tab.id)}
+              onDoubleClick={(e) => { e.stopPropagation(); startRename(tab.id) }}
               onContextMenu={(e) => {
                 e.preventDefault()
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
               style={{
                 height: 28,
-                padding: '0 8px',
+                minWidth: 86,
+                maxWidth: 180,
+                padding: '0 9px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 5,
-                borderRadius: '4px 4px 0 0',
-                backgroundColor: isActive ? '#1e2022' : 'transparent',
-                borderTop: isActive ? '1px solid #2a2b2e' : '1px solid transparent',
-                borderBottom: isActive ? '1px solid #4ade80' : '1px solid transparent',
+                borderRadius: '6px 6px 0 0',
+                backgroundColor: isActive ? ui.chrome.tabActive : 'transparent',
+                borderTop: isActive ? border.default : '1px solid transparent',
+                borderBottom: isActive ? `2px solid ${ui.color.accent}` : '1px solid transparent',
                 borderLeft: dragOverIndex === idx && dragSide === 'left'
-                  ? '2px solid #4ade80'
-                  : isActive ? '1px solid #2a2b2e' : '1px solid transparent',
+                  ? `2px solid ${ui.color.accent}`
+                  : isActive ? border.default : '1px solid transparent',
                 borderRight: dragOverIndex === idx && dragSide === 'right'
-                  ? '2px solid #4ade80'
-                  : isActive ? '1px solid #2a2b2e' : '1px solid transparent',
-                outline: paneDropTabId === tab.id ? '1px solid #4ade80' : 'none',
+                  ? `2px solid ${ui.color.accent}`
+                  : isActive ? border.default : '1px solid transparent',
+                outline: paneDropTabId === tab.id ? border.accent : 'none',
                 outlineOffset: -1,
                 fontSize: 12,
-                color: isActive ? '#e2e4e6' : '#6b7280',
+                color: isActive ? ui.color.textStrong : ui.color.textMuted,
                 cursor: 'pointer',
                 userSelect: 'none',
                 flexShrink: 0,
                 transition: 'color 0.1s',
                 position: 'relative',
+                ...appRegion('no-drag'),
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) e.currentTarget.style.backgroundColor = ui.chrome.tabInactiveHover
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'
               }}
             >
               {live && (
@@ -636,7 +788,7 @@ export function TabBar(): JSX.Element {
                     width: 6,
                     height: 6,
                     borderRadius: '50%',
-                    backgroundColor: '#4ade80',
+                    backgroundColor: ui.color.accent,
                     flexShrink: 0,
                   }}
                 />
@@ -656,9 +808,9 @@ export function TabBar(): JSX.Element {
                   style={{
                     background: 'none',
                     border: 'none',
-                    outline: '1px solid #4ade80',
+                    outline: border.accent,
                     borderRadius: 2,
-                    color: '#e2e4e6',
+                    color: ui.color.textStrong,
                     fontSize: 12,
                     padding: '0 2px',
                     width: Math.max(60, renameValue.length * 7 + 16),
@@ -672,12 +824,12 @@ export function TabBar(): JSX.Element {
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
-                      maxWidth: 120,
+                      minWidth: 0,
+                      flex: 1,
                     }}
                   >
                     {label}
                   </span>
-                  <TabBranchBadge cwd={tab.defaultCwd} />
                 </>
               )}
 
@@ -686,7 +838,7 @@ export function TabBar(): JSX.Element {
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#5a5c61',
+                  color: isActive ? ui.color.textMuted : ui.color.textDim,
                   cursor: 'pointer',
                   padding: 0,
                   fontSize: 14,
@@ -695,10 +847,11 @@ export function TabBar(): JSX.Element {
                   alignItems: 'center',
                   marginLeft: 2,
                   flexShrink: 0,
+                  ...appRegion('no-drag'),
                 }}
                 title="Close tab"
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#e2e4e6' }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#5a5c61' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textStrong }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = isActive ? ui.color.textMuted : ui.color.textDim }}
               >
                 ×
               </button>
@@ -714,9 +867,9 @@ export function TabBar(): JSX.Element {
             width: 24,
             height: 24,
             borderRadius: 4,
-            border: '1px dashed #2a2b2e',
+            border: `1px dashed ${ui.color.border}`,
             backgroundColor: 'transparent',
-            color: '#5a5c61',
+            color: ui.color.textDim,
             cursor: 'pointer',
             fontSize: 16,
             display: 'flex',
@@ -724,42 +877,29 @@ export function TabBar(): JSX.Element {
             justifyContent: 'center',
             padding: 0,
             flexShrink: 0,
+            ...appRegion('no-drag'),
           }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#c9cdd1' }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#5a5c61' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
         >
           +
         </button>
       </div>
 
-      <div style={{ width: 1, height: 20, backgroundColor: '#2a2b2e', flexShrink: 0 }} />
 
-      {/* Global action buttons */}
-      <BarButton
-        onClick={toggleSessionBrowser}
-        title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
-        active={sessionBrowserOpen}
-      >
-        <img src={searchIcon} alt="Search" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
-      <BarButton
-        onClick={toggleCommandPalette}
-        title={`Command palette (${HOTKEYS.commandPalette.display})`}
-        active={commandPaletteOpen}
-      >
-        <img src={commandPaletteIcon} alt="Command palette" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
-      <BarButton
-        onClick={toggleSettings}
-        title="Settings"
-        active={settingsOpen}
-      >
-        <img src={settingsIcon} alt="Settings" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
+      <div
+        style={{ flex: 1, minWidth: 24, height: '100%', ...appRegion('drag') }}
+        onMouseDown={startWindowDrag}
+        onDoubleClick={() => { window.ipc.invoke('window:toggle-maximize').catch(console.error) }}
+      />
+      {nativeWindowControlsWidth > 0 && (
+        <div style={{ width: nativeWindowControlsWidth, height: '100%', flexShrink: 0 }} />
+      )}
+      <WindowControls />
 
       {/* Context menu (rendered outside tab strip to avoid overflow clipping) */}
       {contextMenu && (
-        <div id="tab-context-menu">
+        <div id="tab-context-menu" style={appRegion('no-drag')}>
           <ContextMenu
             menu={contextMenu}
             tabs={tabs.filter((t) => !t.detached)}
@@ -777,45 +917,20 @@ export function TabBar(): JSX.Element {
 
       {/* Directory picker — change default for existing tab */}
       {dirPickerState !== null && (
-        <DirPicker
-          title="Change default directory"
-          description="New sessions and shells in this tab will start here by default."
-          initial={dirPickerTab?.defaultCwd ?? ''}
-          confirmLabel="Change"
-          skipLabel="Cancel"
-          autoBrowse
-          onConfirm={(dir) => { setTabDefaultCwd(dirPickerState, dir); setDirPickerState(null) }}
-          onSkip={() => setDirPickerState(null)}
-        />
+        <div style={appRegion('no-drag')}>
+          <DirPicker
+            title="Change default directory"
+            description="New sessions and shells in this tab will start here by default."
+            initial={dirPickerTab?.defaultCwd ?? ''}
+            confirmLabel="Change"
+            skipLabel="Cancel"
+            autoBrowse
+            onConfirm={(dir) => { setTabDefaultCwd(dirPickerState, dir); setDirPickerState(null) }}
+            onSkip={() => setDirPickerState(null)}
+          />
+        </div>
       )}
     </div>
   )
 }
 
-function TabBranchBadge({ cwd }: { cwd?: string }): JSX.Element | null {
-  const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
-  const branch = useGitBranch(cwd, showGitBranchBadges && !!cwd)
-  if (!showGitBranchBadges || !cwd || !branch) return null
-
-  return (
-    <span
-      title={`${cwd}\n${branch}`}
-      style={{
-        fontSize: 10,
-        color: '#8a8a8a',
-        backgroundColor: '#191a1d',
-        border: '1px solid #2a2b2e',
-        borderRadius: 3,
-        padding: '0 4px',
-        lineHeight: '14px',
-        maxWidth: 72,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        flexShrink: 1,
-      }}
-    >
-      {branch}
-    </span>
-  )
-}

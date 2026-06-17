@@ -193,8 +193,14 @@ export interface IPCChannels {
   'window:get-id': () => number | null
   'window:get-init-data': () => { mode: 'detached'; tab: Tab; ptyIds: string[] } | null
   'window:get-all-bounds': () => { id: number; x: number; y: number; width: number; height: number }[]
+  'window:minimize': () => void
+  'window:toggle-maximize': () => boolean
+  'window:close': () => void
+  'window:is-maximized': () => boolean
+  'window:start-drag': () => void
   'window:snap-apply': (targetWindowId: number, side: 'left' | 'right' | 'top' | 'bottom') => void
   'window:snap-zones': (zones: { targetWindowId: number; side: string; x: number; y: number; width: number; height: number }[]) => void
+  'window:maximized-changed': (isMaximized: boolean) => void
   'window:focus-state-request': () => void
 
   // --- Multi-window: tab transfer ---
@@ -261,6 +267,11 @@ export type InvokeChannels =
   | 'window:get-id'
   | 'window:get-init-data'
   | 'window:get-all-bounds'
+  | 'window:minimize'
+  | 'window:toggle-maximize'
+  | 'window:close'
+  | 'window:is-maximized'
+  | 'window:start-drag'
   | 'window:snap-apply'
   | 'tab:tear-off'
   | 'tab:adopt'
@@ -277,6 +288,7 @@ export type EventChannels =
   | 'pty:cwd'
   | 'session:detected'
   | 'window:snap-zones'
+  | 'window:maximized-changed'
   | 'window:focus-state-request'
   | 'tab:release'
   | 'tab:absorb-committed'

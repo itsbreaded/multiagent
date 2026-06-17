@@ -66,6 +66,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const ptyManager = new PtyManager()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
   const coalesceBuffer = new Map<string, CoalesceEntry>()
+  const registeredWindowHandlers = new WeakSet<BrowserWindow>()
 
   function coalesePtyOutput(ptyId: string, chunk: string): void {
     const entry = coalesceBuffer.get(ptyId)
@@ -143,13 +144,19 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // Per-window setup: send current session list when a new window loads,
   // and broadcast to all windows whenever this window gains OS focus.
   function registerWindowHandlers(win: BrowserWindow): void {
+    if (registeredWindowHandlers.has(win)) return
+    registeredWindowHandlers.add(win)
     win.webContents.once('did-finish-load', () => {
       win.webContents.send('sessions:updated', index.getAll())
+      win.webContents.send('window:maximized-changed', win.isMaximized())
     })
     win.on('focus', () => {
       windowManager.broadcastAll('window:became-active', win.id)
       win.webContents.send('window:focus-state-request')
     })
+    win.on('maximize', () => win.webContents.send('window:maximized-changed', true))
+    win.on('unmaximize', () => win.webContents.send('window:maximized-changed', false))
+    win.on('restore', () => win.webContents.send('window:maximized-changed', win.isMaximized()))
   }
 
   // Register the main window and set up its window-specific handlers.
@@ -336,6 +343,43 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('window:get-all-bounds', () => {
     return windowManager.getAllBounds()
+  })
+
+  ipcMain.handle('window:minimize', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return
+    win.minimize()
+  })
+
+  ipcMain.handle('window:toggle-maximize', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return false
+    if (win.isMaximized()) {
+      win.unmaximize()
+    } else {
+      win.maximize()
+    }
+    const maximized = win.isMaximized()
+    win.webContents.send('window:maximized-changed', maximized)
+    return maximized
+  })
+
+  ipcMain.handle('window:close', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return
+    win.close()
+  })
+
+  ipcMain.handle('window:is-maximized', (e) => {
+    return BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false
+  })
+
+  ipcMain.handle('window:start-drag', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return
+    if ('startSystemMove' in win && typeof win.startSystemMove === 'function') {
+      win.startSystemMove()
+    }
   })
 
   ipcMain.handle('window:snap-apply', (e, targetWindowId: number, side: 'left' | 'right' | 'top' | 'bottom') => {

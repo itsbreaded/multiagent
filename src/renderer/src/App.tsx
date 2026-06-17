@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
-import { TabBar } from './components/TabBar'
+import { AppChrome } from './components/AppChrome'
 import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
@@ -218,6 +218,8 @@ export default function App(): JSX.Element {
         } catch { /* ignore */ }
       }}
     >
+      <AppChrome />
+
       {/* Main content row */}
       <div
         style={{
@@ -240,7 +242,6 @@ export default function App(): JSX.Element {
             overflow: 'hidden',
           }}
         >
-          <TabBar />
           <PaneGrid />
         </div>
       </div>
