@@ -244,7 +244,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('session:resume', async (e, agentKind, sessionId: string, cwd: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
-    const result = await spawner.spawnResume(agentKind, sessionId, cwd)
+    const result = await spawner.spawnResume(agentKind, sessionId, cwd, senderWin)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
     return result
   })

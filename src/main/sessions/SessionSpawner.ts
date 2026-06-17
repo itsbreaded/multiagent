@@ -106,8 +106,13 @@ export class SessionSpawner {
     return { ptyId, sessionId: null }
   }
 
-  async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string): Promise<{ ptyId: string }> {
+  async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string }> {
+    const targetWin = senderWin ?? this.mainWindow
     const ptyId = this.ptyManager.createAgent(cwd, agentKind)
+    const startedAt = Date.now()
+    if (agentKind === 'codex') {
+      this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin)
+    }
     this._writeWhenPromptReady(ptyId, `${resumeSessionCommand(agentKind, sessionId, cwd)}\r`)
     return { ptyId }
   }
