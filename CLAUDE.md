@@ -63,6 +63,16 @@ Two Zustand stores:
 
 IPC listeners are wired at module level after store creation (not inside components) to avoid multiple registrations.
 
+### Multi-Window State Invariants
+
+The primary window owns the sidebar and shows local plus detached tabs. Detached windows have content and a tab bar, but no sidebar. Multi-window tab and pane movement should preserve a single coherent ownership model across main, source renderer, target renderer, and PTY routing.
+
+User-level focus transitions must be atomic. Do not compose primitive actions such as `setActiveTab()` followed by `focusPane()` when the UI expects one focus change; use tab-aware transition actions such as `focusPaneInTab(tabId, paneId)`. Primitive setters should stay side-effect-light, and named transition actions should own any paired state update plus IPC broadcast.
+
+PTY routing must not move ahead of renderer ownership. For cross-window pane or tab movement, the destination should commit and ack before main reroutes PTYs, and the source should not delete its last good copy until the transfer is committed or rollback is possible. This is especially important for `tab:absorb`: a release timeout after the source has already removed the tab can lose the tab from all windows and orphan its PTYs.
+
+Detached sync and focus messages should be versioned or generation-checked. Stale `tab:state-sync` or focus acks must not reclaim moved tabs or focus a window that no longer owns the tab.
+
 ### UI Consistency
 
 Keep overlay surfaces visually aligned. Settings, Session Browser, and Command Palette should share the same application modal language: centered dark overlay, `#1a1b1e` panel, `#2a2b2e` borders, 10px radius, `0 24px 64px rgba(0,0,0,0.6)` shadow, muted section labels, and green `#4ade80` active accents. Do not introduce VS Code-specific colors or layout treatments in one overlay unless the rest of the app is intentionally updated to match.
