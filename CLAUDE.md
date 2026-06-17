@@ -6,7 +6,7 @@ Treat this as a living document. When features change, startup behavior changes,
 
 ## Planning Specs
 
-Use `specs/pending/` for planned work that needs design before implementation. A pending spec should describe the problem, current behavior, intended behavior, implementation phases, risks, and verification steps. If the spec is intended as a handoff to another developer or agent, include a clear handoff contract with non-negotiables and a definition of done. Keep specs practical and delete or move them when they stop being useful; do not keep stale todos or historical investigation logs around.
+Use `specs/pending/` for planned work that needs design before implementation. Name spec files with a three-digit sequence and kebab-case title, e.g. `001-lazy-tab-hydration.md`, preserving the number when moving the file to `specs/done/`. A pending spec should describe the problem, current behavior, intended behavior, implementation phases, risks, and verification steps. If the spec is intended as a handoff to another developer or agent, include a clear handoff contract with non-negotiables and a definition of done. Keep specs practical and delete or move them when they stop being useful; do not keep stale todos or historical investigation logs around.
 
 Move completed specs to `specs/done/` only when they still provide durable context worth preserving. If the useful lesson is short, fold it into `CLAUDE.md` instead and delete the spec.
 
