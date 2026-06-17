@@ -47,6 +47,7 @@ const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ?
 export function PaneGrid(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const hydratedTabIds = usePanesStore((s) => s.hydratedTabIds)
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
   const updatePaneRatio = usePanesStore((s) => s.updatePaneRatio)
   const newSession = usePanesStore((s) => s.newSession)
@@ -63,9 +64,9 @@ export function PaneGrid(): JSX.Element {
   const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
   const zoomedPane = zoomedPaneId ? findPane(zoomedPaneId) : null
 
-  // Outer container is position:relative so all tab layers stack via position:absolute.
-  // Inactive tabs use visibility:hidden + pointer-events:none instead of unmounting, which
-  // preserves xterm's scrollback buffer and PTY connection across tab switches.
+  // Outer container is position:relative so all hydrated tab layers stack via position:absolute.
+  // Restored inactive tabs are not mounted until first focus. Once hydrated, inactive tabs
+  // stay mounted with visibility:hidden to preserve xterm scrollback and PTY/session state.
   return (
     <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
 
@@ -258,6 +259,8 @@ export function PaneGrid(): JSX.Element {
       {tabs.map((tab) => {
         if (!tab.rootNode) return null
         const isActive = tab.id === activeTabId
+        const hydrated = hydratedTabIds[tab.id] === true
+        if (!isActive && !hydrated) return null
         // When active tab is zoomed, the normal grid is covered by the zoomed overlay above.
         // Skip rendering it so the zoomed pane isn't duplicated in the tree.
         if (isActive && zoomedPaneId && zoomedPane) return null

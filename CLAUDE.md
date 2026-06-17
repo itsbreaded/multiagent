@@ -4,6 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Treat this as a living document. When features change, startup behavior changes, agent launch behavior changes, or you discover constraints that matter for future coding sessions, update this file with the durable lesson. Keep it concise and operational: document what future agents need to know to avoid repeating investigation or breaking user workflows.
 
+## Planning Specs
+
+Use `specs/pending/` for planned work that needs design before implementation. A pending spec should describe the problem, current behavior, intended behavior, implementation phases, risks, and verification steps. If the spec is intended as a handoff to another developer or agent, include a clear handoff contract with non-negotiables and a definition of done. Keep specs practical and delete or move them when they stop being useful; do not keep stale todos or historical investigation logs around.
+
+Move completed specs to `specs/done/` only when they still provide durable context worth preserving. If the useful lesson is short, fold it into `CLAUDE.md` instead and delete the spec.
+
 ## Commands
 
 ```bash
@@ -50,7 +56,7 @@ The layout is a binary tree of `PaneNode = PaneLeaf | PaneSplit` (same model as 
 
 Display labels: `src/renderer/src/utils/tabLabels.ts` is the single source for label computation. `paneLabelText(pane, sessions)` returns `"customName - directory"` or just the directory. `computeLabels(tabs, sessions)` returns a `Map<tabId, string>` for the tab bar.
 
-Layouts are auto-restored on startup without prompting. `App.tsx` guards restore with a ref so React StrictMode cannot start duplicate restores, and layout saving is disabled until `layoutReady` to avoid overwriting a saved layout with an empty initial state. Saved layout includes `activeTabId`, `sidebarSectionOpen`, and `sidebarPanelSizes`; `applyLayout` validates focused pane IDs, restores the focused tab/pane and sidebar section expansion state when possible, and resumes agent sessions asynchronously so one failed resume does not block the whole layout. Startup resume should feel exactly like "where we left off"; do not collapse, expand, or focus UI sections implicitly unless that state was not present in an older saved layout. Any new resizable/collapsible sidebar panel must use a stable panel id and persist its size through `sidebarPanelSizes`.
+Layouts are auto-restored on startup without prompting. `App.tsx` guards restore with a ref so React StrictMode cannot start duplicate restores, and layout saving is disabled until `layoutReady` to avoid overwriting a saved layout with an empty initial state. Saved layout includes `activeTabId`, `sidebarSectionOpen`, and `sidebarPanelSizes`; `applyLayout` validates focused pane IDs, restores tab/pane metadata and sidebar section expansion state, and hydrates only the restored active tab. Inactive restored tabs stay visible in the tab bar/sidebar from metadata but their pane trees, shell PTYs, xterms, and agent resumes are deferred until first focus. Once a tab has hydrated, keep it mounted while inactive so scrollback and live PTY/session state survive tab switches. Startup resume should feel exactly like "where we left off"; do not collapse, expand, or focus UI sections implicitly unless that state was not present in an older saved layout. Any new resizable/collapsible sidebar panel must use a stable panel id and persist its size through `sidebarPanelSizes`.
 
 Terminal scrollback is intentionally high (`TERMINAL_SCROLLBACK_LINES = 250_000` in `src/renderer/src/components/Terminal/index.tsx`) because panes host long-running Codex/Claude chats and users need access to full visible history.
 
