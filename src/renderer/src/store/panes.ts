@@ -157,6 +157,17 @@ function rememberShellSpawnMode(mode: ShellSpawnMode): void {
   }
 }
 
+function markSessionDetectionPending(leaf: PaneLeaf, startedAt = Date.now()): PaneLeaf {
+  return {
+    ...leaf,
+    sessionDetectionState: 'pending',
+    sessionDetectionStartedAt: startedAt,
+    sessionDetectionCwd: leaf.cwd,
+    sessionDetectionError: undefined,
+    resumeError: undefined,
+  }
+}
+
 function markHydrated(hydratedTabIds: Record<string, true>, tabId: string): Record<string, true> {
   return hydratedTabIds[tabId] ? hydratedTabIds : { ...hydratedTabIds, [tabId]: true }
 }
@@ -214,10 +225,29 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
 
     const { id: paneId, agentKind, sessionId, cwd } = leaf
     hydratingPaneSessions[paneId] = sessionId
-    const resumePromise = window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
-      .then((result) => {
-        const resume = result as { ptyId?: string } | null
-        if (!resume?.ptyId) return
+    const resumePromise = (async () => {
+      try {
+        // Validate the session transcript exists before spawning a CLI process.
+        // A missing transcript would cause a doomed spawn; catch it early so we get
+        // recoverable UI instead of a repeated failure loop on every startup.
+        const validation = await window.ipc.invoke('sessions:validate', agentKind, sessionId, cwd)
+          .catch(() => null) as { found: boolean; cwdMatch: boolean } | null
+        if (!validation?.found) {
+          const current = usePanesStore.getState().findPaneInAnyTab(paneId)
+          if (
+            current?.paneType === 'agent' &&
+            current.agentKind === agentKind &&
+            current.sessionId === sessionId &&
+            !current.ptyId
+          ) {
+            usePanesStore.getState().updatePane(paneId, {
+              resumeError: 'Session not found — the transcript may have been deleted',
+            })
+          }
+          return
+        }
+        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd) as { ptyId?: string } | null
+        if (!result?.ptyId) return
         const current = usePanesStore.getState().findPaneInAnyTab(paneId)
         if (
           current?.paneType === 'agent' &&
@@ -225,10 +255,9 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
           current.sessionId === sessionId &&
           !current.ptyId
         ) {
-          usePanesStore.getState().updatePane(paneId, { ptyId: resume.ptyId, resumeError: undefined })
+          usePanesStore.getState().updatePane(paneId, { ptyId: result.ptyId, resumeError: undefined })
         }
-      })
-      .catch(() => {
+      } catch {
         const current = usePanesStore.getState().findPaneInAnyTab(paneId)
         if (
           current?.paneType === 'agent' &&
@@ -238,10 +267,10 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
         ) {
           usePanesStore.getState().updatePane(paneId, { resumeError: 'Session resume failed' })
         }
-      })
-      .finally(() => {
+      } finally {
         if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
-      })
+      }
+    })()
     resumes.push(resumePromise)
   }
 
@@ -899,7 +928,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       ? (agentKind ?? existing?.agentKind ?? get().lastAgentKind)
       : undefined
     const cwd = cwdOverride ?? existing?.cwd ?? tab?.defaultCwd ?? 'C:\\'
-    const newLeaf = makeLeaf(cwd, resolvedType, resolvedAgent)
+    const newLeaf = resolvedType === 'agent'
+      ? markSessionDetectionPending(makeLeaf(cwd, resolvedType, resolvedAgent))
+      : makeLeaf(cwd, resolvedType, resolvedAgent)
 
     set((s) => {
       const tabs = s.tabs.map((t) => {
@@ -917,13 +948,23 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (resolvedType === 'agent' && resolvedAgent && typeof window !== 'undefined' && window.ipc) {
       get().setLastAgentKind(resolvedAgent)
       try {
-        const result = await window.ipc.invoke('session:new', resolvedAgent, cwd) as { ptyId: string; sessionId: string | null }
+        const result = await window.ipc.invoke('session:new', resolvedAgent, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
         const patch: Partial<PaneLeaf> = {}
         if (result?.ptyId) patch.ptyId = result.ptyId
-        if (result?.sessionId) patch.sessionId = result.sessionId
+        if (typeof result?.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
+        if (result?.sessionId) {
+          patch.sessionId = result.sessionId
+          patch.sessionDetectionState = 'detected'
+          patch.sessionDetectionError = undefined
+        }
         if (Object.keys(patch).length > 0) get().updatePane(newLeaf.id, patch)
       } catch (err) {
         console.error('session:new IPC failed', err)
+        get().updatePane(newLeaf.id, {
+          sessionDetectionState: 'failed',
+          sessionDetectionError: 'Session detection failed to start',
+          resumeError: 'Session detection failed to start',
+        })
       }
     }
     // shell panes: Terminal handles pty:create automatically on mount
@@ -1009,7 +1050,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setSessionId: (paneId, sessionId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { sessionId }) } : t),
+      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, {
+        sessionId,
+        sessionDetectionState: 'detected',
+        sessionDetectionError: undefined,
+        resumeError: undefined,
+      }) } : t),
     }))
   },
 
@@ -1100,7 +1146,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   newSession: async (cwd, direction = 'vertical', agentKind) => {
     const resolvedAgent = agentKind ?? get().lastAgentKind
     get().setLastAgentKind(resolvedAgent)
-    const leaf = makeLeaf(cwd, 'agent', resolvedAgent)
+    const leaf = markSessionDetectionPending(makeLeaf(cwd, 'agent', resolvedAgent))
     set((s) => {
       if (s.tabs.length === 0) {
         const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
@@ -1121,13 +1167,23 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        const result = (await window.ipc.invoke('session:new', resolvedAgent, cwd)) as { ptyId: string; sessionId: string | null }
+        const result = (await window.ipc.invoke('session:new', resolvedAgent, cwd)) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
         const patch: Partial<PaneLeaf> = {}
         if (result?.ptyId) patch.ptyId = result.ptyId
-        if (result?.sessionId) patch.sessionId = result.sessionId
+        if (typeof result?.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
+        if (result?.sessionId) {
+          patch.sessionId = result.sessionId
+          patch.sessionDetectionState = 'detected'
+          patch.sessionDetectionError = undefined
+        }
         if (Object.keys(patch).length > 0) get().updatePane(leaf.id, patch)
       } catch (err) {
         console.error('session:new IPC failed', err)
+        get().updatePane(leaf.id, {
+          sessionDetectionState: 'failed',
+          sessionDetectionError: 'Session detection failed to start',
+          resumeError: 'Session detection failed to start',
+        })
       }
     }
   },
@@ -1156,30 +1212,65 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   applyLayout: async (saved) => {
     try {
-      // Strip ptyIds and convert unresumable agent panes to shell panes up front.
-      // A missing sessionId means the pane was never used (blank session), so
-      // convert it to a shell pane rather than guessing which session to restore.
-      function sanitizeNode(node: PaneNode): PaneNode {
+      // Strip ptyIds and convert legacy unresumable agent panes to shell panes.
+      // Panes explicitly saved while detection was pending stay recoverable.
+      async function sanitizeNode(node: PaneNode): Promise<PaneNode> {
         if (node.type === 'leaf') {
           const legacy = node as Omit<PaneLeaf, 'paneType'> & { paneType: PaneType | 'claude' }
           const migrated: PaneLeaf = legacy.paneType === 'claude'
             ? { ...legacy, paneType: 'agent', agentKind: 'claude' }
             : { ...node, agentKind: node.paneType === 'agent' ? (node.agentKind ?? 'claude') : undefined }
           if (migrated.paneType === 'agent' && !migrated.sessionId) {
+            const isRecoverablePending =
+              migrated.sessionDetectionState === 'pending' &&
+              migrated.agentKind &&
+              typeof migrated.sessionDetectionStartedAt === 'number'
+
+            if (isRecoverablePending && typeof window !== 'undefined' && window.ipc) {
+              const recovered = await window.ipc.invoke(
+                'sessions:recover-pending',
+                migrated.agentKind,
+                migrated.sessionDetectionCwd ?? migrated.cwd,
+                migrated.sessionDetectionStartedAt,
+              ).catch(() => null)
+              if (typeof recovered === 'string' && recovered) {
+                return {
+                  ...migrated,
+                  sessionId: recovered,
+                  ptyId: undefined,
+                  sessionDetectionState: 'detected',
+                  sessionDetectionError: undefined,
+                  resumeError: undefined,
+                }
+              }
+            }
+
+            if (migrated.sessionDetectionState === 'pending' || migrated.sessionDetectionState === 'failed') {
+              return {
+                ...migrated,
+                ptyId: undefined,
+                sessionDetectionState: 'failed',
+                sessionDetectionError: migrated.sessionDetectionError ?? 'Session detection did not finish before shutdown',
+                resumeError: migrated.resumeError ?? 'Session detection did not finish before shutdown',
+              }
+            }
+
             return { ...migrated, paneType: 'shell', agentKind: undefined, ptyId: undefined }
           }
           return { ...migrated, ptyId: undefined }
         }
-        return { ...node, first: sanitizeNode(node.first), second: sanitizeNode(node.second) }
+        const [first, second] = await Promise.all([sanitizeNode(node.first), sanitizeNode(node.second)])
+        return { ...node, first, second }
       }
-      const tabs = saved.tabs.map((t) => {
-        if (!t.rootNode) return { ...t, focusedPaneId: '' }
-        const rootNode = sanitizeNode(t.rootNode)
-        const focusedPaneId = findLeaf(rootNode, t.focusedPaneId)
-          ? t.focusedPaneId
+      const tabs = await Promise.all(saved.tabs.map(async (t) => {
+        const baseTab = { ...t, detached: false }
+        if (!baseTab.rootNode) return { ...baseTab, focusedPaneId: '' }
+        const rootNode = await sanitizeNode(baseTab.rootNode)
+        const focusedPaneId = findLeaf(rootNode, baseTab.focusedPaneId)
+          ? baseTab.focusedPaneId
           : (collectLeafIds(rootNode)[0] ?? '')
-        return { ...t, rootNode, focusedPaneId }
-      })
+        return { ...baseTab, rootNode, focusedPaneId }
+      }))
 
       const savedActiveTabId = typeof saved.activeTabId === 'string' ? saved.activeTabId : ''
       const activeTabId = tabs.some((t) => t.id === savedActiveTabId)
@@ -1226,6 +1317,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         sidebarPanelSizes,
         sidebarOpen: saved.sidebarOpen ?? true,
         sidebarSectionOpen,
+        detachedWindowTabIds: {},
+        detachedWindowActiveTabIds: {},
       })
       if (activeTabId) hydrateTabRuntime(activeTabId, true)
     } catch (err) {
@@ -1494,10 +1587,34 @@ if (typeof window !== 'undefined' && window.ipc) {
         rememberAgent(agentKind)
         usePanesStore.setState((s) => ({
           lastAgentKind: agentKind,
-          tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, pane.id, { sessionId }) } : t),
+          tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, pane.id, {
+            sessionId,
+            sessionDetectionState: 'detected',
+            sessionDetectionError: undefined,
+            resumeError: undefined,
+          }) } : t),
         }))
         break
       }
+    }
+  })
+
+  window.ipc.on('session:detection-failed', (ptyId: unknown, agentKind: unknown, reason: unknown, mode: unknown) => {
+    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex')) return
+    const message = mode === 'resume'
+      ? 'Session resumed, but the live session id could not be confirmed'
+      : 'Session detection timed out'
+    const store = usePanesStore.getState()
+    for (const tab of store.tabs) {
+      if (!tab.rootNode) continue
+      const pane = collectLeaves(tab.rootNode).find((l) => l.ptyId === ptyId)
+      if (!pane || pane.agentKind !== agentKind) continue
+      store.updatePane(pane.id, {
+        sessionDetectionState: 'failed',
+        sessionDetectionError: typeof reason === 'string' ? `${message}: ${reason}` : message,
+        ...(mode === 'resume' ? {} : { resumeError: message }),
+      })
+      break
     }
   })
 

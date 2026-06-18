@@ -57,6 +57,8 @@ function saveWindowState(win: BrowserWindow): void {
 // Keep references so resources can be cleaned up on quit
 let cleanupFn: (() => void) | null = null
 let browserViewManager: BrowserViewManager | null = null
+// Set by registerIpcHandlers; called during primary-window shutdown to flush detached state.
+let performShutdownSaveFn: (() => Promise<void>) | null = null
 
 async function createWindow(): Promise<void> {
   const state = loadWindowState()
@@ -86,7 +88,23 @@ async function createWindow(): Promise<void> {
     mainWindow.show()
   })
 
-  mainWindow.on('close', () => saveWindowState(mainWindow))
+  let isShutdownSaveComplete = false
+  mainWindow.on('close', async (event) => {
+    saveWindowState(mainWindow)
+    // On the first close, do a final authoritative layout save that flushes the latest
+    // detached-window state before the debounce could have written it. We prevent the
+    // default close, await the save (with an internal timeout), then re-close. On the
+    // second pass isShutdownSaveComplete is true, so we allow the close through.
+    if (!isShutdownSaveComplete && performShutdownSaveFn) {
+      event.preventDefault()
+      isShutdownSaveComplete = true
+      try {
+        await performShutdownSaveFn()
+      } finally {
+        mainWindow.close()
+      }
+    }
+  })
   mainWindow.on('closed', () => {
     // Close all detached windows so PTYs and timers are cleaned up promptly.
     for (const win of BrowserWindow.getAllWindows()) {
@@ -108,8 +126,9 @@ async function createWindow(): Promise<void> {
   })
 
   // Wire IPC handlers (sessions, PTY, shell, layout)
-  const { cleanup, registerWindowHandlers } = await registerIpcHandlers(mainWindow)
+  const { cleanup, registerWindowHandlers, performShutdownSave } = await registerIpcHandlers(mainWindow)
   cleanupFn = cleanup ?? null
+  performShutdownSaveFn = performShutdownSave
 
   // Configure WindowManager so it can create detached windows with the correct preload/renderer.
   windowManager.configure(

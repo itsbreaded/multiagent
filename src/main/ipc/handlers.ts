@@ -12,7 +12,7 @@ import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { McpSettings, PaneTransferPayload, Tab } from '../../shared/types'
+import type { AgentKind, McpSettings, PaneTransferPayload, Tab } from '../../shared/types'
 
 let vsCodeAvailable = false
 try {
@@ -58,6 +58,7 @@ function parseOsc7(data: string): string | null {
 export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   cleanup: () => void
   registerWindowHandlers: (win: BrowserWindow) => void
+  performShutdownSave: () => Promise<void>
 }> {
   const index = new SessionIndex()
   const claudeScanner = new TranscriptScanner()
@@ -311,10 +312,54 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarPanelSizes: unknown) => {
     try {
-      fs.writeFileSync(layoutPath, JSON.stringify({ tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes }))
+      fs.writeFileSync(layoutPath, JSON.stringify({
+        tabs: normalizeTabsForLayout(tabs),
+        sidebarWidth,
+        sidebarOpen,
+        activeTabId,
+        sidebarSectionOpen,
+        sidebarPanelSizes,
+      }))
     } catch (err) {
       console.error('[MultiAgent] layout:save failed:', err)
     }
+  })
+
+  ipcMain.handle('sessions:validate', async (_e, agentKind: AgentKind, sessionId: string, cwd: string) => {
+    if ((agentKind !== 'claude' && agentKind !== 'codex') || typeof sessionId !== 'string') {
+      return { found: false, cwdMatch: false, transcriptPath: null, transcriptCwd: null }
+    }
+    const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+    const sessions = await scanner.scanAll()
+    const match = sessions.find((s) => s.agentKind === agentKind && s.sessionId === sessionId)
+    if (!match) return { found: false, cwdMatch: false, transcriptPath: null, transcriptCwd: null }
+    const normalizedSaved = normalizePath(cwd)
+    const normalizedTranscript = normalizePath(match.cwd)
+    return {
+      found: true,
+      cwdMatch: normalizedSaved === normalizedTranscript,
+      transcriptPath: match.transcriptPath,
+      transcriptCwd: match.cwd,
+    }
+  })
+
+  ipcMain.handle('sessions:recover-pending', async (_e, agentKind: AgentKind, cwd: string, startedAt: number) => {
+    if ((agentKind !== 'claude' && agentKind !== 'codex') || typeof cwd !== 'string' || typeof startedAt !== 'number') {
+      return null
+    }
+    const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+    const sessions = await scanner.scanAll()
+    const normalizedCwd = normalizePath(cwd)
+    const matches = sessions
+      .filter((session) =>
+        session.agentKind === agentKind &&
+        normalizePath(session.cwd) === normalizedCwd &&
+        session.mtimeMs >= startedAt - 5_000
+      )
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    if (matches.length !== 1) return null
+    index.upsert(matches[0])
+    return matches[0].sessionId
   })
 
   ipcMain.handle('mcp:get-status', () => mcpManager.getStatus())
@@ -639,6 +684,97 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return true
   })
 
+  // Collect a response from a single renderer window within a timeout.
+  // Sends `sendChannel` with a unique requestId; expects the renderer to reply via `listenChannel`
+  // with (requestId, data). Returns null on timeout or if the window is already destroyed.
+  function requestWindowResponse<T>(
+    win: BrowserWindow,
+    sendChannel: string,
+    listenChannel: string,
+    timeoutMs: number
+  ): Promise<T | null> {
+    return new Promise<T | null>((resolve) => {
+      if (win.isDestroyed()) { resolve(null); return }
+      const requestId = `shutdown-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      let settled = false
+      const done = (value: T | null): void => {
+        if (settled) return
+        settled = true
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define
+        ipcMain.removeListener(listenChannel, handler)
+        resolve(value)
+      }
+      const timer = setTimeout(() => done(null), timeoutMs)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const handler = (event: any, rid: unknown, data: unknown): void => {
+        if (rid !== requestId) return
+        if (BrowserWindow.fromWebContents(event.sender)?.id !== win.id) return
+        clearTimeout(timer)
+        done(data as T)
+      }
+      ipcMain.on(listenChannel, handler)
+      win.webContents.send(sendChannel, requestId)
+    })
+  }
+
+  // Collect authoritative state from the primary and all detached windows, merge, and write
+  // layout.json. Called on primary-window 'close' before destruction so the latest detached
+  // window state is never lost behind the 300ms sync debounce.
+  async function performShutdownSave(): Promise<void> {
+    const COLLECT_TIMEOUT_MS = 1000
+    const primaryWin = windowManager.getPrimaryWindow()
+    if (!primaryWin || primaryWin.isDestroyed()) return
+
+    type PrimaryState = {
+      tabs: unknown[]
+      sidebarWidth: unknown
+      sidebarOpen: unknown
+      activeTabId: unknown
+      sidebarSectionOpen: unknown
+      sidebarPanelSizes: unknown
+    }
+    type DetachedSnapshot = { windowId: number; tabs: unknown[]; activeTabId?: string }
+
+    const detachedWins = BrowserWindow.getAllWindows().filter(
+      (w) => !w.isDestroyed() && w.id !== primaryWin.id && windowManager.isDetachedWindow(w.id)
+    )
+
+    const [primaryState, ...detachedResults] = await Promise.all([
+      requestWindowResponse<PrimaryState>(primaryWin, 'layout:request-state', 'layout:state-response', COLLECT_TIMEOUT_MS),
+      ...detachedWins.map((w) =>
+        requestWindowResponse<DetachedSnapshot>(w, 'layout:collect-detached-state', 'layout:detached-state-response', COLLECT_TIMEOUT_MS)
+      ),
+    ])
+
+    if (!primaryState) {
+      console.warn('[MultiAgent] performShutdownSave: primary did not respond, skipping final save')
+      return
+    }
+
+    // Merge: start with primary's tab list (which may have stale detached entries),
+    // then overlay fresh snapshots from each detached window.
+    let mergedTabs: unknown[] = Array.isArray(primaryState.tabs) ? [...primaryState.tabs] : []
+    for (const snap of detachedResults) {
+      if (!snap || !Array.isArray(snap.tabs)) continue
+      const ids = new Set((snap.tabs as Record<string, unknown>[]).map((t) => t['id']))
+      mergedTabs = mergedTabs.filter((t) => !ids.has((t as Record<string, unknown>)['id']))
+      mergedTabs.push(...snap.tabs)
+    }
+
+    try {
+      fs.writeFileSync(layoutPath, JSON.stringify({
+        tabs: normalizeTabsForLayout(mergedTabs),
+        sidebarWidth: primaryState.sidebarWidth,
+        sidebarOpen: primaryState.sidebarOpen,
+        activeTabId: primaryState.activeTabId,
+        sidebarSectionOpen: primaryState.sidebarSectionOpen,
+        sidebarPanelSizes: primaryState.sidebarPanelSizes,
+      }))
+    } catch (err) {
+      console.error('[MultiAgent] performShutdownSave: layout write failed:', err)
+    }
+  }
+
   return {
     cleanup: () => {
       clearInterval(contentTimer)
@@ -648,10 +784,19 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       ptyManager.destroy()
     },
     registerWindowHandlers,
+    performShutdownSave,
   }
 }
 
 function normalizePath(value: string): string {
   const normalized = path.normalize(value)
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function normalizeTabsForLayout(tabs: unknown): unknown {
+  if (!Array.isArray(tabs)) return tabs
+  return tabs.map((tab) => {
+    if (!tab || typeof tab !== 'object') return tab
+    return { ...(tab as Record<string, unknown>), detached: false }
+  })
 }

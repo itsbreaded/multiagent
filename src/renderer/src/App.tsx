@@ -165,6 +165,36 @@ export default function App(): JSX.Element {
     if (tabs.length === 0) window.close()
   }, [isDetachedWindow, layoutReady, tabs])
 
+  // Shutdown layout collection: respond to main's requests for an authoritative final save.
+  // Primary responds to layout:request-state; detached windows respond to layout:collect-detached-state.
+  useEffect(() => {
+    if (!layoutReady) return
+    const unsub1 = window.ipc.on('layout:request-state', (requestId: unknown) => {
+      if (typeof requestId !== 'string') return
+      if (usePanesStore.getState().isDetachedWindow) return
+      const s = usePanesStore.getState()
+      window.ipc.send('layout:state-response', requestId, {
+        tabs: s.tabs,
+        sidebarWidth: s.sidebarWidth,
+        sidebarOpen: s.sidebarOpen,
+        activeTabId: s.activeTabId,
+        sidebarSectionOpen: s.sidebarSectionOpen,
+        sidebarPanelSizes: s.sidebarPanelSizes,
+      })
+    })
+    const unsub2 = window.ipc.on('layout:collect-detached-state', (requestId: unknown) => {
+      if (typeof requestId !== 'string') return
+      const s = usePanesStore.getState()
+      if (!s.isDetachedWindow) return
+      window.ipc.send('layout:detached-state-response', requestId, {
+        windowId: s.windowId,
+        tabs: s.tabs,
+        activeTabId: s.activeTabId,
+      })
+    })
+    return () => { unsub1(); unsub2() }
+  }, [layoutReady])
+
   // Debounced layout save — only for the primary window.
   useEffect(() => {
     if (!layoutReady) return

@@ -295,9 +295,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     if (!xterm || status === 'mounting') return
     const terminal: XTerm = xterm
 
-    if (pane.paneType === 'agent' && !pane.ptyId && pane.resumeError) {
+    if (pane.paneType === 'agent' && !pane.ptyId && (pane.resumeError || pane.sessionDetectionError)) {
       setStatus('error')
-      setErrorMsg(pane.resumeError)
+      setErrorMsg(pane.resumeError ?? pane.sessionDetectionError ?? 'Agent session is not recoverable')
       return
     }
 
@@ -466,7 +466,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // PTYs are killed explicitly by closePane() in the panes store.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id, pane.ptyId, pane.paneType, pane.resumeError, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.resumeError, pane.sessionDetectionError, status === 'mounting' ? 'mounting' : 'ready'])
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()

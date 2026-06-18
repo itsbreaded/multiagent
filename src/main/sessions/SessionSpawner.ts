@@ -9,26 +9,32 @@ import { CodexSessionScanner, codexSessionsDir } from './CodexSessionScanner'
 import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentMcpSettings } from '../mcp/McpInjector'
 import { defaultShell } from '../pty/shell'
 
-// --- Shared watcher state ---
-// One chokidar instance watches ~/.claude/projects/ for all sessions.
-// All pending detections share a single global FIFO queue. Sessions are
-// always started by sequential user action, and Claude Code writes its
-// JSONL in that same order, so the first JSONL that appears belongs to
-// the oldest pending entry. Per-cwd routing was tried but is fragile:
-// if the requested cwd doesn't exist on the machine, the PTY falls back
-// to a different directory and the JSONL cwd never matches.
+const SESSION_DETECTION_GRACE_MS = 5_000
+const SESSION_DETECTION_TIMEOUT_MS = 60_000
+const CLAUDE_DETECTION_BATCH_MS = 400
 
 interface PendingDetection {
   ptyId: string
   mainWindow: BrowserWindow
+  cwd: string
+  normalizedCwd: string
+  startedAt: number
+  agentKind: AgentKind
   cleanup: () => void
 }
 
-const pendingQueue: PendingDetection[] = []
-let watcherReady = false
+interface ClaudeFileCandidate {
+  filePath: string
+  sessionId: string
+  cwd: string
+  normalizedCwd: string
+  mtimeMs: number
+}
 
-const codexPendingQueue: PendingDetection[] = []
-let codexWatcherReady = false
+const pendingClaudeDetections: PendingDetection[] = []
+const claudeFileCandidates = new Map<string, ClaudeFileCandidate>()
+let watcherReady = false
+let claudeBatchTimer: ReturnType<typeof setTimeout> | null = null
 
 function ensureSharedWatcher(projectsDir: string): void {
   if (watcherReady) return
@@ -51,54 +57,76 @@ function ensureSharedWatcher(projectsDir: string): void {
           await new Promise<void>((r) => setTimeout(r, 500))
           info = await readSessionInfo(filePath)
         }
-        if (!info) return
+        const stat = await fs.promises.stat(filePath).catch(() => null)
+        if (!info || !stat) return
 
-        const pending = pendingQueue.shift()
-        if (!pending) return
-
-        pending.cleanup()
-        pending.mainWindow.webContents.send('session:detected', pending.ptyId, 'claude', info.sessionId)
+        claudeFileCandidates.set(filePath, {
+          filePath,
+          sessionId: info.sessionId,
+          cwd: info.cwd,
+          normalizedCwd: normalizePath(info.cwd),
+          mtimeMs: stat.mtimeMs,
+        })
+        scheduleClaudeBatch()
       })()
     })
   })
 }
 
-function ensureCodexWatcher(sessionsDir: string): void {
-  if (codexWatcherReady) return
-  codexWatcherReady = true
+function scheduleClaudeBatch(): void {
+  if (claudeBatchTimer) return
+  claudeBatchTimer = setTimeout(processClaudeBatch, CLAUDE_DETECTION_BATCH_MS)
+}
 
-  void import('chokidar').then(({ watch }) => {
-    const watcher = watch(sessionsDir, {
-      ignoreInitial: true,
-      depth: 5,
-      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-    })
+function processClaudeBatch(): void {
+  claudeBatchTimer = null
+  if (pendingClaudeDetections.length === 0 || claudeFileCandidates.size === 0) return
 
-    watcher.on('add', (filePath: string) => {
-      if (!filePath.endsWith('.jsonl')) return
+  const matches: Array<{ pending: PendingDetection; candidate: ClaudeFileCandidate; score: number }> = []
+  for (const candidate of claudeFileCandidates.values()) {
+    const candidateMatches = pendingClaudeDetections
+      .map((pending) => {
+        const score = scoreClaudeCandidate(pending, candidate)
+        return score === null ? null : { pending, candidate, score }
+      })
+      .filter((match): match is { pending: PendingDetection; candidate: ClaudeFileCandidate; score: number } => match !== null)
+      .sort((a, b) => b.score - a.score)
 
-      void (async () => {
-        let info = await readCodexSessionInfo(filePath)
-        if (!info) {
-          await new Promise<void>((r) => setTimeout(r, 500))
-          info = await readCodexSessionInfo(filePath)
-        }
-        if (!info) return
+    if (candidateMatches.length !== 1) continue
+    matches.push(candidateMatches[0])
+  }
 
-        const pending = codexPendingQueue.shift()
-        if (!pending) return
+  const pendingCounts = new Map<PendingDetection, number>()
+  for (const match of matches) {
+    pendingCounts.set(match.pending, (pendingCounts.get(match.pending) ?? 0) + 1)
+  }
 
-        pending.cleanup()
-        pending.mainWindow.webContents.send('session:detected', pending.ptyId, 'codex', info.sessionId)
-      })()
-    })
-  })
+  for (const match of matches) {
+    if ((pendingCounts.get(match.pending) ?? 0) !== 1) continue
+    const stillPending = pendingClaudeDetections.includes(match.pending)
+    const stillCandidate = claudeFileCandidates.get(match.candidate.filePath) === match.candidate
+    if (!stillPending || !stillCandidate) continue
+
+    match.pending.cleanup()
+    claudeFileCandidates.delete(match.candidate.filePath)
+    if (!match.pending.mainWindow.isDestroyed()) {
+      match.pending.mainWindow.webContents.send('session:detected', match.pending.ptyId, 'claude', match.candidate.sessionId)
+    }
+  }
+}
+
+function scoreClaudeCandidate(pending: PendingDetection, candidate: ClaudeFileCandidate): number | null {
+  if (candidate.normalizedCwd !== pending.normalizedCwd) return null
+  if (candidate.mtimeMs < pending.startedAt - SESSION_DETECTION_GRACE_MS) return null
+
+  const timeDelta = Math.abs(candidate.mtimeMs - pending.startedAt)
+  return 10_000 - Math.min(timeDelta, 10_000)
 }
 
 export class SessionSpawner {
   constructor(private ptyManager: PtyManager, private mainWindow: BrowserWindow) {}
 
-  async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null }> {
+  async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null; detectionStartedAt: number }> {
     const targetWin = senderWin ?? this.mainWindow
     const startedAt = Date.now()
     const ptyId = this.ptyManager.createDeferred(
@@ -107,7 +135,7 @@ export class SessionSpawner {
       agentEnv(agentKind)
     )
     this._watchForNewSession(agentKind, ptyId, cwd, startedAt, targetWin)
-    return { ptyId, sessionId: null }
+    return { ptyId, sessionId: null, detectionStartedAt: startedAt }
   }
 
   async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string }> {
@@ -119,14 +147,14 @@ export class SessionSpawner {
       agentEnv(agentKind)
     )
     if (agentKind === 'codex') {
-      this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin)
+      this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin, 'resume', sessionId)
     }
     return { ptyId }
   }
 
   private _watchForNewSession(agentKind: AgentKind, ptyId: string, cwd: string, startedAt: number, targetWin: BrowserWindow): void {
     if (agentKind === 'codex') {
-      this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin)
+      this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin, 'new')
       return
     }
 
@@ -142,8 +170,8 @@ export class SessionSpawner {
       cancelled = true
       clearTimeout(timeout)
       this.ptyManager.off('exit', onExit)
-      const idx = pendingQueue.indexOf(pending)
-      if (idx >= 0) pendingQueue.splice(idx, 1)
+      const idx = pendingClaudeDetections.indexOf(pending)
+      if (idx >= 0) pendingClaudeDetections.splice(idx, 1)
     }
 
     // Cancel if the PTY exits before detection completes
@@ -153,17 +181,28 @@ export class SessionSpawner {
     }
     this.ptyManager.on('exit', onExit)
 
-    const timeout = setTimeout(cleanup, 60_000)
+    const timeout = setTimeout(() => {
+      cleanup()
+      if (!targetWin.isDestroyed()) {
+        targetWin.webContents.send('session:detection-failed', ptyId, agentKind, 'timeout', 'new')
+      }
+    }, SESSION_DETECTION_TIMEOUT_MS)
 
-    const pending: PendingDetection = { ptyId, mainWindow: targetWin, cleanup }
-    pendingQueue.push(pending)
+    const pending: PendingDetection = {
+      ptyId,
+      mainWindow: targetWin,
+      cwd,
+      normalizedCwd: normalizePath(cwd),
+      startedAt,
+      agentKind,
+      cleanup,
+    }
+    pendingClaudeDetections.push(pending)
   }
 
-  private _watchForNewCodexSession(ptyId: string, cwd: string, startedAt: number, targetWin: BrowserWindow): void {
+  private _watchForNewCodexSession(ptyId: string, cwd: string, startedAt: number, targetWin: BrowserWindow, mode: 'new' | 'resume', resumedSessionId?: string): void {
     const sessionsDir = codexSessionsDir()
     fs.mkdirSync(sessionsDir, { recursive: true })
-
-    ensureCodexWatcher(sessionsDir)
 
     let cancelled = false
     let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -174,8 +213,6 @@ export class SessionSpawner {
       if (pollTimer) clearInterval(pollTimer)
       clearTimeout(timeout)
       this.ptyManager.off('exit', onExit)
-      const idx = codexPendingQueue.indexOf(pending)
-      if (idx >= 0) codexPendingQueue.splice(idx, 1)
     }
 
     const onExit = (exitId: string) => {
@@ -193,7 +230,11 @@ export class SessionSpawner {
         const match = sessions
           .filter((session) =>
             normalizePath(session.cwd) === normalizedCwd &&
-            session.mtimeMs >= startedAt - 5_000
+            session.mtimeMs >= startedAt - 5_000 &&
+            // In resume mode, only fire for a genuinely different (forked) session ID.
+            // Without this, every watcher for panes sharing the same cwd would match the
+            // same newest file and overwrite all panes with one session ID.
+            (!resumedSessionId || session.sessionId !== resumedSessionId)
           )
           .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
         if (!match) return
@@ -205,10 +246,12 @@ export class SessionSpawner {
       })().catch(() => {})
     }, 1_000)
 
-    const timeout = setTimeout(cleanup, 60_000)
-
-    const pending: PendingDetection = { ptyId, mainWindow: targetWin, cleanup }
-    codexPendingQueue.push(pending)
+    const timeout = setTimeout(() => {
+      cleanup()
+      if (!targetWin.isDestroyed()) {
+        targetWin.webContents.send('session:detection-failed', ptyId, 'codex', 'timeout', mode)
+      }
+    }, SESSION_DETECTION_TIMEOUT_MS)
   }
 
 }
@@ -369,38 +412,3 @@ async function readSessionInfo(filePath: string): Promise<{ sessionId: string; c
   })
 }
 
-async function readCodexSessionInfo(filePath: string): Promise<{ sessionId: string; cwd: string } | null> {
-  return new Promise((resolve) => {
-    try {
-      const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-      let lineCount = 0
-
-      rl.on('line', (line) => {
-        lineCount++
-        if (lineCount > 20) {
-          rl.close()
-          stream.destroy()
-          return
-        }
-        try {
-          const record = JSON.parse(line) as {
-            type?: string
-            payload?: { id?: string; cwd?: string }
-          }
-          if (record.type === 'session_meta' && record.payload?.id && record.payload.cwd) {
-            rl.close()
-            stream.destroy()
-            resolve({ sessionId: record.payload.id, cwd: record.payload.cwd })
-          }
-        } catch { /* skip malformed lines */ }
-      })
-
-      rl.on('close', () => resolve(null))
-      rl.on('error', () => resolve(null))
-      stream.on('error', () => resolve(null))
-    } catch {
-      resolve(null)
-    }
-  })
-}

@@ -57,6 +57,10 @@ export interface PaneLeaf {
   sessionId?: string    // set when paneType === 'agent'
   ptyId?: string        // set once PTY is created
   resumeError?: string  // set when a restored agent session failed to resume
+  sessionDetectionState?: 'pending' | 'detected' | 'failed'
+  sessionDetectionStartedAt?: number
+  sessionDetectionCwd?: string
+  sessionDetectionError?: string
   title?: string        // programmatic display override (full)
   customName?: string   // user-set label prefix shown before the directory name
 }
@@ -137,9 +141,20 @@ export interface IPCChannels {
   // Renderer asks to delete a transcript
   'sessions:delete': (agentKind: AgentKind, sessionId: string) => void
 
+  // Renderer tries to recover a pane whose session detection was pending during shutdown
+  'sessions:recover-pending': (agentKind: AgentKind, cwd: string, startedAt: number) => string | null
+
+  // Renderer validates that a session transcript exists before resuming
+  'sessions:validate': (agentKind: AgentKind, sessionId: string, cwd: string) => {
+    found: boolean
+    cwdMatch: boolean
+    transcriptPath: string | null
+    transcriptCwd: string | null
+  }
+
   // --- Session actions ---
   // Start a new agent session in a given cwd
-  'session:new': (agentKind: AgentKind, cwd: string) => { ptyId: string; sessionId: string | null }
+  'session:new': (agentKind: AgentKind, cwd: string) => { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
 
   // Resume an existing session by ID
   'session:resume': (agentKind: AgentKind, sessionId: string, cwd: string) => { ptyId: string }
@@ -180,6 +195,13 @@ export interface IPCChannels {
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
   'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
 
+  // Shutdown state collection: main requests renderer state for a final authoritative save
+  // Main sends requestId; renderer responds via layout:state-response / layout:detached-state-response
+  'layout:request-state': (requestId: string) => void
+  'layout:collect-detached-state': (requestId: string) => void
+  'layout:state-response': (requestId: string, state: unknown) => void
+  'layout:detached-state-response': (requestId: string, snapshot: unknown) => void
+
   // --- MCP ---
   'mcp:get-status': () => McpStatus
   'mcp:get-settings': () => McpSettings
@@ -189,6 +211,7 @@ export interface IPCChannels {
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
   'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
+  'session:detection-failed': (ptyId: string, agentKind: AgentKind, reason: string, mode: 'new' | 'resume') => void
 
   // --- Multi-window: window identity / init ---
   'window:get-id': () => number | null
@@ -247,6 +270,8 @@ export interface IPCChannels {
 export type InvokeChannels =
   | 'sessions:search'
   | 'sessions:delete'
+  | 'sessions:recover-pending'
+  | 'sessions:validate'
   | 'session:new'
   | 'session:resume'
   | 'pty:create'
@@ -288,6 +313,7 @@ export type EventChannels =
   | 'pty:data'
   | 'pty:cwd'
   | 'session:detected'
+  | 'session:detection-failed'
   | 'window:snap-zones'
   | 'window:maximized-changed'
   | 'window:focus-state-request'
@@ -305,6 +331,9 @@ export type EventChannels =
   // Broadcast by main whenever a BrowserWindow gains OS focus
   | 'window:became-active'
   | 'focus:target-changed'
+  // Shutdown layout collection: main requests state snapshots for a final authoritative save
+  | 'layout:request-state'
+  | 'layout:collect-detached-state'
 
 export type SendChannels =
   | 'pty:write'
@@ -317,6 +346,9 @@ export type SendChannels =
   | 'focus:target-report'
   | 'pane:received-applied'
   | 'pane:focus-remote-applied'
+  // Shutdown layout collection responses
+  | 'layout:state-response'
+  | 'layout:detached-state-response'
 
 export interface IpcBridge {
   invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
