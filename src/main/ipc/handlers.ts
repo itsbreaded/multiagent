@@ -13,6 +13,7 @@ import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
 import type { AgentKind, McpSettings, PaneTransferPayload, Tab } from '../../shared/types'
+import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
 try {
@@ -350,16 +351,37 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
     const sessions = await scanner.scanAll()
     const normalizedCwd = normalizePath(cwd)
-    const matches = sessions
-      .filter((session) =>
-        session.agentKind === agentKind &&
-        normalizePath(session.cwd) === normalizedCwd &&
-        session.mtimeMs >= startedAt - 5_000
-      )
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    if (matches.length !== 1) return null
-    index.upsert(matches[0])
-    return matches[0].sessionId
+
+    // Filter by cwd first, then stat each file to get birthtime (creation time).
+    // Using birthtime prevents false matches from old sessions in the same directory
+    // that have recent mtimes due to ongoing activity. The 2-minute upper bound
+    // excludes files created after the app restarted (a new unrelated session).
+    const RECOVERY_GRACE_MS = 5_000
+    const RECOVERY_WINDOW_MS = 120_000
+    const cwdSessions = sessions.filter(
+      (s) => s.agentKind === agentKind && normalizePath(s.cwd) === normalizedCwd
+    )
+    const candidates: ScannedSession[] = []
+    for (const session of cwdSessions) {
+      try {
+        const stat = await fs.promises.stat(session.transcriptPath)
+        // Prefer birthtime; fall back to mtime when birthtime equals mtime (some
+        // filesystems set both identically on creation) or is zero/unavailable.
+        const createdAt =
+          stat.birthtimeMs > 0 && stat.birthtimeMs < stat.mtimeMs
+            ? stat.birthtimeMs
+            : stat.mtimeMs
+        if (createdAt >= startedAt - RECOVERY_GRACE_MS && createdAt <= startedAt + RECOVERY_WINDOW_MS) {
+          candidates.push(session)
+        }
+      } catch {
+        // skip files that can't be stat'd
+      }
+    }
+
+    if (candidates.length !== 1) return null
+    index.upsert(candidates[0])
+    return candidates[0].sessionId
   })
 
   ipcMain.handle('mcp:get-status', () => mcpManager.getStatus())

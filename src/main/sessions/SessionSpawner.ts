@@ -82,45 +82,58 @@ function processClaudeBatch(): void {
   claudeBatchTimer = null
   if (pendingClaudeDetections.length === 0 || claudeFileCandidates.size === 0) return
 
-  const matches: Array<{ pending: PendingDetection; candidate: ClaudeFileCandidate; score: number }> = []
-  for (const candidate of claudeFileCandidates.values()) {
-    const candidateMatches = pendingClaudeDetections
-      .map((pending) => {
-        const score = scoreClaudeCandidate(pending, candidate)
-        return score === null ? null : { pending, candidate, score }
-      })
-      .filter((match): match is { pending: PendingDetection; candidate: ClaudeFileCandidate; score: number } => match !== null)
-      .sort((a, b) => b.score - a.score)
+  // Iterate pendings (not candidates) so each pane picks its best match.
+  // This mirrors the Codex polling approach and correctly handles the case where
+  // an external JSONL is also in the time window: the cwd bonus disambiguates.
+  const assignments: Array<{ pending: PendingDetection; candidate: ClaudeFileCandidate; score: number }> = []
 
-    if (candidateMatches.length !== 1) continue
-    matches.push(candidateMatches[0])
+  for (const pending of pendingClaudeDetections) {
+    const scored: Array<{ pending: PendingDetection; candidate: ClaudeFileCandidate; score: number }> = []
+    for (const candidate of claudeFileCandidates.values()) {
+      const score = scoreClaudeCandidate(pending, candidate)
+      if (score !== null) scored.push({ pending, candidate, score })
+    }
+    if (scored.length === 0) continue
+
+    scored.sort((a, b) => b.score - a.score)
+    const best = scored[0]
+
+    // Reject a tie at the top score — two candidates with equal priority is ambiguous.
+    if (scored.length > 1 && scored[1].score === best.score) continue
+
+    assignments.push(best)
   }
 
-  const pendingCounts = new Map<PendingDetection, number>()
-  for (const match of matches) {
-    pendingCounts.set(match.pending, (pendingCounts.get(match.pending) ?? 0) + 1)
+  // Ensure no candidate is claimed by more than one pending (e.g. two panes same cwd).
+  const candidateCounts = new Map<ClaudeFileCandidate, number>()
+  for (const a of assignments) {
+    candidateCounts.set(a.candidate, (candidateCounts.get(a.candidate) ?? 0) + 1)
   }
 
-  for (const match of matches) {
-    if ((pendingCounts.get(match.pending) ?? 0) !== 1) continue
-    const stillPending = pendingClaudeDetections.includes(match.pending)
-    const stillCandidate = claudeFileCandidates.get(match.candidate.filePath) === match.candidate
+  for (const assignment of assignments) {
+    if ((candidateCounts.get(assignment.candidate) ?? 0) !== 1) continue
+    const stillPending = pendingClaudeDetections.includes(assignment.pending)
+    const stillCandidate = claudeFileCandidates.get(assignment.candidate.filePath) === assignment.candidate
     if (!stillPending || !stillCandidate) continue
 
-    match.pending.cleanup()
-    claudeFileCandidates.delete(match.candidate.filePath)
-    if (!match.pending.mainWindow.isDestroyed()) {
-      match.pending.mainWindow.webContents.send('session:detected', match.pending.ptyId, 'claude', match.candidate.sessionId)
+    assignment.pending.cleanup()
+    claudeFileCandidates.delete(assignment.candidate.filePath)
+    if (!assignment.pending.mainWindow.isDestroyed()) {
+      assignment.pending.mainWindow.webContents.send('session:detected', assignment.pending.ptyId, 'claude', assignment.candidate.sessionId)
     }
   }
 }
 
 function scoreClaudeCandidate(pending: PendingDetection, candidate: ClaudeFileCandidate): number | null {
-  if (candidate.normalizedCwd !== pending.normalizedCwd) return null
+  // Hard time filter: file must not predate this pane's startup by more than the grace window.
   if (candidate.mtimeMs < pending.startedAt - SESSION_DETECTION_GRACE_MS) return null
 
   const timeDelta = Math.abs(candidate.mtimeMs - pending.startedAt)
-  return 10_000 - Math.min(timeDelta, 10_000)
+  const timeScore = 10_000 - Math.min(timeDelta, 10_000)
+  // cwd match is a strong positive bonus so the pane's own JSONL beats any external one,
+  // but a cwd mismatch no longer hard-blocks detection when only one candidate exists.
+  const cwdBonus = candidate.normalizedCwd === pending.normalizedCwd ? 20_000 : 0
+  return cwdBonus + timeScore
 }
 
 export class SessionSpawner {
@@ -129,12 +142,15 @@ export class SessionSpawner {
   async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null; detectionStartedAt: number }> {
     const targetWin = senderWin ?? this.mainWindow
     const startedAt = Date.now()
+    // createDeferred falls back to homedir() when cwd doesn't exist; match that here
+    // so pending.normalizedCwd agrees with what the agent will record in its JSONL.
+    const actualCwd = fs.existsSync(cwd) ? cwd : os.homedir()
     const ptyId = this.ptyManager.createDeferred(
       cwd,
       agentLaunchCommand(newSessionCommand(agentKind)),
       agentEnv(agentKind)
     )
-    this._watchForNewSession(agentKind, ptyId, cwd, startedAt, targetWin)
+    this._watchForNewSession(agentKind, ptyId, actualCwd, startedAt, targetWin)
     return { ptyId, sessionId: null, detectionStartedAt: startedAt }
   }
 
