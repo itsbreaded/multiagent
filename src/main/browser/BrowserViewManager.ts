@@ -3,6 +3,19 @@ import { EventEmitter } from 'events'
 
 export type BrowserControlState = 'hidden' | 'agent-controlled' | 'user-controlled'
 
+export interface BrowserContentOptions {
+  selector?: string
+  maxChars?: number
+}
+
+export interface BrowserContentResult {
+  text: string
+  characters: number
+  lines: number
+  truncated: boolean
+  selector?: string
+}
+
 export class BrowserViewManager extends EventEmitter {
   private win: BrowserWindow | null = null
   private state: BrowserControlState = 'hidden'
@@ -129,8 +142,30 @@ export class BrowserViewManager extends EventEmitter {
     return this.win?.webContents.executeJavaScript(js, true)
   }
 
-  async getContent(): Promise<string> {
-    return ((await this.win?.webContents.executeJavaScript('document.body.innerText')) as string) ?? ''
+  async getContent(options: BrowserContentOptions = {}): Promise<BrowserContentResult> {
+    const wc = this.win?.webContents
+    if (!wc) {
+      return { text: '', characters: 0, lines: 0, truncated: false, selector: options.selector }
+    }
+
+    const text = ((await wc.executeJavaScript(`
+      (() => {
+        const selector = ${JSON.stringify(options.selector ?? null)};
+        const root = selector ? document.querySelector(selector) : document.body;
+        if (!root) throw new Error('Selector not found: ' + selector);
+        return root.innerText || root.textContent || '';
+      })()
+    `, true)) as string) ?? ''
+    const maxChars = normalizeMaxChars(options.maxChars)
+    const truncated = maxChars !== undefined && text.length > maxChars
+    const output = truncated ? text.slice(0, maxChars) : text
+    return {
+      text: output,
+      characters: text.length,
+      lines: countLines(text),
+      truncated,
+      selector: options.selector,
+    }
   }
 
   async scroll(x: number, y: number): Promise<void> {
@@ -430,4 +465,14 @@ export class BrowserViewManager extends EventEmitter {
     this.win?.destroy()
     this.win = null
   }
+}
+
+function normalizeMaxChars(maxChars: number | undefined): number | undefined {
+  if (maxChars === undefined || !Number.isFinite(maxChars) || maxChars <= 0) return undefined
+  return Math.floor(maxChars)
+}
+
+function countLines(text: string): number {
+  if (text.length === 0) return 0
+  return text.split(/\r\n|\r|\n/).length
 }

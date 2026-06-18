@@ -95,12 +95,12 @@ All non-terminal scrollable renderer surfaces should use the shared `dark-scroll
 
 ### Session Detection
 
-`SessionSpawner` detects which Claude session file belongs to a newly spawned PTY. A single shared chokidar watcher (chokidar v5, ESM-only - must use dynamic `import()`) watches `~/.claude/projects/` for new `.jsonl` files. Pending detections are kept in a `Map<normalizedCwd, PendingDetection[]>` (FIFO queue per cwd). When a new JSONL appears, the watcher reads its `cwd` field and dispatches to the oldest waiting entry for that cwd, then sends `session:detected` IPC to the renderer.
+`SessionSpawner` detects which Claude session file belongs to a newly spawned PTY. A single shared chokidar watcher (chokidar v5, ESM-only - must use dynamic `import()`) watches `~/.claude/projects/` for new `.jsonl` files. Current Claude detection uses a single global FIFO pending queue, not per-cwd routing; this is audited as a restore correctness risk in `specs/pending/006-session-restore-startup-audit.md`. Do not rely on cwd-scoped matching unless that spec has been implemented.
 
 Key constraints:
 
 - One shared watcher (not one per session) - prevents concurrent watchers from racing on the same file.
-- FIFO per cwd - guarantees the first session spawned in a directory claims the first JSONL written there.
+- Current global FIFO assumes Claude JSONL files appear in the same order MultiAgent starts sessions; external Claude processes or out-of-order writes can violate this.
 - `readSessionInfo` scans up to 10 lines - `sessionId` and `cwd` may be on different records in the JSONL.
 - Startup should default to resume. Do not reintroduce a restore prompt unless explicitly requested.
 - Restored agent panes without a `sessionId` are converted back to shell panes because there is nothing valid to resume.
@@ -139,7 +139,7 @@ Available MCP tools (server name `multiagent-browser`):
 | `browser_select` | Set a `<select>` dropdown value by CSS selector |
 | `browser_scroll` | Scroll the page by x/y pixels |
 | `browser_screenshot` | Capture a base64 PNG of the current view |
-| `browser_get_content` | Get visible text content of the page |
+| `browser_get_content` | Get visible text. Optional `selector` scopes to one element; optional `max_chars` truncates output while reporting full size metadata. Use unscoped whole-page text sparingly for orientation or broad audits. |
 | `browser_get_url` | Get the current URL |
 | `browser_get_elements` | Query all elements matching a CSS selector; returns tag, text, value, id, classes, **href**, **role**, and bounding box `(x/y/width/height)`. Use to inspect the DOM or find coordinates before `browser_click_at` / `browser_hover_at`. For link navigation, prefer `browser_get_links`. |
 | `browser_get_links` | Return all visible `<a>` links on the page with `text`, `href`, and center `(x, y)`. Accepts optional `text_filter` for substring match. **Preferred pattern for navigating to a link**: get href here, then call `browser_navigate` directly. |

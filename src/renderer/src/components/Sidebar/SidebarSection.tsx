@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { border, sidebarStyles, ui } from '../../styles/theme'
-import arrowDropdownIcon from '../../assets/arrowdropdown.png'
+import chevronDownIcon from '../../assets/chevrondown.png'
+import chevronRightIcon from '../../assets/chevronright.png'
 
 interface SidebarSectionProps {
   title: string
@@ -83,7 +84,7 @@ export function SidebarSection({
           onClick={() => !renaming && setOpen((o) => !o)}
           style={{ ...sidebarStyles.sectionToggle, cursor: renaming ? 'default' : 'pointer' }}
         >
-          <img src={arrowDropdownIcon} alt="" style={{ width: 12, height: 12, display: 'block', transition: 'transform 0.15s', transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
+          <img src={open ? chevronDownIcon : chevronRightIcon} alt="" style={{ width: 12, height: 12, display: 'block', transform: 'scale(1.35)' }} />
         </button>
 
         {renaming ? (

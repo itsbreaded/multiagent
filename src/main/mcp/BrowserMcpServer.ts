@@ -8,7 +8,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import type { BrowserViewManager } from '../browser/BrowserViewManager'
+import type { BrowserContentResult, BrowserViewManager } from '../browser/BrowserViewManager'
 
 export class BrowserMcpServer {
   constructor(private browser: BrowserViewManager) {}
@@ -58,7 +58,7 @@ export class BrowserMcpServer {
         {
           name: 'browser_screenshot',
           description:
-            'Take a screenshot of the current browser view. Returns a base64-encoded PNG.',
+            'Take a screenshot of the current browser view. Use when visual layout matters; use text/link/element tools for semantic checks.',
           inputSchema: { type: 'object' as const, properties: {} },
         },
         {
@@ -72,8 +72,14 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_get_content',
-          description: 'Get the visible text content of the current page',
-          inputSchema: { type: 'object' as const, properties: {} },
+          description: 'Get visible text. Prefer browser_get_url for URL checks, browser_wait_for_text for confirmation, browser_get_elements for scoped text/attributes, and browser_get_links for links. With no selector this returns whole-page text and can be large; reserve it for orientation or broad audits.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              selector: { type: 'string', description: 'Optional CSS selector to scope text to one element instead of the whole page' },
+              max_chars: { type: 'number', description: 'Optional positive character limit. If exceeded, text is truncated and metadata reports the full size.' },
+            },
+          },
         },
         {
           name: 'browser_scroll',
@@ -88,7 +94,7 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_wait_for',
-          description: 'Wait for a CSS selector to appear in the page',
+          description: 'Wait for a CSS selector to appear in the page. Use this for targeted readiness checks instead of dumping page text.',
           inputSchema: {
             type: 'object' as const,
             properties: {
@@ -155,7 +161,7 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_get_url',
-          description: 'Get the current URL of the browser',
+          description: 'Get the current URL of the browser. Preferred for URL/location checks.',
           inputSchema: { type: 'object' as const, properties: {} },
         },
         {
@@ -217,7 +223,7 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_wait_for_text',
-          description: 'Wait until the given text appears anywhere on the page (case-insensitive). Useful for confirming a login succeeded, an error message appeared, or an async action completed.',
+          description: 'Wait until the given text appears anywhere on the page (case-insensitive). Preferred for simple confirmation after an action instead of browser_get_content.',
           inputSchema: {
             type: 'object' as const,
             properties: {
@@ -289,8 +295,11 @@ export class BrowserMcpServer {
           }
 
           case 'browser_get_content': {
-            const text = await this.browser.getContent()
-            return { content: [{ type: 'text' as const, text }] }
+            const result = await this.browser.getContent({
+              selector: args?.selector as string | undefined,
+              maxChars: args?.max_chars as number | undefined,
+            })
+            return { content: [{ type: 'text' as const, text: formatContentResult(result) }] }
           }
 
           case 'browser_scroll':
@@ -471,4 +480,21 @@ async function readJsonBody(req: import('http').IncomingMessage): Promise<unknow
   }
   const raw = Buffer.concat(chunks).toString('utf8')
   return raw ? JSON.parse(raw) : undefined
+}
+
+function formatContentResult(result: BrowserContentResult): string {
+  const scoped = Boolean(result.selector)
+  const largeUnscoped = !scoped && result.characters > 12000
+  if (!scoped && !result.truncated && !largeUnscoped) return result.text
+
+  const metadata = [
+    `characters=${result.characters}`,
+    `lines=${result.lines}`,
+    `truncated=${result.truncated}`,
+    ...(result.selector ? [`selector=${JSON.stringify(result.selector)}`] : []),
+  ].join(', ')
+  const warning = largeUnscoped
+    ? '\n\n[warning: browser_get_content without selector returned a large whole-page text dump. Prefer browser_get_elements, browser_get_links, browser_wait_for_text, or browser_get_url when they answer the question.]'
+    : ''
+  return `${result.text}\n\n[content metadata: ${metadata}]${warning}`
 }
