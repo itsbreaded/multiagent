@@ -61,6 +61,7 @@ export function PaneGrid(): JSX.Element {
   const [emptyDropActive, setEmptyDropActive] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
+  const activeTabHydrated = activeTabId ? hydratedTabIds[activeTabId] === true : false
   const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
   const zoomedPane = zoomedPaneId ? findPane(zoomedPaneId) : null
 
@@ -71,6 +72,23 @@ export function PaneGrid(): JSX.Element {
     <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
 
       {/* Empty state — only when active tab has no panes */}
+      {activeTab?.rootNode && !activeTabHydrated && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: '#0e1011',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#4a4b4e',
+            fontSize: 12,
+          }}
+        >
+          Restoring session...
+        </div>
+      )}
+
       {(!activeTab || !activeTab.rootNode) && (
         <div
           onDragOver={(e) => {
@@ -240,7 +258,7 @@ export function PaneGrid(): JSX.Element {
       )}
 
       {/* Zoomed pane — overlays the active tab's normal grid when a pane is zoomed */}
-      {activeTab?.rootNode && zoomedPaneId && zoomedPane && (
+      {activeTab?.rootNode && activeTabHydrated && zoomedPaneId && zoomedPane && (
         <div
           style={{
             position: 'absolute',
@@ -260,7 +278,7 @@ export function PaneGrid(): JSX.Element {
         if (!tab.rootNode) return null
         const isActive = tab.id === activeTabId
         const hydrated = hydratedTabIds[tab.id] === true
-        if (!isActive && !hydrated) return null
+        if (!hydrated) return null
         // When active tab is zoomed, the normal grid is covered by the zoomed overlay above.
         // Skip rendering it so the zoomed pane isn't duplicated in the tree.
         if (isActive && zoomedPaneId && zoomedPane) return null

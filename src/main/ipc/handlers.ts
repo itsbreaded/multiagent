@@ -22,7 +22,6 @@ try {
   vsCodeAvailable = false
 }
 
-const COALESCE_DELAY_MS = 5
 let remoteFocusRequestSeq = 0
 let focusTargetVersionSeq = 0
 let tabReleaseSeq = 0
@@ -30,7 +29,7 @@ const GIT_BRANCH_CACHE_MS = 10_000
 
 interface CoalesceEntry {
   data: string
-  timer: NodeJS.Timeout
+  immediate: NodeJS.Immediate
 }
 
 interface GitBranchCacheEntry {
@@ -68,7 +67,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const coalesceBuffer = new Map<string, CoalesceEntry>()
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
 
-  function coalesePtyOutput(ptyId: string, chunk: string): void {
+  function enqueuePtyOutput(ptyId: string, chunk: string): void {
     const entry = coalesceBuffer.get(ptyId)
     if (entry) {
       entry.data += chunk
@@ -76,10 +75,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
     const newEntry: CoalesceEntry = {
       data: chunk,
-      timer: setTimeout(() => {
+      immediate: setImmediate(() => {
         coalesceBuffer.delete(ptyId)
         windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, newEntry.data)
-      }, COALESCE_DELAY_MS),
+      }),
     }
     coalesceBuffer.set(ptyId, newEntry)
   }
@@ -87,7 +86,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   function flushCoalesceEntry(ptyId: string): void {
     const entry = coalesceBuffer.get(ptyId)
     if (!entry) return
-    clearTimeout(entry.timer)
+    clearImmediate(entry.immediate)
     coalesceBuffer.delete(ptyId)
     windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, entry.data)
   }
@@ -198,9 +197,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   const contentTimer = setInterval(() => { void pollSessions() }, 5000)
 
-  // PTY data → renderer, coalesced over 5ms window; OSC 7 parsed immediately for CWD.
+  // PTY data -> renderer, coalesced within the current event-loop turn; OSC 7 is parsed immediately for CWD.
   ptyManager.on('data', (ptyId: string, data: string) => {
-    coalesePtyOutput(ptyId, data)
+    enqueuePtyOutput(ptyId, data)
     if (data.includes('\x1b]7;')) {
       const cwd = parseOsc7(data)
       if (cwd) windowManager.sendToWindowForPty(ptyId, 'pty:cwd', ptyId, cwd)
@@ -257,6 +256,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   ipcMain.on('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
+
+  ipcMain.on('pty:pause-output', (_e, ptyId: string) => ptyManager.pause(ptyId))
+
+  ipcMain.on('pty:resume-output', (_e, ptyId: string) => ptyManager.resume(ptyId))
 
   ipcMain.handle('pty:resize', (_e, ptyId: string, cols: number, rows: number) => {
     flushCoalesceEntry(ptyId)
@@ -639,7 +642,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   return {
     cleanup: () => {
       clearInterval(contentTimer)
-      for (const entry of coalesceBuffer.values()) clearTimeout(entry.timer)
+      for (const entry of coalesceBuffer.values()) clearImmediate(entry.immediate)
       coalesceBuffer.clear()
       index.close()
       ptyManager.destroy()

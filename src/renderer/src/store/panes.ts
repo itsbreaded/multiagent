@@ -23,6 +23,7 @@ let skipDisarmClearTimer: ReturnType<typeof setTimeout> | null = null
 const LOCAL_REARM_MS = 150
 const SKIP_DISARM_TTL_MS = 400
 const hydratingPaneSessions: Record<string, string> = {}
+const hydratingTabs = new Map<string, Promise<void>>()
 
 function clearPendingRemoteFocus(): void {
   pendingRemoteFocusWindowId = null
@@ -184,10 +185,28 @@ function reportCurrentFocusTarget(): void {
   window.ipc.send('focus:target-report', store.activeTabId, paneId)
 }
 
-function hydrateTabRuntime(tabId: string): void {
-  if (typeof window === 'undefined' || !window.ipc) return
+function markTabHydrated(tabId: string): void {
+  usePanesStore.setState((s) => ({ hydratedTabIds: markHydrated(s.hydratedTabIds, tabId) }))
+}
+
+function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promise<void> {
+  const existing = hydratingTabs.get(tabId)
+  if (existing) {
+    if (markReadyAfterRuntime) void existing.then(() => markTabHydrated(tabId))
+    return existing
+  }
+
+  if (typeof window === 'undefined' || !window.ipc) {
+    if (markReadyAfterRuntime) markTabHydrated(tabId)
+    return Promise.resolve()
+  }
   const tab = usePanesStore.getState().tabs.find((t) => t.id === tabId)
-  if (!tab?.rootNode) return
+  if (!tab?.rootNode) {
+    if (markReadyAfterRuntime) markTabHydrated(tabId)
+    return Promise.resolve()
+  }
+
+  const resumes: Promise<void>[] = []
 
   for (const leaf of collectLeaves(tab.rootNode)) {
     if (leaf.paneType !== 'agent' || !leaf.agentKind || !leaf.sessionId || leaf.ptyId) continue
@@ -195,7 +214,7 @@ function hydrateTabRuntime(tabId: string): void {
 
     const { id: paneId, agentKind, sessionId, cwd } = leaf
     hydratingPaneSessions[paneId] = sessionId
-    void window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
+    const resumePromise = window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
       .then((result) => {
         const resume = result as { ptyId?: string } | null
         if (!resume?.ptyId) return
@@ -206,7 +225,7 @@ function hydrateTabRuntime(tabId: string): void {
           current.sessionId === sessionId &&
           !current.ptyId
         ) {
-          usePanesStore.getState().setPtyId(paneId, resume.ptyId)
+          usePanesStore.getState().updatePane(paneId, { ptyId: resume.ptyId, resumeError: undefined })
         }
       })
       .catch(() => {
@@ -217,13 +236,31 @@ function hydrateTabRuntime(tabId: string): void {
           current.sessionId === sessionId &&
           !current.ptyId
         ) {
-          usePanesStore.getState().updatePane(paneId, { paneType: 'shell', agentKind: undefined, sessionId: undefined })
+          usePanesStore.getState().updatePane(paneId, { resumeError: 'Session resume failed' })
         }
       })
       .finally(() => {
         if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
       })
+    resumes.push(resumePromise)
   }
+
+  const hydration = resumes.length === 0
+    ? Promise.resolve()
+    : Promise.allSettled(resumes).then(() => undefined)
+
+  hydratingTabs.set(tabId, hydration)
+  void hydration.finally(() => {
+    if (hydratingTabs.get(tabId) === hydration) hydratingTabs.delete(tabId)
+  })
+  if (markReadyAfterRuntime) void hydration.then(() => markTabHydrated(tabId))
+  return hydration
+}
+
+function hydrateTabForActivation(tabId: string, previousHydrated?: Record<string, true>): void {
+  if (!tabId) return
+  const hydrated = previousHydrated ? previousHydrated[tabId] === true : usePanesStore.getState().hydratedTabIds[tabId] === true
+  if (!hydrated) void hydrateTabRuntime(tabId, true)
 }
 
 export const RECENT_SECTION_ID = 'recent'
@@ -352,8 +389,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   hydrateTab: (tabId) => {
     const wasHydrated = get().hydratedTabIds[tabId] === true
     if (!wasHydrated) {
-      set((s) => ({ hydratedTabIds: markHydrated(s.hydratedTabIds, tabId) }))
-      hydrateTabRuntime(tabId)
+      hydrateTabRuntime(tabId, true)
     }
   },
   isTabHydrated: (tabId) => get().hydratedTabIds[tabId] === true,
@@ -367,10 +403,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       activeTabId: tab.id,
       isDetachedWindow: true,
       sidebarOpen: false,
-      hydratedTabIds: { [tab.id]: true },
+      hydratedTabIds: {},
       sidebarSectionOpen: { [tabSidebarSectionId(tab.id)]: true },
     })
-    hydrateTabRuntime(tab.id)
+    hydrateTabRuntime(tab.id, true)
     if (typeof window !== 'undefined' && window.ipc) {
       const adoption = ptyIds.length > 0
         ? window.ipc.invoke('tab:adopt', ptyIds)
@@ -409,11 +445,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: newTabs,
         activeTabId: tab.id,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, tab.id),
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
         sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
       }
     })
-    hydrateTabRuntime(tab.id)
+    hydrateTabRuntime(tab.id, true)
     reportCurrentFocusTarget()
   },
 
@@ -428,7 +464,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const activeTabId = s.activeTabId === tabId
         ? (nonDetached[nonDetached.length - 1]?.id ?? '')
         : s.activeTabId
-      const hydratedTabIds = activeTabId ? markHydrated(s.hydratedTabIds, activeTabId) : s.hydratedTabIds
+      const hydratedTabIds = s.hydratedTabIds
       if (ownerWindowId === undefined) return { tabs, activeTabId, hydratedTabIds }
       const key = String(ownerWindowId)
       const detachedWindowTabIds = Object.fromEntries(
@@ -446,8 +482,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [key]: tabId },
       }
     })
-    const activeTabId = get().activeTabId
-    if (activeTabId && !previousHydrated[activeTabId]) hydrateTabRuntime(activeTabId)
+    hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
   returnTab: (tabId) => {
@@ -459,11 +494,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: [...rest, { ...tab, detached: false }],
         activeTabId: tabId,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, tabId),
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tabId]),
         sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tabId)]: true },
       }
     })
-    hydrateTabRuntime(tabId)
+    hydrateTabRuntime(tabId, true)
   },
 
   removeTabLocally: (tabId) => {
@@ -477,13 +512,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         : s.activeTabId
       const { [tabSidebarSectionId(tabId)]: _r, ...sidebarSectionOpen } = s.sidebarSectionOpen
       const hydratedTabIds = removeHydratedTabs(
-        activeTabId ? markHydrated(s.hydratedTabIds, activeTabId) : s.hydratedTabIds,
+        s.hydratedTabIds,
         [tabId]
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
-    const activeTabId = get().activeTabId
-    if (activeTabId && !previousHydrated[activeTabId]) hydrateTabRuntime(activeTabId)
+    hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
   syncDetachedTabs: (windowId, incomingTabs, activeTabId) => {
@@ -550,14 +584,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         : s.activeTabId
 
       const hydratedTabIds = removeHydratedTabs(
-        newActiveTabId ? markHydrated(s.hydratedTabIds, newActiveTabId) : s.hydratedTabIds,
+        s.hydratedTabIds,
         removedIds
       )
 
       return { tabs, detachedWindowTabIds, detachedWindowActiveTabIds, activeTabId: newActiveTabId, hydratedTabIds }
     })
-    const currentActiveTabId = get().activeTabId
-    if (currentActiveTabId && !previousHydrated[currentActiveTabId]) hydrateTabRuntime(currentActiveTabId)
+    hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
   addPaneToTab: (pane, tabId) => {
@@ -567,8 +600,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (!t.rootNode) return { ...t, rootNode: pane, focusedPaneId: pane.id }
         return { ...t, rootNode: makeSplit('vertical', t.rootNode, pane), focusedPaneId: pane.id }
       }),
+      hydratedTabIds: s.hydratedTabIds[tabId] ? removeHydratedTabs(s.hydratedTabIds, [tabId]) : s.hydratedTabIds,
     }))
-    if (get().hydratedTabIds[tabId]) hydrateTabRuntime(tabId)
+    hydrateTabRuntime(tabId, true)
   },
 
   removePaneKeepTab: (paneId) => {
@@ -671,13 +705,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         s.activeTabId === tabId ? (tabs[tabs.length - 1]?.id ?? '') : s.activeTabId
       const { [tabSidebarSectionId(tabId)]: _closed, [tabId]: _legacyClosed, ...sidebarSectionOpen } = s.sidebarSectionOpen
       const hydratedTabIds = removeHydratedTabs(
-        activeTabId ? markHydrated(s.hydratedTabIds, activeTabId) : s.hydratedTabIds,
+        s.hydratedTabIds,
         [tabId]
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
-    const activeTabId = get().activeTabId
-    if (activeTabId && !previousHydrated[activeTabId]) hydrateTabRuntime(activeTabId)
+    hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
   setActiveTab: (tabId) => {
@@ -687,9 +720,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const zoomedPaneId = tab?.rootNode && s.zoomedPaneId && findLeaf(tab.rootNode, s.zoomedPaneId)
         ? s.zoomedPaneId
         : null
-      return { activeTabId: tabId, zoomedPaneId, hydratedTabIds: markHydrated(s.hydratedTabIds, tabId) }
+      return {
+        activeTabId: tabId,
+        zoomedPaneId,
+      }
     })
-    if (!wasHydrated) hydrateTabRuntime(tabId)
+    if (!wasHydrated) hydrateTabRuntime(tabId, true)
     // Immediately notify other windows when the active tab changes in a detached window.
     const { isDetachedWindow, windowId } = get()
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
@@ -741,14 +777,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs,
         activeTabId: tabId,
-        hydratedTabIds: { [tabId]: true },
+        hydratedTabIds: wasHydrated ? { [tabId]: true } : {},
         sidebarSectionOpen: {
           [RECENT_SECTION_ID]: s.sidebarSectionOpen[RECENT_SECTION_ID] ?? true,
           [sectionId]: s.sidebarSectionOpen[sectionId] ?? s.sidebarSectionOpen[tabId] ?? true,
         },
       }
     })
-    if (!wasHydrated) hydrateTabRuntime(tabId)
+    if (!wasHydrated) hydrateTabRuntime(tabId, true)
   },
 
   closeTabsToRight: (tabId) => {
@@ -775,13 +811,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         )
       )
       const hydratedTabIds = removeHydratedTabs(
-        activeTabId ? markHydrated(s.hydratedTabIds, activeTabId) : s.hydratedTabIds,
+        s.hydratedTabIds,
         removedIds
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
-    const activeTabId = get().activeTabId
-    if (activeTabId && !previousHydrated[activeTabId]) hydrateTabRuntime(activeTabId)
+    hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
   setSidebarSectionOpen: (sectionId, open) => {
@@ -816,10 +851,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
         zoomedPaneId,
         localFocusArmed: true,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, tabId),
       }
     })
-    if (!wasHydrated) hydrateTabRuntime(tabId)
+    if (!wasHydrated) hydrateTabRuntime(tabId, true)
     if (isDetachedWindow && windowId !== null && typeof window !== 'undefined' && window.ipc) {
       window.ipc.send('pane:focus-changed', windowId, tabId, paneId)
     }
@@ -946,7 +980,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setPtyId: (paneId, ptyId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId }) } : t),
+      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId, resumeError: undefined }) } : t),
     }))
   },
 
@@ -999,23 +1033,26 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     get().setLastAgentKind(agentKind)
     const leaf = makeLeaf(cwd, 'agent', agentKind)
     leaf.sessionId = sessionId
+    let targetTabId = ''
     set((s) => {
       if (s.tabs.length === 0) {
         const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
+        targetTabId = tab.id
         return {
           tabs: [tab],
           activeTabId: tab.id,
-          hydratedTabIds: markHydrated(s.hydratedTabIds, tab.id),
+          hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
           sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
         }
       }
+      targetTabId = s.activeTabId
       const tabs = s.tabs.map((t) => {
         if (t.id !== s.activeTabId) return t
         if (!t.rootNode) return { ...t, rootNode: leaf, focusedPaneId: leaf.id }
         const split = makeSplit('vertical', t.rootNode, leaf)
         return { ...t, rootNode: split, focusedPaneId: leaf.id }
       })
-      return { tabs, hydratedTabIds: s.activeTabId ? markHydrated(s.hydratedTabIds, s.activeTabId) : s.hydratedTabIds }
+      return { tabs, hydratedTabIds: s.activeTabId ? removeHydratedTabs(s.hydratedTabIds, [s.activeTabId]) : s.hydratedTabIds }
     })
     if (typeof window !== 'undefined' && window.ipc) {
       try {
@@ -1025,7 +1062,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         }
       } catch (err) {
         console.error('session:resume IPC failed', err)
+        get().updatePane(leaf.id, { resumeError: 'Session resume failed' })
+      } finally {
+        if (targetTabId) markTabHydrated(targetTabId)
       }
+    } else if (targetTabId) {
+      markTabHydrated(targetTabId)
     }
   },
 
@@ -1037,7 +1079,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => ({
       tabs: [...s.tabs, tab],
       activeTabId: tab.id,
-      hydratedTabIds: markHydrated(s.hydratedTabIds, tab.id),
+      hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
       sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
     }))
     if (typeof window !== 'undefined' && window.ipc) {
@@ -1046,7 +1088,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
       } catch (err) {
         console.error('session:resume IPC failed', err)
+        get().updatePane(leaf.id, { resumeError: 'Session resume failed' })
+      } finally {
+        markTabHydrated(tab.id)
       }
+    } else {
+      markTabHydrated(tab.id)
     }
   },
 
@@ -1174,13 +1221,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       set({
         tabs,
         activeTabId,
-        hydratedTabIds: activeTabId ? { [activeTabId]: true } : {},
+        hydratedTabIds: {},
         sidebarWidth: saved.sidebarWidth ?? 220,
         sidebarPanelSizes,
         sidebarOpen: saved.sidebarOpen ?? true,
         sidebarSectionOpen,
       })
-      if (activeTabId) hydrateTabRuntime(activeTabId)
+      if (activeTabId) hydrateTabRuntime(activeTabId, true)
     } catch (err) {
       console.error('[MultiAgent] applyLayout failed:', err)
     }
@@ -1232,11 +1279,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: newTab.id,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, newTab.id),
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [newTab.id]),
         sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(newTab.id)]: true },
       }
     })
-    if (newTabId) hydrateTabRuntime(newTabId)
+    if (newTabId) hydrateTabRuntime(newTabId, true)
   },
 
   movePaneToTab: (sourcePaneId, targetTabId) => {
@@ -1283,7 +1330,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: targetTabId,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, targetTabId),
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [targetTabId]),
         zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
         sidebarSectionOpen: {
           ...s.sidebarSectionOpen,
@@ -1291,7 +1338,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         },
       }
     })
-    if (moved && get().hydratedTabIds[targetTabId]) hydrateTabRuntime(targetTabId)
+    if (moved) hydrateTabRuntime(targetTabId, true)
   },
 
   movePaneToSplit: (sourcePaneId, targetPaneId, direction, sourceBefore) => {
@@ -1365,7 +1412,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: targetTabId,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, targetTabId),
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [targetTabId]),
         zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
         sidebarSectionOpen: {
           ...s.sidebarSectionOpen,
@@ -1373,7 +1420,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         },
       }
     })
-    if (moved && activatedTabId && get().hydratedTabIds[activatedTabId]) hydrateTabRuntime(activatedTabId)
+    if (moved && activatedTabId) hydrateTabRuntime(activatedTabId, true)
   },
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),

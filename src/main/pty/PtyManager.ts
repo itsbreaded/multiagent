@@ -34,6 +34,7 @@ export class PtyManager extends EventEmitter {
   private worker: ChildProcess
   private pendingResizes = new Map<string, { cols: number; rows: number }>()
   private readyIds = new Set<string>()
+  private pausedIds = new Set<string>()
 
   constructor() {
     super()
@@ -66,6 +67,9 @@ export class PtyManager extends EventEmitter {
           this.emit('data', msg.id, msg.data)
           break
         case 'exit':
+          this.pendingResizes.delete(msg.id)
+          this.readyIds.delete(msg.id)
+          this.pausedIds.delete(msg.id)
           this.emit('exit', msg.id, msg.exitCode, msg.signal)
           break
         case 'ready': {
@@ -158,16 +162,21 @@ export class PtyManager extends EventEmitter {
   }
 
   pause(ptyId: string): void {
+    if (this.pausedIds.has(ptyId)) return
+    this.pausedIds.add(ptyId)
     this._send({ type: 'pause', id: ptyId })
   }
 
   resume(ptyId: string): void {
+    if (!this.pausedIds.has(ptyId)) return
+    this.pausedIds.delete(ptyId)
     this._send({ type: 'resume', id: ptyId })
   }
 
   kill(ptyId: string): void {
     this.pendingResizes.delete(ptyId)
     this.readyIds.delete(ptyId)
+    this.pausedIds.delete(ptyId)
     this._send({ type: 'kill', id: ptyId })
   }
 

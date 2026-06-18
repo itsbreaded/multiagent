@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -36,6 +37,9 @@ const XTERM_THEME = {
 
 const TERMINAL_SCROLLBACK_LINES = 250_000
 const RESIZE_COL_DEBOUNCE_MS = 100
+const XTERM_WRITE_CHUNK_CHARS = 128 * 1024
+const XTERM_OUTPUT_PAUSE_CHARS = 1024 * 1024
+const XTERM_OUTPUT_RESUME_CHARS = 256 * 1024
 const IS_WINDOWS = navigator.userAgent.includes('Windows')
 const ALT_ENTER_SEQUENCE = '\x1b\r'
 
@@ -137,9 +141,13 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       xterm.loadAddon(new WebLinksAddon((_event, uri) => {
         window.ipc.invoke('shell:open-external', uri).catch(() => {})
       }))
-      // No WebGL or Canvas addon — xterm DOM renderer is used. It is leaner on
-      // low-powered / software-rasterised GPUs where WebGL (via SwiftShader/WARP)
-      // produces ~50-60% CPU for a single keystroke echo.
+      try {
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          try { webglAddon.dispose() } catch { /* ignore */ }
+        })
+        xterm.loadAddon(webglAddon)
+      } catch { /* fall back to xterm's DOM renderer */ }
       if (IS_WINDOWS) {
         const buildNumber = parseInt(window.osRelease?.split('.')[2] ?? '0', 10)
         xterm.options.windowsPty = { backend: 'conpty', buildNumber }
@@ -287,6 +295,12 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     if (!xterm || status === 'mounting') return
     const terminal: XTerm = xterm
 
+    if (pane.paneType === 'agent' && !pane.ptyId && pane.resumeError) {
+      setStatus('error')
+      setErrorMsg(pane.resumeError)
+      return
+    }
+
     if (pane.paneType === 'agent' && !pane.ptyId) {
       xterm.clear()
       xterm.write(`\x1b[2m[Starting ${agentLabel(pane.agentKind ?? 'claude')} session...]\x1b[0m\r\n`)
@@ -302,6 +316,36 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     let lastResize: { cols: number; rows: number } | null = null
     let pendingResizeCols: number | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
+    let queuedOutput: string[] = []
+    let queuedOutputChars = 0
+    let writeInFlight = false
+    let outputPaused = false
+
+    const pauseOutput = (ptyId: string): void => {
+      if (outputPaused) return
+      outputPaused = true
+      window.ipc.send('pty:pause-output', ptyId)
+    }
+
+    const resumeOutput = (ptyId: string): void => {
+      if (!outputPaused) return
+      outputPaused = false
+      window.ipc.send('pty:resume-output', ptyId)
+    }
+
+    const takeQueuedOutput = (): string | null => {
+      const first = queuedOutput[0]
+      if (!first) return null
+      if (first.length <= XTERM_WRITE_CHUNK_CHARS) {
+        queuedOutput.shift()
+        queuedOutputChars -= first.length
+        return first
+      }
+      const chunk = first.slice(0, XTERM_WRITE_CHUNK_CHARS)
+      queuedOutput[0] = first.slice(XTERM_WRITE_CHUNK_CHARS)
+      queuedOutputChars -= chunk.length
+      return chunk
+    }
 
     async function connect(): Promise<void> {
       let ptyId = pane.ptyId ?? null
@@ -328,9 +372,32 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       setStatus('ready')
       xtermRegistry.markConnected(pane.id)
 
+      const drainOutput = (): void => {
+        if (cancelled || writeInFlight) return
+        const chunk = takeQueuedOutput()
+        if (!chunk) {
+          resumeOutput(ptyId)
+          return
+        }
+        writeInFlight = true
+        terminal.write(chunk, () => {
+          writeInFlight = false
+          if (cancelled) return
+          if (queuedOutputChars <= XTERM_OUTPUT_RESUME_CHARS) resumeOutput(ptyId)
+          drainOutput()
+        })
+      }
+
+      const enqueueOutput = (data: string): void => {
+        queuedOutput.push(data)
+        queuedOutputChars += data.length
+        if (queuedOutputChars >= XTERM_OUTPUT_PAUSE_CHARS) pauseOutput(ptyId)
+        drainOutput()
+      }
+
       unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
         if (receivedId === ptyId && typeof data === 'string' && !cancelled) {
-          terminal.write(data)
+          enqueueOutput(data)
         }
       })
 
@@ -386,6 +453,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
     return () => {
       cancelled = true
+      if (outputPaused && ptyIdRef.current) window.ipc.send('pty:resume-output', ptyIdRef.current)
+      queuedOutput = []
+      queuedOutputChars = 0
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       dataDisposable?.dispose()
@@ -396,7 +466,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // PTYs are killed explicitly by closePane() in the panes store.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id, pane.ptyId, pane.paneType, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.resumeError, status === 'mounting' ? 'mounting' : 'ready'])
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()

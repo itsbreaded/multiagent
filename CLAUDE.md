@@ -42,9 +42,9 @@ All IPC channel names and their signatures are the single source of truth in `sr
 
 `node-pty` runs in a child process (`src/main/pty/ptyWorker.ts`) spawned with `ELECTRON_RUN_AS_NODE=1`. This prevents Chromium's IPC handles from being inherited into ConPTY, which would crash Claude (a Bun binary). `PtyManager` communicates with the worker over Node IPC (`process.send`/`process.on('message')`).
 
-On Windows, shell and agent panes use `-EncodedCommand` (UTF-16LE base64) to inject a PowerShell prompt wrapper that emits OSC 7 (`\x1b]7;file:///path\x07`) on every prompt. Main process parses these in `parseOsc7()` (in `handlers.ts`) and fires `pty:cwd` events to the renderer for live CWD tracking. Use `[char]27`/`[char]7` in PowerShell scripts - backtick-e (`` `e ``) is unreliable in Windows PowerShell 5.x.
+On Windows, shell panes use `-EncodedCommand` (UTF-16LE base64) to inject a PowerShell prompt wrapper that emits OSC 7 (`\x1b]7;file:///path\x07`) on every prompt. Main process parses these in `parseOsc7()` (in `handlers.ts`) and fires `pty:cwd` events to the renderer for live CWD tracking. Use `[char]27`/`[char]7` in PowerShell scripts - backtick-e (`` `e ``) is unreliable in Windows PowerShell 5.x.
 
-`createShell` and agent launch helpers delegate to `_shellCmd()` for PowerShell wrapping. Keep command differences in the agent command builders, not in PTY prompt/CWD plumbing.
+`createShell` uses `_shellCmd()` for the interactive prompt/CWD wrapper. Agent panes must not start an interactive shell and then wait for a prompt before typing `codex`/`claude`; `SessionSpawner` launches the agent command immediately through a non-profile shell command. Keep this direct launch path so restored Codex panes do not pay the old 10s prompt-detection fallback.
 
 Codex panes pass `--no-alt-screen`, `-c tui.animations=false`, and `-c tui.terminal_title=[]` to reduce cursor redraw/flicker in xterm panes. `tui.terminal_title=[]` suppresses OSC title sequences that serve no purpose in an embedded pane. Keep these flags unless verified against current Codex behavior.
 

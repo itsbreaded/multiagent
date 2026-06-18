@@ -7,6 +7,7 @@ import type { PtyManager } from '../pty/PtyManager'
 import type { AgentKind } from '../../shared/types'
 import { CodexSessionScanner, codexSessionsDir } from './CodexSessionScanner'
 import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentMcpSettings } from '../mcp/McpInjector'
+import { defaultShell } from '../pty/shell'
 
 // --- Shared watcher state ---
 // One chokidar instance watches ~/.claude/projects/ for all sessions.
@@ -99,21 +100,27 @@ export class SessionSpawner {
 
   async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null }> {
     const targetWin = senderWin ?? this.mainWindow
-    const ptyId = this.ptyManager.createAgent(cwd, agentKind)
     const startedAt = Date.now()
+    const ptyId = this.ptyManager.createDeferred(
+      cwd,
+      agentLaunchCommand(newSessionCommand(agentKind)),
+      agentEnv(agentKind)
+    )
     this._watchForNewSession(agentKind, ptyId, cwd, startedAt, targetWin)
-    this._writeWhenPromptReady(ptyId, `${newSessionCommand(agentKind)}\r`)
     return { ptyId, sessionId: null }
   }
 
   async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string }> {
     const targetWin = senderWin ?? this.mainWindow
-    const ptyId = this.ptyManager.createAgent(cwd, agentKind)
     const startedAt = Date.now()
+    const ptyId = this.ptyManager.createDeferred(
+      cwd,
+      agentLaunchCommand(resumeSessionCommand(agentKind, sessionId, cwd)),
+      agentEnv(agentKind)
+    )
     if (agentKind === 'codex') {
       this._watchForNewCodexSession(ptyId, cwd, startedAt, targetWin)
     }
-    this._writeWhenPromptReady(ptyId, `${resumeSessionCommand(agentKind, sessionId, cwd)}\r`)
     return { ptyId }
   }
 
@@ -204,64 +211,26 @@ export class SessionSpawner {
     codexPendingQueue.push(pending)
   }
 
-  // Wait until the shell has printed its prompt (detected by 'PS ' or '$ ' or '> '
-  // in the PTY output) before sending the command. This is more reliable than any
-  // fixed timeout because startup time varies by machine and PowerShell version.
-  private _writeWhenPromptReady(ptyId: string, command: string): void {
-    let sent = false
-    let outputBuffer = ''
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null
-
-    const send = () => {
-      if (sent) return
-      sent = true
-      if (fallbackTimer) clearTimeout(fallbackTimer)
-      this.ptyManager.write(ptyId, command)
-    }
-
-    const isPromptReady = (text: string): boolean => {
-      // PowerShell: "PS C:\...>"
-      if (text.includes('PS ') && text.includes('>')) return true
-      // cmd.exe: "C:\...>"
-      if (/[A-Z]:\\.*>/.test(text)) return true
-      // bash/zsh: ends with $ or %
-      if (/[$%]\s*$/.test(text)) return true
-      return false
-    }
-
-    const onReady = (readyId: string) => {
-      if (readyId !== ptyId) return
-      this.ptyManager.off('ready', onReady)
-
-      const onData = (dataId: string, data: string) => {
-        if (dataId !== ptyId) return
-        outputBuffer += data
-        // Gap 6: prevent unbounded buffer growth
-        if (outputBuffer.length > 4096) outputBuffer = outputBuffer.slice(-4096)
-
-        if (isPromptReady(outputBuffer)) {
-          this.ptyManager.off('data', onData)
-          // Small pause so the shell finishes drawing the prompt line
-          setTimeout(send, 150)
-        }
-      }
-
-      this.ptyManager.on('data', onData)
-
-      // Fallback: send after 10s even if we never detect the prompt
-      fallbackTimer = setTimeout(() => {
-        this.ptyManager.off('data', onData)
-        send()
-      }, 10_000)
-    }
-
-    this.ptyManager.on('ready', onReady)
-  }
 }
 
 function shellArg(value: string): string {
   if (/^[A-Za-z0-9_\-.:\\/]+$/.test(value)) return value
   return `"${value.replace(/"/g, '\\"')}"`
+}
+
+function agentLaunchCommand(command: string): string[] {
+  if (process.platform === 'win32') {
+    return ['powershell.exe', '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command]
+  }
+  return [defaultShell(), '-lc', command]
+}
+
+function agentEnv(agentKind: AgentKind): Record<string, string> | undefined {
+  if (agentKind !== 'claude') return undefined
+  return {
+    CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1',
+    CLAUDE_CODE_NO_FLICKER: '1',
+  }
 }
 
 function newSessionCommand(agentKind: AgentKind): string {

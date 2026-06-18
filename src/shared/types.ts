@@ -56,6 +56,7 @@ export interface PaneLeaf {
   cwd: string
   sessionId?: string    // set when paneType === 'agent'
   ptyId?: string        // set once PTY is created
+  resumeError?: string  // set when a restored agent session failed to resume
   title?: string        // programmatic display override (full)
   customName?: string   // user-set label prefix shown before the directory name
 }
@@ -307,6 +308,8 @@ export type EventChannels =
 
 export type SendChannels =
   | 'pty:write'
+  | 'pty:pause-output'
+  | 'pty:resume-output'
   | 'tab:state-sync'
   | 'tab:detached-ready'
   | 'tab:release-applied'
