@@ -85,6 +85,8 @@ Keep overlay surfaces visually aligned. Settings, Session Browser, and Command P
 
 Renderer styling should start from `src/renderer/src/styles/theme.ts` for palette, borders, shadows, z-indexes, and reusable sidebar/menu/control style fragments. Add new shared tokens there when a value is meant to become a convention; avoid copying raw hex values or ad hoc menu/sidebar styles into new components.
 
+When one UI has multiple presentation modes, keep the shared pieces structurally shared. For example, tab overflow modes may change only the container behavior (scroll vs wrap); tab cards, add-tab controls, row metrics, padding, and interaction semantics should come from the same constants/components. Before fixing a mode-specific visual or hit-test bug, compare both render paths and remove duplicated branches that let sizing, placement, or behavior drift. In Electron chrome, default top chrome regions to draggable and explicitly exempt real controls; avoid native `no-drag` rectangles on horizontally scrolled children because Chromium/Electron hit regions can leak when scrolled.
+
 All non-terminal scrollable renderer surfaces should use the shared `dark-scrollbar` class from `src/renderer/src/assets/main.css`. Terminal scrollbars are styled separately through `.xterm .xterm-viewport`. When adding a reusable component that owns an internal scroll container, expose a className hook instead of forcing callers to accept an unstyled native scrollbar.
 
 ### Session Indexing

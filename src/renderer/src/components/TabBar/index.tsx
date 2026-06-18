@@ -16,8 +16,15 @@ import leftPanelClosedIcon from '../../assets/leftpanelclosed.png'
 import minimizeIcon from '../../assets/minimize.png'
 import maximizeIcon from '../../assets/maximize.png'
 import closeIcon from '../../assets/close.png'
+import arrowLeftIcon from '../../assets/arrowleft.png'
+import arrowRightIcon from '../../assets/arrowright.png'
+import addBoxIcon from '../../assets/addbox.png'
 
 const TAB_DRAG_MIME = 'application/x-multiagent-tab'
+const CHROME_DRAG_EXEMPT_SELECTOR = 'button, input, textarea, select, [data-window-drag-exempt="true"]'
+const TAB_HEIGHT = 28
+const NEW_TAB_BUTTON_SIZE = 24
+const TAB_SCROLL_BUTTON_SIZE = NEW_TAB_BUTTON_SIZE
 
 function appRegion(value: 'drag' | 'no-drag'): React.CSSProperties {
   return { WebkitAppRegion: value } as React.CSSProperties
@@ -26,6 +33,21 @@ function appRegion(value: 'drag' | 'no-drag'): React.CSSProperties {
 function startWindowDrag(e: React.MouseEvent): void {
   if (e.button !== 0) return
   window.ipc.invoke('window:start-drag').catch(() => {})
+}
+
+function isWindowDragTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  return !target.closest(CHROME_DRAG_EXEMPT_SELECTOR)
+}
+
+function startWindowDragFromChrome(e: React.MouseEvent): void {
+  if (!isWindowDragTarget(e.target)) return
+  startWindowDrag(e)
+}
+
+function toggleMaximizeFromChrome(e: React.MouseEvent): void {
+  if (!isWindowDragTarget(e.target)) return
+  window.ipc.invoke('window:toggle-maximize').catch(console.error)
 }
 
 function collectPtyIds(tab: Tab): string[] {
@@ -152,6 +174,74 @@ function WindowControls(): JSX.Element | null {
     </div>
   )
 }
+
+function NewTabButton({
+  onClick,
+  rowInset = 0,
+}: {
+  onClick: () => void
+  rowInset?: number
+}): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      title={`New tab (${HOTKEYS.newTab.display})`}
+      style={{
+        marginLeft: 4,
+        width: NEW_TAB_BUTTON_SIZE,
+        height: NEW_TAB_BUTTON_SIZE,
+        borderRadius: 4,
+        border: `1px dashed ${ui.color.border}`,
+        backgroundColor: 'transparent',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 0,
+        flexShrink: 0,
+        alignSelf: 'center',
+        marginTop: rowInset,
+        marginBottom: rowInset,
+        ...appRegion('no-drag'),
+      }}
+    >
+      <img src={addBoxIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+    </button>
+  )
+}
+
+function TabScrollButton({
+  onClick,
+  title,
+  icon,
+}: {
+  onClick: () => void
+  title: string
+  icon: string
+}): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        width: TAB_SCROLL_BUTTON_SIZE,
+        height: TAB_SCROLL_BUTTON_SIZE,
+        border: border.default,
+        background: 'transparent',
+        cursor: 'pointer',
+        padding: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        ...appRegion('no-drag'),
+      }}
+    >
+      <img src={icon} alt="" style={{ width: 18, height: 18, display: 'block' }} />
+    </button>
+  )
+}
+
 interface ContextMenuState {
   tabId: string
   x: number
@@ -304,12 +394,13 @@ export function LeftChrome({ withBorderBottom = false }: { withBorderBottom?: bo
 
   return (
     <div
-      onMouseDown={(e) => { if (e.target === e.currentTarget) startWindowDrag(e) }}
-      onDoubleClick={(e) => { if (e.target === e.currentTarget) window.ipc.invoke('window:toggle-maximize').catch(console.error) }}
+      onMouseDownCapture={startWindowDragFromChrome}
+      onDoubleClickCapture={toggleMaximizeFromChrome}
       style={{
         width: leftChromeWidth,
         minWidth: leftChromeWidth,
         height: ui.chrome.height,
+        boxSizing: 'border-box',
         backgroundColor: ui.chrome.background,
         paddingLeft: isMac ? 80 : leftChromePadding,
         paddingRight: leftChromePadding,
@@ -392,6 +483,12 @@ export function TabBar(): JSX.Element {
   const nativeWindowControlsWidth = isWindows ? ui.chrome.windowControlWidth * 3 : 0
 
   const labels = computeLabels(tabs, sessions)
+  const stripNativeAppRegion = appRegion(tabOverflowMode === 'wrap' ? 'drag' : 'no-drag')
+  const tabNativeAppRegion = tabOverflowMode === 'wrap' ? appRegion('no-drag') : {}
+  const chromeRowHeight = isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height
+  const chromeContentHeight = chromeRowHeight - 1
+  const tabRowInset = tabOverflowMode === 'wrap' ? Math.max(0, (chromeContentHeight - TAB_HEIGHT) / 2) : 0
+  const newTabRowInset = tabOverflowMode === 'wrap' ? Math.max(0, (chromeContentHeight - NEW_TAB_BUTTON_SIZE) / 2) : 0
 
   // Scroll mode arrow state
   const stripRef = useRef<HTMLDivElement>(null)
@@ -408,6 +505,30 @@ export function TabBar(): JSX.Element {
     setCanScrollLeft(strip.scrollLeft > 0)
     setCanScrollRight(strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1)
   }, [tabOverflowMode])
+
+  const scrollTabsBy = useCallback((delta: number) => {
+    const strip = stripRef.current
+    if (strip) strip.scrollBy({ left: delta, behavior: 'smooth' })
+  }, [])
+
+  const handleStripWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (tabOverflowMode !== 'scroll') return
+    const strip = stripRef.current
+    if (!strip || strip.scrollWidth <= strip.clientWidth) return
+
+    const rawDelta = e.deltaY !== 0 ? e.deltaY : e.deltaX
+    if (rawDelta === 0) return
+
+    const delta = e.deltaMode === 1
+      ? rawDelta * 16
+      : e.deltaMode === 2
+        ? rawDelta * strip.clientWidth
+        : rawDelta
+
+    e.preventDefault()
+    strip.scrollLeft += delta
+    window.requestAnimationFrame(updateScrollState)
+  }, [tabOverflowMode, updateScrollState])
 
   useEffect(() => {
     const strip = stripRef.current
@@ -588,15 +709,12 @@ export function TabBar(): JSX.Element {
 
   return (
     <div
-      onDoubleClick={(e) => {
-        if (e.target === e.currentTarget) window.ipc.invoke('window:toggle-maximize').catch(console.error)
-      }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) startWindowDrag(e)
-      }}
+      onMouseDownCapture={startWindowDragFromChrome}
+      onDoubleClickCapture={toggleMaximizeFromChrome}
       style={{
-        height: tabOverflowMode === 'wrap' ? 'auto' : (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height),
-        minHeight: tabOverflowMode === 'wrap' ? (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height) : undefined,
+        height: tabOverflowMode === 'wrap' ? 'auto' : chromeRowHeight,
+        minHeight: tabOverflowMode === 'wrap' ? chromeRowHeight : undefined,
+        boxSizing: 'border-box',
         // In wrap mode the root is transparent — each child carries its own background so the
         // left chrome area does not visually grow beyond the first row.
         backgroundColor: tabOverflowMode === 'wrap' ? 'transparent' : (isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background),
@@ -612,16 +730,10 @@ export function TabBar(): JSX.Element {
       {/* Sidebar toggle — hidden in detached windows and in wrap mode (rendered by App.tsx in a separate column) */}
       {!isDetachedWindow && tabOverflowMode !== 'wrap' && (
         <div
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) startWindowDrag(e)
-          }}
-          onDoubleClick={(e) => {
-            if (e.target === e.currentTarget) window.ipc.invoke('window:toggle-maximize').catch(console.error)
-          }}
           style={{
             width: leftChromeWidth,
             minWidth: leftChromeWidth,
-            height: isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height,
+            height: chromeContentHeight,
             backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
             paddingLeft: isMac ? 80 : leftChromePadding,
             paddingRight: leftChromePadding,
@@ -671,14 +783,17 @@ export function TabBar(): JSX.Element {
           flex: tabOverflowMode === 'wrap' ? '1 1 0%' : '0 1 auto',
           minWidth: 0,
           maxWidth: tabOverflowMode === 'wrap' ? undefined : '100%',
-          height: tabOverflowMode === 'wrap' ? 'auto' : '100%',
+          height: tabOverflowMode === 'wrap' ? 'auto' : chromeContentHeight,
           alignSelf: tabOverflowMode === 'wrap' ? 'flex-start' : undefined,
           backgroundColor: tabOverflowMode === 'wrap' ? (isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background) : undefined,
           display: 'flex',
           alignItems: 'center',
+          overflow: tabOverflowMode === 'wrap' ? 'visible' : 'hidden',
+          ...appRegion('drag'),
         }}
       >
-        {/* Tab strip — also accepts cross-window tab drops */}
+        {/* In scroll mode, keep the native no-drag region on the fixed strip box;
+            scrolled tab children use React hit testing so their regions cannot leak left. */}
         <div
           ref={stripRef}
           className="tab-strip"
@@ -693,8 +808,8 @@ export function TabBar(): JSX.Element {
             overflowY: tabOverflowMode === 'wrap' ? 'visible' : 'hidden',
             paddingLeft: isDetachedWindow ? 0 : 2,
             paddingRight: 6,
-            height: tabOverflowMode === 'wrap' ? 'auto' : '100%',
-            ...appRegion('no-drag'),
+            minHeight: chromeContentHeight,
+            ...stripNativeAppRegion,
           }}
           onDragOver={(e) => {
             // Accept cross-window tab drops on the strip background
@@ -705,6 +820,7 @@ export function TabBar(): JSX.Element {
           onDrop={(e) => {
             handleCrossWindowDrop(e)
           }}
+          onWheel={handleStripWheel}
         >
         {tabs.filter((t) => !t.detached).map((tab, idx) => {
           const isActive = tab.id === activeTabId
@@ -715,6 +831,7 @@ export function TabBar(): JSX.Element {
           return (
             <div
               key={tab.id}
+              data-window-drag-exempt="true"
               ref={(el) => { if (el) tabRefs.current.set(tab.id, el); else tabRefs.current.delete(tab.id) }}
               draggable={!isRenaming}
               onMouseDown={() => {
@@ -872,9 +989,8 @@ export function TabBar(): JSX.Element {
                 setContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
               style={{
-                height: tabOverflowMode === 'wrap'
-                  ? (isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height)
-                  : 28,
+                height: TAB_HEIGHT,
+                boxSizing: 'border-box',
                 minWidth: 86,
                 maxWidth: 180,
                 padding: '0 9px',
@@ -900,7 +1016,9 @@ export function TabBar(): JSX.Element {
                 flexShrink: 0,
                 transition: 'color 0.1s',
                 position: 'relative',
-                ...appRegion('no-drag'),
+                marginTop: tabRowInset,
+                marginBottom: tabRowInset,
+                ...tabNativeAppRegion,
               }}
               onMouseEnter={(e) => {
                 if (!isActive) e.currentTarget.style.backgroundColor = ui.chrome.tabInactiveHover
@@ -965,59 +1083,29 @@ export function TabBar(): JSX.Element {
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: isActive ? ui.color.textMuted : ui.color.textDim,
                   cursor: 'pointer',
                   padding: 0,
-                  fontSize: 14,
-                  lineHeight: 1,
                   display: 'flex',
                   alignItems: 'center',
                   marginLeft: 2,
                   flexShrink: 0,
-                  ...appRegion('no-drag'),
+                  ...tabNativeAppRegion,
                 }}
                 title="Close tab"
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textStrong }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = isActive ? ui.color.textMuted : ui.color.textDim }}
               >
-                ×
+                <img src={closeIcon} alt="" style={{ width: 10, height: 10, display: 'block' }} />
               </button>
             </div>
           )
         })}
 
-        {tabOverflowMode === 'wrap' && (
-          <button
-            onClick={() => { const id = addTab(); startRename(id) }}
-            title={`New tab (${HOTKEYS.newTab.display})`}
-            style={{
-              marginLeft: 4,
-              width: 24,
-              height: 24,
-              borderRadius: 4,
-              border: `1px dashed ${ui.color.border}`,
-              backgroundColor: 'transparent',
-              color: ui.color.textDim,
-              cursor: 'pointer',
-              fontSize: 16,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              flexShrink: 0,
-              alignSelf: 'center',
-              ...appRegion('no-drag'),
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
-          >
-            +
-          </button>
-        )}
+        <NewTabButton
+          rowInset={newTabRowInset}
+          onClick={() => { const id = addTab(); startRename(id) }}
+        />
 
         </div>{/* end tab-strip */}
 
-        {/* Left scroll arrow */}
         {tabOverflowMode === 'scroll' && canScrollLeft && (
           <div style={{
             position: 'absolute',
@@ -1031,20 +1119,15 @@ export function TabBar(): JSX.Element {
             pointerEvents: 'none',
           }}>
             <div style={{ pointerEvents: 'auto' }}>
-              <BarButton
-                onClick={() => {
-                  const strip = stripRef.current
-                  if (strip) strip.scrollBy({ left: -(strip.clientWidth * 0.8), behavior: 'smooth' })
-                }}
+              <TabScrollButton
+                onClick={() => scrollTabsBy(-(stripRef.current?.clientWidth ?? 0) * 0.8)}
                 title="Scroll tabs left"
-              >
-                ‹
-              </BarButton>
+                icon={arrowLeftIcon}
+              />
             </div>
           </div>
         )}
 
-        {/* Right scroll arrow */}
         {tabOverflowMode === 'scroll' && canScrollRight && (
           <div style={{
             position: 'absolute',
@@ -1058,67 +1141,25 @@ export function TabBar(): JSX.Element {
             pointerEvents: 'none',
           }}>
             <div style={{ pointerEvents: 'auto' }}>
-              <BarButton
-                onClick={() => {
-                  const strip = stripRef.current
-                  if (strip) strip.scrollBy({ left: strip.clientWidth * 0.8, behavior: 'smooth' })
-                }}
+              <TabScrollButton
+                onClick={() => scrollTabsBy((stripRef.current?.clientWidth ?? 0) * 0.8)}
                 title="Scroll tabs right"
-              >
-                ›
-              </BarButton>
+                icon={arrowRightIcon}
+              />
             </div>
           </div>
         )}
       </div>{/* end strip wrapper */}
 
-      {/* New tab button — only rendered here in scroll mode; wrap mode renders it inside the tab strip */}
-      {tabOverflowMode !== 'wrap' && (
-        <div style={{
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-        }}>
-          <button
-            onClick={() => { const id = addTab(); startRename(id) }}
-            title={`New tab (${HOTKEYS.newTab.display})`}
-            style={{
-              marginLeft: 4,
-              width: 24,
-              height: 24,
-              borderRadius: 4,
-              border: `1px dashed ${ui.color.border}`,
-              backgroundColor: 'transparent',
-              color: ui.color.textDim,
-              cursor: 'pointer',
-              fontSize: 16,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              flexShrink: 0,
-              ...appRegion('no-drag'),
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
-          >
-            +
-          </button>
-        </div>
-      )}
-
-
       <div
         style={{
           flex: tabOverflowMode === 'wrap' ? 0 : 1,
           minWidth: tabOverflowMode === 'wrap' ? 0 : 24,
-          height: isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height,
+          height: chromeContentHeight,
           alignSelf: tabOverflowMode === 'wrap' ? 'flex-start' : undefined,
           backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
           ...appRegion('drag'),
         }}
-        onMouseDown={startWindowDrag}
-        onDoubleClick={() => { window.ipc.invoke('window:toggle-maximize').catch(console.error) }}
       />
       {nativeWindowControlsWidth > 0 && (
         <div style={{
@@ -1133,7 +1174,7 @@ export function TabBar(): JSX.Element {
 
       {/* Context menu (rendered outside tab strip to avoid overflow clipping) */}
       {contextMenu && (
-        <div id="tab-context-menu" style={appRegion('no-drag')}>
+        <div id="tab-context-menu" data-window-drag-exempt="true" style={appRegion('no-drag')}>
           <ContextMenu
             menu={contextMenu}
             tabs={tabs.filter((t) => !t.detached)}
@@ -1151,7 +1192,7 @@ export function TabBar(): JSX.Element {
 
       {/* Directory picker — change default for existing tab */}
       {dirPickerState !== null && (
-        <div style={appRegion('no-drag')}>
+        <div data-window-drag-exempt="true" style={appRegion('no-drag')}>
           <DirPicker
             title="Change default directory"
             description="New sessions and shells in this tab will start here by default."
@@ -1167,4 +1208,3 @@ export function TabBar(): JSX.Element {
     </div>
   )
 }
-
