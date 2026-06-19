@@ -33,6 +33,7 @@ export interface Session {
   agentKind: AgentKind
   sessionId: string           // UUID from JSONL
   cwd: string                 // actual project path e.g. C:\source\ecentria\core
+  cwdExists: boolean          // false when cwd no longer exists on disk
   projectName: string         // derived: last 2 path segments e.g. "ecentria/core"
   displayName: string | null
   gitBranch: string | null
@@ -43,6 +44,12 @@ export interface Session {
   messageCount: number
   transcriptPath: string
   status: SessionStatus
+}
+
+export interface SessionRepairCwdResult {
+  ok: boolean
+  sessions: Session[]
+  error?: string
 }
 
 // Pane tree - binary split layout (same model as tmux)
@@ -145,6 +152,10 @@ export interface IPCChannels {
 
   // Renderer asks to delete a transcript
   'sessions:delete': (agentKind: AgentKind, sessionId: string) => void
+
+  // Renderer repairs every indexed session that belongs to an old working directory.
+  // Claude repair also copies/merges the matching ~/.claude/projects directory.
+  'sessions:repair-cwd': (oldCwd: string, newCwd: string) => SessionRepairCwdResult
 
   // Renderer asks main to rescan transcripts immediately
   'sessions:refresh': () => Session[]
@@ -281,6 +292,7 @@ export interface IPCChannels {
 export type InvokeChannels =
   | 'sessions:search'
   | 'sessions:delete'
+  | 'sessions:repair-cwd'
   | 'sessions:refresh'
   | 'sessions:recover-pending'
   | 'sessions:validate'

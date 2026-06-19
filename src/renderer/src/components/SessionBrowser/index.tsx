@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
+import { useSessionsStore } from '../../store/sessions'
 import type { Session } from '../../../../shared/types'
 import { formatRelativeTime } from '../../utils/time'
 import { agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
 import { AgentIcon } from '../AgentIcon'
+import { DirPicker } from '../DirPicker'
 
 function groupByProject(sessions: Session[]): Map<string, Session[]> {
   const map = new Map<string, Session[]>()
@@ -21,10 +23,13 @@ export function SessionBrowser(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
   const resumeSession = usePanesStore((s) => s.resumeSession)
   const resumeSessionInNewTab = usePanesStore((s) => s.resumeSessionInNewTab)
+  const repairSessionCwd = useSessionsStore((s) => s.repairSessionCwd)
   const { sessions, search } = useSessions()
   const [query, setQuery] = useState('')
   const [selectedProject, setSelectedProject] = useState<string | null>(null)
   const [detailSession, setDetailSession] = useState<Session | null>(null)
+  const [editingSession, setEditingSession] = useState<Session | null>(null)
+  const [repairError, setRepairError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -42,13 +47,32 @@ export function SessionBrowser(): JSX.Element {
   const activeProject = selectedProject ?? projects[0] ?? null
 
   function statusLabel(s: Session): string {
+    if (!s.cwdExists) return 'SEVERED'
     if (s.status === 'live-attached') return 'LIVE'
     return 'RESUMABLE'
   }
 
   function statusColor(s: Session): string {
+    if (!s.cwdExists) return '#f87171'
     if (s.status === 'live-attached') return '#4ade80'
     return '#6b7280'
+  }
+
+  async function repairProjectDirectory(session: Session, dir: string): Promise<void> {
+    setRepairError(null)
+    const result = await repairSessionCwd(session.cwd, dir)
+    if (!result.ok) {
+      setRepairError(result.error ?? 'Directory repair failed')
+      return
+    }
+    const updated = result.sessions
+    const updatedCurrent = updated.find((s) => s.agentKind === session.agentKind && s.sessionId === session.sessionId)
+    if (updatedCurrent) {
+      setDetailSession((prev) =>
+        prev?.agentKind === updatedCurrent.agentKind && prev.sessionId === updatedCurrent.sessionId ? updatedCurrent : prev
+      )
+    }
+    setEditingSession(null)
   }
 
   return (
@@ -145,7 +169,12 @@ export function SessionBrowser(): JSX.Element {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {proj.split('/').pop()}
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    {grouped.get(proj)?.some((s) => !s.cwdExists) && <MissingDirectoryMark />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {proj.split('/').pop()}
+                    </span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -156,6 +185,7 @@ export function SessionBrowser(): JSX.Element {
             {Array.from(grouped.entries()).map(([proj, projSessions]) => {
               if (activeProject && proj !== activeProject) return null
               const first = projSessions[0]
+              const severedSession = projSessions.find((s) => !s.cwdExists) ?? null
               return (
                 <div key={proj} style={{ marginBottom: 20 }}>
                   {/* Project header */}
@@ -167,24 +197,37 @@ export function SessionBrowser(): JSX.Element {
                       marginBottom: 6,
                     }}
                   >
-                    <div>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: '#d4d4d4' }}>
-                        {proj.split('/').pop()}
+                    <div style={{ minWidth: 0 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 14, fontWeight: 600, color: '#d4d4d4' }}>
+                        {projSessions.some((s) => !s.cwdExists) && <MissingDirectoryMark />}
+                        <span>{proj.split('/').pop()}</span>
                       </span>
                       <span style={{ fontSize: 11, color: '#4a4b4e', marginLeft: 8 }}>
                         {first.cwd}
                       </span>
                     </div>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: statusColor(first),
-                        letterSpacing: '0.06em',
-                      }}
-                    >
-                      {statusLabel(first)}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      {severedSession && (
+                        <ActionButton
+                          onClick={() => {
+                            setRepairError(null)
+                            setEditingSession(severedSession)
+                          }}
+                        >
+                          Repair directory
+                        </ActionButton>
+                      )}
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: statusColor(first),
+                          letterSpacing: '0.06em',
+                        }}
+                      >
+                        {statusLabel(first)}
+                      </span>
+                    </div>
                   </div>
                   <div style={{ fontSize: 11, color: '#4a4b4e', marginBottom: 8 }}>
                     {projSessions.length} session{projSessions.length !== 1 ? 's' : ''} - last active{' '}
@@ -203,10 +246,12 @@ export function SessionBrowser(): JSX.Element {
                         )
                       }
                       onResumeSplit={() => {
+                        if (!s.cwdExists) return
                         resumeSession(s.agentKind, s.sessionId, s.cwd)
                         closeOverlays()
                       }}
                       onResumeNewTab={() => {
+                        if (!s.cwdExists) return
                         resumeSessionInNewTab(s.agentKind, s.sessionId, s.cwd)
                         closeOverlays()
                       }}
@@ -218,6 +263,21 @@ export function SessionBrowser(): JSX.Element {
           </div>
         </div>
       </div>
+      {editingSession && (
+        <DirPicker
+          title="Repair project directory"
+          description="Choose the current folder for this project. All sessions from the old directory will be repaired."
+          initial={editingSession.cwd}
+          confirmLabel="Repair project"
+          skipLabel="Cancel"
+          error={repairError}
+          onConfirm={(dir) => { void repairProjectDirectory(editingSession, dir) }}
+          onSkip={() => {
+            setRepairError(null)
+            setEditingSession(null)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -273,6 +333,7 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
             display: 'inline-block',
           }}
         />
+        {!session.cwdExists && <MissingDirectoryMark />}
         <span style={{ width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <AgentIcon agentKind={session.agentKind} size={14} />
         </span>
@@ -300,7 +361,11 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
             borderTop: '1px solid #2a2b2e',
           }}
         >
-          <Row label="CWD" value={session.cwd} />
+          <Row
+            label="CWD"
+            value={session.cwd}
+            warning={!session.cwdExists ? 'Directory does not exist' : undefined}
+          />
           <Row label="Agent" value={agentLabel(session.agentKind)} />
           {gitBranch && <Row label="Branch" value={gitBranch} />}
           {session.firstMessage && (
@@ -320,8 +385,8 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
           />
 
           <div style={{ marginTop: 10, display: 'flex', gap: 6 }}>
-            <ActionButton onClick={onResumeSplit}>Resume in split</ActionButton>
-            <ActionButton onClick={onResumeNewTab}>Resume in new tab</ActionButton>
+            <ActionButton onClick={onResumeSplit} disabled={!session.cwdExists}>Resume in split</ActionButton>
+            <ActionButton onClick={onResumeNewTab} disabled={!session.cwdExists}>Resume in new tab</ActionButton>
           </div>
         </div>
       )}
@@ -329,38 +394,72 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
   )
 }
 
-function Row({ label, value }: { label: string; value: string }): JSX.Element {
+function Row({ label, value, warning }: { label: string; value: string; warning?: string }): JSX.Element {
   return (
     <div style={{ display: 'flex', gap: 8, marginBottom: 4, fontSize: 11 }}>
       <span style={{ color: '#4a4b4e', flexShrink: 0, minWidth: 90 }}>{label}</span>
-      <span style={{ color: '#a0a0a0', wordBreak: 'break-all' }}>{value}</span>
+      <span style={{ color: warning ? '#f87171' : '#a0a0a0', wordBreak: 'break-all' }}>
+        {warning && <MissingDirectoryMark />}
+        <span style={{ marginLeft: warning ? 5 : 0 }}>{value}</span>
+        {warning && <span style={{ marginLeft: 8, color: '#f87171' }}>{warning}</span>}
+      </span>
     </div>
+  )
+}
+
+function MissingDirectoryMark(): JSX.Element {
+  return (
+    <span
+      title="Directory does not exist"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 13,
+        height: 13,
+        borderRadius: '50%',
+        border: '1px solid #f87171',
+        color: '#f87171',
+        fontSize: 10,
+        fontWeight: 800,
+        lineHeight: '13px',
+        flexShrink: 0,
+      }}
+    >
+      !
+    </span>
   )
 }
 
 function ActionButton({
   onClick,
+  disabled = false,
   children,
 }: {
   onClick: () => void
+  disabled?: boolean
   children: React.ReactNode
 }): JSX.Element {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       style={{
         padding: '4px 10px',
         backgroundColor: '#242528',
         border: '1px solid #2a2b2e',
         borderRadius: 4,
-        color: '#c9cdd1',
+        color: disabled ? '#4a4b4e' : '#c9cdd1',
         fontSize: 11,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.65 : 1,
       }}
       onMouseEnter={(e) => {
+        if (disabled) return
         ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2e2f33'
       }}
       onMouseLeave={(e) => {
+        if (disabled) return
         ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#242528'
       }}
     >

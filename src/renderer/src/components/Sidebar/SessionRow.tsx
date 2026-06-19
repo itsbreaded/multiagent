@@ -6,6 +6,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { displayGitBranch } from '../../utils/git'
 import { border, menuStyles, ui } from '../../styles/theme'
 import { AgentIcon } from '../AgentIcon'
+import { DirPicker } from '../DirPicker'
 
 interface SessionRowProps {
   session: Session
@@ -19,8 +20,11 @@ interface ContextMenuState {
 export function SessionRow({ session }: SessionRowProps): JSX.Element {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [hovered, setHovered] = useState(false)
+  const [editingDirectory, setEditingDirectory] = useState(false)
+  const [repairError, setRepairError] = useState<string | null>(null)
   const rowRef = useRef<HTMLDivElement>(null)
   const resumeSession = usePanesStore((s) => s.resumeSession)
+  const repairSessionCwd = useSessionsStore((s) => s.repairSessionCwd)
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault()
@@ -28,6 +32,11 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
   }
 
   function handleClick() {
+    if (!session.cwdExists) {
+      setRepairError(null)
+      setEditingDirectory(true)
+      return
+    }
     resumeSession(session.agentKind, session.sessionId, session.cwd)
   }
 
@@ -137,7 +146,37 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
           x={contextMenu.x}
           y={contextMenu.y}
           session={session}
+          onRepairDirectory={() => {
+            setRepairError(null)
+            setEditingDirectory(true)
+          }}
           onClose={closeMenu}
+        />
+      )}
+      {editingDirectory && (
+        <DirPicker
+          title="Repair project directory"
+          description="Choose the current folder for this project. All sessions from the old directory will be repaired."
+          initial={session.cwd}
+          confirmLabel="Repair project"
+          skipLabel="Cancel"
+          error={repairError}
+          onConfirm={(dir) => {
+            setRepairError(null)
+            void repairSessionCwd(session.cwd, dir).then((result) => {
+              if (!result.ok) {
+                setRepairError(result.error ?? 'Directory repair failed')
+                return
+              }
+              setEditingDirectory(false)
+            }).catch(() => {
+              setRepairError('Directory repair failed')
+            })
+          }}
+          onSkip={() => {
+            setRepairError(null)
+            setEditingDirectory(false)
+          }}
         />
       )}
     </>
@@ -145,6 +184,9 @@ export function SessionRow({ session }: SessionRowProps): JSX.Element {
 }
 
 function getStatusDot(session: Session): React.ReactNode {
+  if (!session.cwdExists) {
+    return <MissingDirectoryMark />
+  }
   if (session.status === 'live-attached') {
     return (
       <span
@@ -192,21 +234,49 @@ function AgentBadge({ session }: { session: Session }): JSX.Element {
   )
 }
 
+function MissingDirectoryMark(): JSX.Element {
+  return (
+    <span
+      title="Directory does not exist"
+      style={{
+        width: 13,
+        height: 13,
+        borderRadius: '50%',
+        border: `1px solid ${ui.color.danger}`,
+        color: ui.color.danger,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        fontSize: 10,
+        fontWeight: 800,
+        lineHeight: '13px',
+      }}
+    >
+      !
+    </span>
+  )
+}
+
 interface ContextMenuProps {
   x: number
   y: number
   session: Session
+  onRepairDirectory: () => void
   onClose: () => void
 }
 
-function ContextMenu({ x, y, session, onClose }: ContextMenuProps): JSX.Element {
+function ContextMenu({ x, y, session, onRepairDirectory, onClose }: ContextMenuProps): JSX.Element {
   const resumeSession = usePanesStore((s) => s.resumeSession)
   const deleteSession = useSessionsStore((s) => s.deleteSession)
 
   const items = [
     {
       label: 'Resume in new split',
-      action: () => resumeSession(session.agentKind, session.sessionId, session.cwd),
+      action: () => {
+        if (session.cwdExists) resumeSession(session.agentKind, session.sessionId, session.cwd)
+        else onRepairDirectory()
+      },
     },
     {
       label: 'Open folder',
@@ -215,6 +285,10 @@ function ContextMenu({ x, y, session, onClose }: ContextMenuProps): JSX.Element 
           window.ipc.invoke('shell:open-folder', session.cwd).catch(() => {})
         }
       },
+    },
+    {
+      label: 'Repair project directory',
+      action: onRepairDirectory,
     },
     {
       label: 'Copy session ID',

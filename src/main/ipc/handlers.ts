@@ -223,6 +223,31 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('sessions:delete', (_e, agentKind, sessionId: string) => index.delete(agentKind, sessionId))
 
+  ipcMain.handle('sessions:repair-cwd', (_e, oldCwd: string, newCwd: string) => {
+    if (typeof oldCwd !== 'string' || typeof newCwd !== 'string') {
+      return { ok: false, sessions: [], error: 'Invalid directory repair request' }
+    }
+    const trimmedOld = oldCwd.trim()
+    const trimmedNew = newCwd.trim()
+    if (!trimmedOld || !trimmedNew) {
+      return { ok: false, sessions: [], error: 'Choose a directory before repairing' }
+    }
+    try {
+      if (!fs.existsSync(trimmedNew) || !fs.statSync(trimmedNew).isDirectory()) {
+        return { ok: false, sessions: [], error: 'The selected directory does not exist' }
+      }
+    } catch {
+      return { ok: false, sessions: [], error: 'The selected directory could not be read' }
+    }
+    const updated = index.repairCwd(trimmedOld, trimmedNew)
+    if (updated.length > 0) {
+      const all = index.getAll()
+      lastSessionsJson = JSON.stringify(all)
+      windowManager.broadcastAll('sessions:updated', all)
+    }
+    return { ok: true, sessions: updated }
+  })
+
   ipcMain.handle('sessions:refresh', async () => {
     await pollSessions(true)
     return index.getAll()

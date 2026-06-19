@@ -6,6 +6,7 @@ interface DirPickerProps {
   initial?: string
   confirmLabel?: string
   skipLabel?: string
+  error?: string | null
   nameField?: boolean
   autoBrowse?: boolean
   onConfirm: (dir: string, name?: string) => void
@@ -18,6 +19,7 @@ export function DirPicker({
   initial = '',
   confirmLabel = 'Set',
   skipLabel = 'Skip',
+  error = null,
   nameField = false,
   autoBrowse = false,
   onConfirm,
@@ -136,7 +138,7 @@ export function DirPicker({
         )}
 
         {/* Path input row */}
-        <div style={{ padding: '14px 18px', display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ padding: error ? '14px 18px 8px' : '14px 18px', display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             ref={inputRef}
             value={value}
@@ -179,6 +181,12 @@ export function DirPicker({
             Browse...
           </button>
         </div>
+
+        {error && (
+          <div style={{ padding: '0 18px 12px', color: '#f87171', fontSize: 12 }}>
+            {error}
+          </div>
+        )}
 
         {/* Action buttons */}
         <div
