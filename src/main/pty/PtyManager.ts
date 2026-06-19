@@ -30,18 +30,9 @@ type ParentMessage =
   | { type: 'ready'; id: string }
   | { type: 'error'; id: string; message: string }
 
-// Temporary PTY lifecycle diagnostics. Enable with PROBE_DEBUG=1. Remove once the
-// rapid-spawn race is resolved.
-const PTY_DEBUG = !!process.env.PROBE_DEBUG
-const ptyFirstData = new Set<string>()
-function ptyDbg(...args: unknown[]): void {
-  if (PTY_DEBUG) console.log('[pty]', ...args)
-}
-
 export class PtyManager extends EventEmitter {
   private worker: ChildProcess
   private pendingResizes = new Map<string, { cols: number; rows: number }>()
-  private ptyLastSize = new Map<string, { cols: number; rows: number }>()
   private readyIds = new Set<string>()
   private pausedIds = new Set<string>()
 
@@ -73,23 +64,15 @@ export class PtyManager extends EventEmitter {
     this.worker.on('message', (msg: ParentMessage) => {
       switch (msg.type) {
         case 'data':
-          if (PTY_DEBUG && !ptyFirstData.has(msg.id)) {
-            ptyFirstData.add(msg.id)
-            ptyDbg('first data', msg.id, `${msg.data.length}b`, JSON.stringify(msg.data.slice(0, 120)))
-          }
           this.emit('data', msg.id, msg.data)
           break
         case 'exit':
-          ptyDbg('exit', msg.id, `code=${msg.exitCode}`, `signal=${msg.signal}`, ptyFirstData.has(msg.id) ? '(had data)' : '(NO data ever)')
-          ptyFirstData.delete(msg.id)
           this.pendingResizes.delete(msg.id)
-          this.ptyLastSize.delete(msg.id)
           this.readyIds.delete(msg.id)
           this.pausedIds.delete(msg.id)
           this.emit('exit', msg.id, msg.exitCode, msg.signal)
           break
         case 'ready': {
-          ptyDbg('ready', msg.id)
           this.readyIds.add(msg.id)
           const pending = this.pendingResizes.get(msg.id)
           if (pending) {
@@ -100,7 +83,6 @@ export class PtyManager extends EventEmitter {
           break
         }
         case 'error':
-          ptyDbg('error', msg.id, msg.message)
           this.emit('error', msg.id, new Error(msg.message))
           break
       }
@@ -121,9 +103,7 @@ export class PtyManager extends EventEmitter {
 
   createDeferred(cwd: string, cmd: string[], extraEnv?: Record<string, string>): string {
     const id = randomUUID()
-    ptyDbg('createDeferred', id, 'cmd=', cmd[0])
     setImmediate(() => {
-      ptyDbg('spawn sent', id)
       this._send({
         type: 'spawn',
         id,
@@ -173,17 +153,12 @@ export class PtyManager extends EventEmitter {
   }
 
   resize(ptyId: string, cols: number, rows: number): void {
-    this.ptyLastSize.set(ptyId, { cols, rows })
     // Pre-ready: queue so the 'ready' handler can apply it once the PTY exists.
     // Post-ready: the immediate send below is sufficient.
     if (!this.readyIds.has(ptyId)) {
       this.pendingResizes.set(ptyId, { cols, rows })
     }
     this._send({ type: 'resize', id: ptyId, cols, rows })
-  }
-
-  getPtyLastSize(ptyId: string): { cols: number; rows: number } | undefined {
-    return this.ptyLastSize.get(ptyId)
   }
 
   pause(ptyId: string): void {

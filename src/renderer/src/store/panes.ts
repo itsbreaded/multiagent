@@ -22,7 +22,6 @@ let skipNextActivationDisarm = false
 let skipDisarmClearTimer: ReturnType<typeof setTimeout> | null = null
 const LOCAL_REARM_MS = 150
 const SKIP_DISARM_TTL_MS = 400
-
 const hydratingPaneSessions: Record<string, string> = {}
 const hydratingTabs = new Map<string, Promise<void>>()
 
@@ -1147,17 +1146,6 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   newSession: async (cwd, direction = 'vertical', agentKind) => {
     const resolvedAgent = agentKind ?? get().lastAgentKind
     get().setLastAgentKind(resolvedAgent)
-
-    // Create the pane via the SAME localized split path as the split hotkey (splitPane →
-    // replaceNode): it surgically replaces the focused pane rather than re-rooting the whole tree.
-    // Only create a fresh root when the active tab is empty.
-    // NOTE: concurrent multi-pane creation is currently unreliable — see specs/pending/008.
-    const focused = get().getFocusedPane()
-    if (focused) {
-      await get().splitPane(focused.id, direction, 'agent', cwd, resolvedAgent)
-      return
-    }
-
     const leaf = markSessionDetectionPending(makeLeaf(cwd, 'agent', resolvedAgent))
     set((s) => {
       if (s.tabs.length === 0) {

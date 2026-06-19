@@ -125,14 +125,6 @@ async function createWindow(): Promise<void> {
     })
   })
 
-  // Temporary: surface renderer Terminal diagnostics ([T] ...) in the main terminal so they
-  // appear alongside [pty]/[probe]. Gated by PROBE_DEBUG; remove with the other diagnostics.
-  if (process.env.PROBE_DEBUG) {
-    mainWindow.webContents.on('console-message', (_e, _level, message) => {
-      if (typeof message === 'string' && message.startsWith('[T]')) console.log(message)
-    })
-  }
-
   // Wire IPC handlers (sessions, PTY, shell, layout)
   const { cleanup, registerWindowHandlers, performShutdownSave } = await registerIpcHandlers(mainWindow)
   cleanupFn = cleanup ?? null
