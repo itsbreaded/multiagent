@@ -1,15 +1,15 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
-import type { PaneLeaf, SplitDirection } from '../../../../shared/types'
+import type { AgentKind, PaneLeaf, PaneType, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { paneLabelText } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
-import { agentLabel } from '../../utils/agents'
 import { displayGitBranch } from '../../utils/git'
 import { encodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
+import { menuStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
 import vsCodeIcon from '../../assets/vscode.png'
 import folderOpenIcon from '../../assets/folderopen.png'
@@ -17,8 +17,14 @@ import splitRightIcon from '../../assets/splitright.png'
 import splitDownIcon from '../../assets/splitdown.png'
 import fullscreenOpenIcon from '../../assets/fullscreenopen.png'
 import fullscreenCloseIcon from '../../assets/fullscreenclose.png'
+import closeSmallIcon from '../../assets/closesmall.png'
 
 const ICON_IMG: React.CSSProperties = { width: 16, height: 16, display: 'block' }
+
+type SplitSpawnChoice = {
+  paneType: PaneType
+  agentKind?: AgentKind
+}
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -46,7 +52,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const [splitMenu, setSplitMenu] = useState<{ direction: SplitDirection; x: number; y: number } | null>(null)
-  const [dirPickerForSplit, setDirPickerForSplit] = useState<SplitDirection | null>(null)
+  const [dirPickerForSplit, setDirPickerForSplit] = useState<{ direction: SplitDirection; choice: SplitSpawnChoice } | null>(null)
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
@@ -240,31 +246,41 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       >
         <img src={isZoomed ? fullscreenCloseIcon : fullscreenOpenIcon} alt={isZoomed ? 'Unzoom' : 'Zoom'} style={ICON_IMG} />
       </HeaderButton>
-      <HeaderButton title={`Close pane (${HOTKEYS.closePane.display})`} onClick={() => closePane(pane.id)}>×</HeaderButton>
+      <HeaderButton title={`Close pane (${HOTKEYS.closePane.display})`} onClick={() => closePane(pane.id)}>
+        <img src={closeSmallIcon} alt="Close pane" style={{ ...ICON_IMG, opacity: 0.5 }} />
+      </HeaderButton>
 
       {/* Split direction context menu */}
       {splitMenu && (
         <SplitDirMenu
-          pane={pane}
           direction={splitMenu.direction}
           x={splitMenu.x}
           y={splitMenu.y}
-          tabDefaultCwd={activeTab?.defaultCwd}
           onClose={() => setSplitMenu(null)}
-          onSplit={(cwd) => { splitPane(pane.id, splitMenu.direction, pane.paneType, cwd, pane.agentKind); setSplitMenu(null) }}
-          onBrowse={() => { setDirPickerForSplit(splitMenu.direction); setSplitMenu(null) }}
+          onSplit={(choice) => {
+            splitPane(pane.id, splitMenu.direction, choice.paneType, pane.cwd, choice.agentKind)
+            setSplitMenu(null)
+          }}
+          onBrowse={(choice) => {
+            setDirPickerForSplit({ direction: splitMenu.direction, choice })
+            setSplitMenu(null)
+          }}
         />
       )}
 
       {/* DirPicker for one-off split directory */}
       {dirPickerForSplit && (
         <DirPicker
-          title={`Start ${isAgent ? `${agentLabel(pane.agentKind ?? 'claude')} session` : 'shell'} in...`}
+          title={`Start ${splitChoiceLabel(dirPickerForSplit.choice)} in...`}
           initial={activeTab?.defaultCwd ?? pane.cwd}
           confirmLabel="Split"
           skipLabel="Cancel"
           autoBrowse
-          onConfirm={(dir) => { splitPane(pane.id, dirPickerForSplit, pane.paneType, dir, pane.agentKind); setDirPickerForSplit(null) }}
+          onConfirm={(dir) => {
+            const { direction, choice } = dirPickerForSplit
+            splitPane(pane.id, direction, choice.paneType, dir, choice.agentKind)
+            setDirPickerForSplit(null)
+          }}
           onSkip={() => setDirPickerForSplit(null)}
         />
       )}
@@ -275,23 +291,19 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
 // --- Split directory context menu ---
 
 function SplitDirMenu({
-  pane,
   direction,
   x,
   y,
-  tabDefaultCwd,
   onClose,
   onSplit,
   onBrowse,
 }: {
-  pane: PaneLeaf
   direction: SplitDirection
   x: number
   y: number
-  tabDefaultCwd?: string
   onClose: () => void
-  onSplit: (cwd?: string) => void
-  onBrowse: () => void
+  onSplit: (choice: SplitSpawnChoice) => void
+  onBrowse: (choice: SplitSpawnChoice) => void
 }): JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; visible: boolean }>({ left: x, top: y, visible: false })
@@ -309,60 +321,84 @@ function SplitDirMenu({
   }, [x, y])
 
   const dirLabel = direction === 'vertical' ? 'Split vertical' : 'Split horizontal'
+  const choices: SplitSpawnChoice[] = [
+    { paneType: 'agent', agentKind: 'claude' },
+    { paneType: 'agent', agentKind: 'codex' },
+    { paneType: 'shell' },
+  ]
 
-  function menuBtn(label: string, sub: string | null, onClick: () => void, dimmed = false): JSX.Element {
+  function row(choice: SplitSpawnChoice, label: string, onClick: () => void): JSX.Element {
     return (
       <button
         onClick={onClick}
         style={{
-          display: 'block',
-          width: '100%',
-          padding: '6px 12px',
-          background: 'none',
-          border: 'none',
-          textAlign: 'left',
-          fontSize: 12,
-          color: dimmed ? '#4a4b4e' : '#c9cdd1',
-          cursor: dimmed ? 'default' : 'pointer',
+          ...menuStyles.item,
+          color: ui.color.text,
+          cursor: 'pointer',
         }}
-        onMouseEnter={(e) => { if (!dimmed) (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2a2b2e' }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
       >
-        <div>{label}</div>
-        {sub && <div style={{ fontSize: 10, color: '#4a4b4e', fontFamily: 'monospace', marginTop: 1 }}>{sub}</div>}
+        <span>{label}</span>
+        <span style={{ fontSize: 13, opacity: 0.8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
+          {choice.paneType === 'agent'
+            ? <AgentIcon agentKind={choice.agentKind ?? 'claude'} size={16} />
+            : <ShellIcon size={16} />}
+        </span>
       </button>
     )
   }
 
+  function sep(): JSX.Element {
+    return <div style={menuStyles.separator} />
+  }
+
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 200 }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
+      <div style={menuStyles.backdrop} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
       <div
         ref={menuRef}
         style={{
-          position: 'fixed', left: pos.left, top: pos.top, zIndex: 201,
-          backgroundColor: '#1a1b1e', border: '1px solid #2a2b2e',
-          borderRadius: 6, padding: '4px 0', minWidth: 220,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
+          ...menuStyles.panel,
+          left: pos.left,
+          top: pos.top,
+          minWidth: 220,
           visibility: pos.visible ? 'visible' : 'hidden',
         }}
       >
-        <div style={{ padding: '4px 12px 6px', fontSize: 10, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <div style={menuStyles.label}>
           {dirLabel}
         </div>
-        <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '0 0 4px' }} />
-        {menuBtn('Same directory', pane.cwd, () => onSplit())}
-        {menuBtn(
-          tabDefaultCwd ? 'Tab default' : 'Tab default (not set)',
-          tabDefaultCwd ?? null,
-          tabDefaultCwd ? () => onSplit(tabDefaultCwd) : () => {},
-          !tabDefaultCwd,
-        )}
-        <div style={{ height: 1, backgroundColor: '#2a2b2e', margin: '4px 0' }} />
-        {menuBtn('Choose directory...', null, onBrowse)}
+        {sep()}
+        <MenuLabel>Current Directory</MenuLabel>
+        {choices.map((choice) => (
+          <React.Fragment key={`current:${splitChoiceKey(choice)}`}>
+            {row(choice, splitChoiceLabel(choice), () => onSplit(choice))}
+          </React.Fragment>
+        ))}
+        {sep()}
+        <MenuLabel>Choose Directory</MenuLabel>
+        {choices.map((choice) => (
+          <React.Fragment key={`browse:${splitChoiceKey(choice)}`}>
+            {row(choice, `${splitChoiceLabel(choice)}...`, () => onBrowse(choice))}
+          </React.Fragment>
+        ))}
       </div>
     </>
   )
+}
+
+function MenuLabel({ children }: { children: React.ReactNode }): JSX.Element {
+  return <div style={menuStyles.label}>{children}</div>
+}
+
+function splitChoiceLabel(choice: SplitSpawnChoice): string {
+  if (choice.paneType === 'shell') return 'Shell'
+  return choice.agentKind === 'codex' ? 'Codex CLI' : 'Claude Code'
+}
+
+function splitChoiceKey(choice: SplitSpawnChoice): string {
+  return choice.paneType === 'shell' ? 'shell' : `agent:${choice.agentKind ?? 'claude'}`
 }
 
 function SessionIdBadge({ sessionId }: { sessionId: string }): JSX.Element {

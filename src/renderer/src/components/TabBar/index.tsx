@@ -1093,7 +1093,7 @@ export function TabBar(): JSX.Element {
                 }}
                 title="Close tab"
               >
-                <img src={closeIcon} alt="" style={{ width: 10, height: 10, display: 'block' }} />
+                <img src={closeIcon} alt="" style={{ width: 10, height: 10, display: 'block', opacity: 0.5 }} />
               </button>
             </div>
           )

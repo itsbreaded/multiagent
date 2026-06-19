@@ -83,6 +83,8 @@ Detached sync and focus messages should be versioned or generation-checked. Stal
 
 Keep overlay surfaces visually aligned. Settings, Session Browser, and Command Palette should share the same application modal language: centered dark overlay, `#1a1b1e` panel, `#2a2b2e` borders, 10px radius, `0 24px 64px rgba(0,0,0,0.6)` shadow, muted section labels, and green `#4ade80` active accents. Do not introduce VS Code-specific colors or layout treatments in one overlay unless the rest of the app is intentionally updated to match.
 
+Buttons should use image icons from `src/renderer/src/assets/` instead of visible text characters or emojis. If a needed button icon is missing, ask the user to provide a new `.png` asset before implementing the button.
+
 Renderer styling should start from `src/renderer/src/styles/theme.ts` for palette, borders, shadows, z-indexes, and reusable sidebar/menu/control style fragments. Add new shared tokens there when a value is meant to become a convention; avoid copying raw hex values or ad hoc menu/sidebar styles into new components.
 
 When one UI has multiple presentation modes, keep the shared pieces structurally shared. For example, tab overflow modes may change only the container behavior (scroll vs wrap); tab cards, add-tab controls, row metrics, padding, and interaction semantics should come from the same constants/components. Before fixing a mode-specific visual or hit-test bug, compare both render paths and remove duplicated branches that let sizing, placement, or behavior drift. In Electron chrome, default top chrome regions to draggable and explicitly exempt real controls; avoid native `no-drag` rectangles on horizontally scrolled children because Chromium/Electron hit regions can leak when scrolled.

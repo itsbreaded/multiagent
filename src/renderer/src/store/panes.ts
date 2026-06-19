@@ -782,9 +782,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const focusedLeaf = tab.rootNode
         ? (findLeaf(tab.rootNode, tab.focusedPaneId) ?? (tab.rootNode.type === 'leaf' ? tab.rootNode : null))
         : null
-      const cwd = focusedLeaf?.cwd ?? 'C:\\'
-      const leaf = makeLeaf(cwd, 'shell')
-      const newTab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
+      const fallbackLabel = focusedLeaf
+        ? (focusedLeaf.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Shell')
+        : undefined
+      const newTab: Tab = {
+        id: uuid(),
+        focusedPaneId: '',
+        customLabel: tab.customLabel ?? fallbackLabel,
+        defaultCwd: tab.defaultCwd,
+      }
       const idx = s.tabs.findIndex((t) => t.id === tabId)
       const tabs = [...s.tabs.slice(0, idx + 1), newTab, ...s.tabs.slice(idx + 1)]
       return {
