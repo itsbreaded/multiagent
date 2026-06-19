@@ -43,6 +43,12 @@ const XTERM_OUTPUT_RESUME_CHARS = 256 * 1024
 const IS_WINDOWS = navigator.userAgent.includes('Windows')
 const ALT_ENTER_SEQUENCE = '\x1b\r'
 
+// Temporary renderer-side diagnostics. console output prefixed with [T] is forwarded to the
+// main terminal when PROBE_DEBUG is set (see main/index.ts). Remove with the other diagnostics.
+function tlog(...args: unknown[]): void {
+  console.log('[T]', ...args)
+}
+
 interface ContextMenu {
   x: number
   y: number
@@ -113,6 +119,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   // The xterm is only truly disposed when the pane is explicitly closed.
   useEffect(() => {
     if (!containerRef.current) return
+
+    const existingEntry = xtermRegistry.getEntry(pane.id)
+    tlog('mount', pane.id.slice(0, 8), `type=${pane.paneType}`, `agent=${pane.agentKind ?? '-'}`, `reused=${!!existingEntry}`, `ptyId=${(pane.ptyId ?? '-').slice(0, 8)}`)
 
     const entry = xtermRegistry.getOrCreate(pane.id, () => {
       const theme = pane.paneType === 'agent'
@@ -238,10 +247,11 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       const rect = container.getBoundingClientRect()
       const width = Math.round(rect.width)
       const height = Math.round(rect.height)
-      if (width <= 0 || height <= 0) return
+      if (width <= 0 || height <= 0) { tlog('fit SKIP zero-size', pane.id.slice(0, 8), `${width}x${height}`); return }
       if (lastFitSize?.width === width && lastFitSize.height === height) return
       lastFitSize = { width, height }
       try { fitAddon.fit() } catch { /* ignore */ }
+      tlog('fit', pane.id.slice(0, 8), `rect=${width}x${height}`, `term=${xtermRef.current?.cols}x${xtermRef.current?.rows}`)
     }
     const queueFit = (): void => {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
@@ -270,6 +280,13 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     }
     container.addEventListener('paste', blockPaste, true)
 
+    // Temporary: track when this pane's xterm gains/loses DOM focus, to compare the focused
+    // vs unfocused pane on spawn.
+    const onFocusIn = (): void => tlog('focusIn', pane.id.slice(0, 8))
+    const onFocusOut = (): void => tlog('focusOut', pane.id.slice(0, 8))
+    container.addEventListener('focusin', onFocusIn)
+    container.addEventListener('focusout', onFocusOut)
+
     // Only show the connecting overlay on a true first mount (no prior PTY).
     if (!entry.connected) setStatus('connecting')
 
@@ -277,6 +294,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
       if (delayedFit !== null) clearTimeout(delayedFit)
       container.removeEventListener('paste', blockPaste, true)
+      container.removeEventListener('focusin', onFocusIn)
+      container.removeEventListener('focusout', onFocusOut)
+      tlog('unmount', pane.id.slice(0, 8))
       ro.disconnect()
       xtermRef.current = null
       fitAddonRef.current = null
@@ -368,6 +388,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
       if (!ptyId || cancelled) return
 
+      tlog('connect', pane.id.slice(0, 8), `ptyId=${ptyId.slice(0, 8)}`)
       ptyIdRef.current = ptyId
       setStatus('ready')
       xtermRegistry.markConnected(pane.id)
@@ -418,6 +439,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       const sendResize = (cols: number, rows: number): void => {
         if (lastResize?.cols === cols && lastResize.rows === rows) return
         lastResize = { cols, rows }
+        tlog('sendResize', pane.id.slice(0, 8), `${cols}x${rows}`)
         window.ipc.invoke('pty:resize', ptyId, cols, rows).catch(() => {})
       }
 
@@ -446,6 +468,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       }
       resizeDisposable = terminal.onResize(queueResize)
       try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+      tlog('connect-fit', pane.id.slice(0, 8), `term=${terminal.cols}x${terminal.rows}`)
       sendResize(terminal.cols, terminal.rows)
     }
 

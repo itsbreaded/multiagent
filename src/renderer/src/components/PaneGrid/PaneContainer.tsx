@@ -19,7 +19,7 @@ export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Elem
 
   return (
     <div
-      onClick={() => focusPane(pane.id)}
+      onClick={() => { console.log('[T]', 'click', pane.id.slice(0, 8)); focusPane(pane.id) }}
       style={{
         display: 'flex',
         flexDirection: 'column',
