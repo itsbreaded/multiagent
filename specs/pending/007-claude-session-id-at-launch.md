@@ -16,6 +16,17 @@ matching is unreliable:
   one or both panes never get their session ID.
 - **Timing races.** mtime-window matching can miss a file written slightly outside the window, or
   false-match an unrelated session that happened to write inside it.
+- **Detection only happens on first message.** The transcript file is written/finalized when the
+  user sends the first message, not at spawn — so detection can't complete until then, and the
+  matching has to stay pending in the meantime.
+- **New tab from the "default" directory is flaky.** Starting a new Claude session in a new tab
+  from the default/home cwd (where many sessions share the same directory) is an especially
+  unreliable case for cwd-based matching — observed intermittently failing.
+
+All of these are **timing/ambiguity problems inherent to detecting-after-the-fact**. Passing the id
+at launch removes the entire problem class: we never watch, match, or wait for a file — even the
+"only on first message" timing is irrelevant because the id is known at spawn regardless of when
+(or whether) the transcript file is written.
 
 (A previous attempt — `specs/done/007`/`008`, now reverted — injected `/status` into the CLI and
 scraped the UUID off the rendered terminal. That was abandoned: writing to the agent's stdin during

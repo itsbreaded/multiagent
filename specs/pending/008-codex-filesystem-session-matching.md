@@ -21,6 +21,24 @@ that tree and matching by cwd + mtime (`SessionSpawner._watchForNewCodexSession`
 `codex --help` (v0.141.0) confirms there is **no** launch-time session-id flag for new interactive
 sessions (only `resume`/`fork`), so the Claude approach (spec 007) does not apply here.
 
+## Critical detection timing — file appears on FIRST MESSAGE (must address)
+
+Observed runtime behavior the matching MUST be built around:
+
+- **Codex does not write/finalize its rollout file at spawn — it appears only when the user sends
+  the FIRST message in the pane.** There is nothing to match at spawn time; detection can only
+  complete after first user interaction (possibly seconds/minutes later, or never if the pane is
+  left unused). (`session_meta.timestamp` records session start, but the file does not hit disk
+  until the first message.) Any detection that assumes the file exists shortly after spawn is wrong.
+- **Same-cwd multi-pane bug (current, reproducible):** open two or more Codex panes in the same cwd
+  without messaging them, then send a message in **one**. Only that pane's rollout file appears —
+  but the current per-pane watchers each independently match "newest same-cwd file," so **all**
+  pending panes get assigned that single session id. Each new rollout file must be claimed by
+  **exactly one** pane and correlated to the pane that was actually messaged.
+- **Consequence for disambiguation:** files appear in user-driven *message* order, not spawn order,
+  so spawn-order/stagger correlation does NOT work for Codex. The correlation signal must be
+  **which pane received its first message**.
+
 ## Current behavior (reverted-to baseline)
 
 `_watchForNewCodexSession(ptyId, cwd, startedAt, mode, resumedSessionId?)` polls
@@ -43,7 +61,8 @@ A real rollout file's **first record** is `session_meta`:
   millisecond precision. Use the meta timestamp for ordering, not mtime.
 - There is **no PID and no app-injectable marker** in the meta (`originator` is the generic
   `"codex-tui"`), so exact content-based matching of same-cwd panes is not possible from existing
-  fields. Disambiguation must come from *which files are new* + *creation order*.
+  fields. Disambiguation must come from *which files are new* (snapshot-diff) + *which pane was just
+  messaged* (first-message correlation, since the file appears at first message).
 - `CODEX_HOME` relocates the **entire** `~/.codex` (auth + config + sessions), so per-pane session
   isolation via `CODEX_HOME` would break login unless auth is shared in — heavy; see Option C.
 
@@ -58,8 +77,10 @@ unrelated sessions — without writing anything to Codex's stdin.
 ### Phase 1 — Snapshot-diff detection (kills false matches)
 - At spawn, snapshot the set of existing rollout file paths (cheap: the scanner already enumerates
   them). The pane's session is among files that appear **after** the snapshot. This removes the
-  entire class of "matched a pre-existing/unrelated session" errors and makes single-pane detection
-  exact (exactly one new file in the cwd → that's it).
+  entire class of "matched a pre-existing/unrelated session" errors.
+- The new file appears at **first message** (see "Critical detection timing"), not at spawn — so the
+  watcher must persist from spawn until the file appears (no fixed short window), and the snapshot
+  is the baseline taken at spawn.
 - Match on `payload.cwd` from `session_meta` (normalized), not just the scanner's derived cwd.
 
 ### Phase 2 — Order by meta timestamp, not mtime
@@ -67,20 +88,29 @@ unrelated sessions — without writing anything to Codex's stdin.
   "started at/after this pane" check, replacing the fuzzy `mtimeMs >= startedAt - grace`. mtime
   drifts as the session writes; the meta timestamp is the true session-start instant.
 
-### Phase 3 — Same-cwd concurrent disambiguation
-The hard case: two new files, same cwd, both new since snapshot. Options, best-first:
-- **A (recommended): deterministic spawn order + creation-order assignment.** Ensure Codex panes in
-  the same cwd are spawned in a known order with a small stagger (e.g. 150–300ms between PTY
-  spawns) so their rollout files are created in that order with distinguishable meta timestamps.
-  Then assign new files to pending panes by (creation order ↔ spawn order). The stagger belongs in
-  the spawn path, not as a render workaround. Verify a stagger this small is enough separation.
-- **B: per-pane sessions directory.** If Codex can be pointed at a distinct rollout/sessions
-  directory per pane *without* relocating auth (investigate a config key for the sessions path, or
-  a `CODEX_HOME` that symlinks/loads shared auth+config), each pane's file is alone in its dir →
-  exact match, no ordering needed. Only pursue if a clean auth-preserving override exists.
-- **C: accept graceful degradation.** If A/B aren't reliable, when two same-cwd files are
-  genuinely indistinguishable, assign deterministically by creation order and `log()` the
-  ambiguity rather than silently mis-assigning; never assign the same file to two panes.
+### Phase 3 — Same-cwd disambiguation via the FIRST-MESSAGE event (claim-once)
+Because the rollout file appears only when a pane is messaged, and the user messages panes one at a
+time, the reliable correlation is **message → file**, not spawn → file:
+- Detection must be **claim-once**: replace the independent per-pane watchers (which all grab the
+  same newest same-cwd file) with a single shared coordinator that assigns each new rollout file to
+  **exactly one** pending pane and removes it from the candidate pool.
+- **Correlate the new file to the pane that was just messaged.** The renderer knows which pending
+  agent pane received the user's first submitted input; have it notify main (paneId + timestamp)
+  when a pending Codex pane sends its first message. When a new same-cwd rollout file then appears,
+  claim it for that pane. Since messages are serialized by the user, this is unambiguous even with
+  several same-cwd panes open.
+  - Open question for the implementer: the cleanest "first message sent" signal. Options: the
+    renderer flags the pane on first user submit (Enter with non-empty composer) via a new IPC; or
+    main infers it from `pty:write` carrying a carriage return to a still-pending pane. Pick the
+    most robust; document it.
+- **B (optional, exact): per-pane sessions directory.** If Codex can be pointed at a distinct
+  rollout/sessions directory per pane *without* relocating auth (investigate a config key for the
+  sessions path, or a `CODEX_HOME` that still loads shared auth+config), each pane's file is alone
+  in its dir → exact match with no correlation needed. Pursue only if a clean auth-preserving
+  override exists.
+- **Never assign one file to two panes**; if correlation is genuinely ambiguous, leave the extra
+  pane pending and `log()` it rather than mis-assigning (the bug today is mis-assigning one id to
+  all same-cwd panes — that must not happen).
 
 ### Phase 4 — Resume fork detection (preserve)
 - On `codex resume`, a fork creates a new rollout id in the same cwd. Snapshot-diff makes this
@@ -88,19 +118,22 @@ The hard case: two new files, same cwd, both new since snapshot. Options, best-f
   `_watchForNewCodexSession(mode='resume')` newest-by-mtime heuristic with snapshot-diff.
 
 ## Investigation tasks for the implementer
-- Confirm whether two Codex spawns ~150–300ms apart reliably yield distinct, correctly-ordered meta
-  timestamps and creation order (drives Phase 3A).
+- Decide the "first message sent" signal for a pending Codex pane (drives Phase 3): renderer-side
+  flag on first submit vs. main-side inference from `pty:write`. Confirm it fires once, only on a
+  real message, and carries the paneId.
 - Check `~/.codex/config.toml` schema + `codex -c` keys for a sessions/rollout directory override
-  that does **not** move auth (drives Phase 3B). Also re-check `codex exec --help`'s
-  "run without persisting session files" flag for relevance.
+  that does **not** move auth (the optional per-pane-directory path in Phase 3). Also re-check
+  `codex exec --help`'s "run without persisting session files" flag for relevance.
 - Confirm the `session_meta` record is always the first line and always present (Phase 1/2 rely on
   it); handle the file-not-yet-flushed case with a short retry (the scanner already tolerates this).
 
 ## Risks
-- A tiny spawn stagger trades a little latency for correctness; keep it small and only between
-  same-cwd agent spawns. Don't reintroduce a user-visible serialization delay.
+- Detection can stay pending for a long time (until first message) — the UI must represent a pending
+  agent pane gracefully and not time out into an error state prematurely.
 - Reading `session_meta` per candidate adds file reads; scope to new-since-snapshot files only.
 - Codex changing the rollout filename/meta format would break parsing — keep the parse defensive.
+- The first-message correlation depends on user messages being serialized; if two panes are somehow
+  messaged within the same poll tick, fall back to leaving the later one pending rather than guessing.
 
 ## Constraints (non-negotiable)
 - **Never write to Codex's stdin** for detection (the reason the `/status` probe was abandoned).
@@ -109,6 +142,8 @@ The hard case: two new files, same cwd, both new since snapshot. Options, best-f
 - Do not mutate user/project config files.
 
 ## Definition of done
-A new Codex pane reliably gets its rollout session id — including multiple Codex panes created in
-the same cwd concurrently — with no false matches against pre-existing/unrelated sessions, resume
-forks still detected, nothing written to Codex's stdin, and `npm run typecheck` passing.
+A new Codex pane reliably gets its **own** rollout session id once it is messaged. Specifically:
+with several Codex panes open in the same cwd and unmessaged, sending a first message in one pane
+assigns that session id to **only that pane** (the current "all same-cwd panes get one id" bug is
+gone); no false matches against pre-existing/unrelated sessions; resume forks still detected;
+nothing written to Codex's stdin; `npm run typecheck` passes.
