@@ -6,7 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
-import { useSettingsStore } from '../../store/settings'
+import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
@@ -35,13 +35,17 @@ const XTERM_THEME = {
   brightWhite: '#e2e4e6',
 }
 
-const TERMINAL_SCROLLBACK_LINES = 250_000
 const RESIZE_COL_DEBOUNCE_MS = 100
-const XTERM_WRITE_CHUNK_CHARS = 128 * 1024
-const XTERM_OUTPUT_PAUSE_CHARS = 1024 * 1024
-const XTERM_OUTPUT_RESUME_CHARS = 256 * 1024
+const XTERM_WRITE_CHUNK_CHARS = 64 * 1024
 const IS_WINDOWS = navigator.userAgent.includes('Windows')
 const ALT_ENTER_SEQUENCE = '\x1b\r'
+
+interface QueuedOutputPayload {
+  data: string
+  seq: number
+  byteLength: number
+  offset: number
+}
 
 interface ContextMenu {
   x: number
@@ -129,7 +133,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         fontSize: 13,
         lineHeight: 1.3,
         cursorBlink: pane.paneType !== 'agent',
-        scrollback: TERMINAL_SCROLLBACK_LINES,
+        scrollback: useSettingsStore.getState().terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES,
         scrollOnEraseInDisplay: true,
         allowTransparency: false,
         windowOptions: {
@@ -325,35 +329,21 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     let lastResize: { cols: number; rows: number } | null = null
     let pendingResizeCols: number | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
-    let queuedOutput: string[] = []
-    let queuedOutputChars = 0
+    let queuedOutput: QueuedOutputPayload[] = []
     let writeInFlight = false
-    let outputPaused = false
 
-    const pauseOutput = (ptyId: string): void => {
-      if (outputPaused) return
-      outputPaused = true
-      window.ipc.send('pty:pause-output', ptyId)
-    }
-
-    const resumeOutput = (ptyId: string): void => {
-      if (!outputPaused) return
-      outputPaused = false
-      window.ipc.send('pty:resume-output', ptyId)
-    }
-
-    const takeQueuedOutput = (): string | null => {
+    const takeQueuedOutput = (): { chunk: string; ack?: { seq: number; byteLength: number } } | null => {
       const first = queuedOutput[0]
       if (!first) return null
-      if (first.length <= XTERM_WRITE_CHUNK_CHARS) {
+      const remaining = first.data.length - first.offset
+      if (remaining <= XTERM_WRITE_CHUNK_CHARS) {
         queuedOutput.shift()
-        queuedOutputChars -= first.length
-        return first
+        const chunk = first.data.slice(first.offset)
+        return { chunk, ack: { seq: first.seq, byteLength: first.byteLength } }
       }
-      const chunk = first.slice(0, XTERM_WRITE_CHUNK_CHARS)
-      queuedOutput[0] = first.slice(XTERM_WRITE_CHUNK_CHARS)
-      queuedOutputChars -= chunk.length
-      return chunk
+      const chunk = first.data.slice(first.offset, first.offset + XTERM_WRITE_CHUNK_CHARS)
+      first.offset += chunk.length
+      return { chunk }
     }
 
     async function connect(): Promise<void> {
@@ -383,30 +373,31 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
       const drainOutput = (): void => {
         if (cancelled || writeInFlight) return
-        const chunk = takeQueuedOutput()
-        if (!chunk) {
-          resumeOutput(ptyId)
-          return
-        }
+        const next = takeQueuedOutput()
+        if (!next) return
         writeInFlight = true
-        terminal.write(chunk, () => {
+        terminal.write(next.chunk, () => {
           writeInFlight = false
+          if (next.ack) window.ipc.send('pty:data-ack', ptyId, next.ack.seq, next.ack.byteLength)
           if (cancelled) return
-          if (queuedOutputChars <= XTERM_OUTPUT_RESUME_CHARS) resumeOutput(ptyId)
           drainOutput()
         })
       }
 
-      const enqueueOutput = (data: string): void => {
-        queuedOutput.push(data)
-        queuedOutputChars += data.length
-        if (queuedOutputChars >= XTERM_OUTPUT_PAUSE_CHARS) pauseOutput(ptyId)
+      const enqueueOutput = (data: string, seq: number, byteLength: number): void => {
+        queuedOutput.push({ data, seq, byteLength, offset: 0 })
         drainOutput()
       }
 
-      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
-        if (receivedId === ptyId && typeof data === 'string' && !cancelled) {
-          enqueueOutput(data)
+      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown, seq: unknown, byteLength: unknown) => {
+        if (
+          receivedId === ptyId &&
+          typeof data === 'string' &&
+          typeof seq === 'number' &&
+          typeof byteLength === 'number' &&
+          !cancelled
+        ) {
+          enqueueOutput(data, seq, byteLength)
         }
       })
 
@@ -427,7 +418,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       const sendResize = (cols: number, rows: number): void => {
         if (lastResize?.cols === cols && lastResize.rows === rows) return
         lastResize = { cols, rows }
-        window.ipc.invoke('pty:resize', ptyId, cols, rows).catch(() => {})
+        window.ipc.send('pty:resize', ptyId, cols, rows)
       }
 
       const flushPendingResize = (): void => {
@@ -462,9 +453,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
     return () => {
       cancelled = true
-      if (outputPaused && ptyIdRef.current) window.ipc.send('pty:resume-output', ptyIdRef.current)
       queuedOutput = []
-      queuedOutputChars = 0
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       dataDisposable?.dispose()

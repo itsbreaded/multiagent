@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { usePanesStore } from '../../store/panes'
-import { useSettingsStore } from '../../store/settings'
+import {
+  DEFAULT_TERMINAL_SCROLLBACK_LINES,
+  MAX_TERMINAL_SCROLLBACK_LINES,
+  MIN_TERMINAL_SCROLLBACK_LINES,
+  normalizeTerminalScrollbackLines,
+  useSettingsStore,
+} from '../../store/settings'
 import { ui } from '../../styles/theme'
 import {
   DEFAULT_HOTKEYS,
@@ -31,6 +37,8 @@ export function SettingsPanel(): JSX.Element {
   const setShowGitBranchBadges = useSettingsStore((s) => s.setShowGitBranchBadges)
   const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
   const setTabOverflowMode = useSettingsStore((s) => s.setTabOverflowMode)
+  const terminalScrollbackLines = useSettingsStore((s) => s.terminalScrollbackLines)
+  const setTerminalScrollbackLines = useSettingsStore((s) => s.setTerminalScrollbackLines)
   const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
   const setHotkeyOverride = useSettingsStore((s) => s.setHotkeyOverride)
   const resetHotkeyOverride = useSettingsStore((s) => s.resetHotkeyOverride)
@@ -40,13 +48,14 @@ export function SettingsPanel(): JSX.Element {
   const [query, setQuery] = useState('')
   const [recording, setRecording] = useState<HotkeyId | null>(null)
   const [conflictLabel, setConflictLabel] = useState<string | null>(null)
+  const [scrollbackDraft, setScrollbackDraft] = useState(String(terminalScrollbackLines))
 
   const customizedCount = Object.keys(hotkeyOverrides).length
   const sections = useMemo(() => [
     { id: 'appearance' as const, label: 'Appearance', count: 2 },
     { id: 'hotkeys' as const,    label: 'Hotkeys',    count: customizedCount },
     { id: 'mcp' as const,        label: 'MCP',        count: 0, experimental: true },
-    { id: 'general' as const,    label: 'General',    count: 0 },
+    { id: 'general' as const,    label: 'General',    count: 1 },
   ], [customizedCount])
 
   // Listen for key recording
@@ -102,9 +111,20 @@ export function SettingsPanel(): JSX.Element {
     return () => clearTimeout(t)
   }, [conflictLabel])
 
+  useEffect(() => {
+    setScrollbackDraft(String(terminalScrollbackLines))
+  }, [terminalScrollbackLines])
+
+  function commitScrollbackDraft(): void {
+    const normalized = normalizeTerminalScrollbackLines(scrollbackDraft.replaceAll(',', ''))
+    setTerminalScrollbackLines(normalized)
+    setScrollbackDraft(String(normalized))
+  }
+
   const normalizedQuery = query.trim().toLowerCase()
   const showBranchSetting = !normalizedQuery || 'git branch badges tabs panes'.includes(normalizedQuery)
   const showOverflowSetting = !normalizedQuery || 'tab overflow scroll wrap rows'.includes(normalizedQuery)
+  const showScrollbackSetting = !normalizedQuery || 'terminal scrollback lines history memory buffer maximum'.includes(normalizedQuery)
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
@@ -404,7 +424,69 @@ export function SettingsPanel(): JSX.Element {
             {activeSection === 'general' && (
               <>
                 <SectionLabel>General</SectionLabel>
-                <EmptyMessage>No general settings yet.</EmptyMessage>
+                {showScrollbackSetting ? (
+                  <SettingRow
+                    title="Terminal scrollback lines"
+                    description="Maximum retained terminal history. Applies immediately; lowering this can trim existing scrollback."
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        min={MIN_TERMINAL_SCROLLBACK_LINES}
+                        max={MAX_TERMINAL_SCROLLBACK_LINES}
+                        value={scrollbackDraft}
+                        onChange={(e) => setScrollbackDraft(e.target.value)}
+                        onBlur={commitScrollbackDraft}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitScrollbackDraft()
+                            e.currentTarget.blur()
+                          }
+                        }}
+                        style={{
+                          width: 120,
+                          backgroundColor: '#0e0f11',
+                          border: '1px solid #3a3b3e',
+                          borderRadius: 4,
+                          color: '#d4d4d4',
+                          fontSize: 12,
+                          padding: '5px 7px',
+                          textAlign: 'right',
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {[
+                          50_000,
+                          100_000,
+                          DEFAULT_TERMINAL_SCROLLBACK_LINES,
+                        ].map((value) => (
+                          <button
+                            key={value}
+                            onClick={() => {
+                              setTerminalScrollbackLines(value)
+                              setScrollbackDraft(String(value))
+                            }}
+                            style={{
+                              background: terminalScrollbackLines === value ? ui.color.control : 'none',
+                              border: `1px solid ${terminalScrollbackLines === value ? ui.color.accent : ui.color.border}`,
+                              borderRadius: 4,
+                              color: terminalScrollbackLines === value ? ui.color.text : ui.color.textMuted,
+                              fontSize: 11,
+                              cursor: 'pointer',
+                              padding: '2px 6px',
+                            }}
+                          >
+                            {formatLineCount(value)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </SettingRow>
+                ) : (
+                  <EmptyMessage>No general settings match your search.</EmptyMessage>
+                )}
               </>
             )}
           </div>
@@ -412,6 +494,11 @@ export function SettingsPanel(): JSX.Element {
       </div>
     </div>
   )
+}
+
+function formatLineCount(value: number): string {
+  if (value >= 1000 && value % 1000 === 0) return `${value / 1000}k`
+  return value.toLocaleString()
 }
 
 function HotkeyRow({

@@ -188,11 +188,14 @@ export interface IPCChannels {
   // Resize a PTY
   'pty:resize': (ptyId: string, cols: number, rows: number) => void
 
+  // Renderer acks a PTY output payload after xterm accepts the write
+  'pty:data-ack': (ptyId: string, seq: number, byteLength: number) => void
+
   // Kill a PTY
   'pty:kill': (ptyId: string) => void
 
   // Main pushes PTY output to renderer
-  'pty:data': (ptyId: string, data: string) => void
+  'pty:data': (ptyId: string, data: string, seq: number, byteLength: number) => void
 
   // Main notifies renderer when a PTY exits
   'pty:exit': (ptyId: string, exitCode: number | null, signal?: number) => void
@@ -299,7 +302,6 @@ export type InvokeChannels =
   | 'session:new'
   | 'session:resume'
   | 'pty:create'
-  | 'pty:resize'
   | 'pty:kill'
   | 'shell:open-folder'
   | 'shell:open-external'
@@ -362,6 +364,8 @@ export type EventChannels =
 
 export type SendChannels =
   | 'pty:write'
+  | 'pty:resize'
+  | 'pty:data-ack'
   | 'pty:pause-output'
   | 'pty:resume-output'
   | 'tab:state-sync'

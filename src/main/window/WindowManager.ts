@@ -212,12 +212,17 @@ class WindowManager {
     this.ptyToWebContentsId.delete(ptyId)
   }
 
-  sendToWindowForPty(ptyId: string, channel: string, ...args: unknown[]): void {
+  ownsPty(ptyId: string, webContentsId: number): boolean {
+    return this.ptyToWebContentsId.get(ptyId) === webContentsId
+  }
+
+  sendToWindowForPty(ptyId: string, channel: string, ...args: unknown[]): boolean {
     const wcId = this.ptyToWebContentsId.get(ptyId)
-    if (wcId === undefined) return
+    if (wcId === undefined) return false
     const win = this.getWindowByWebContentsId(wcId)
-    if (!win || win.isDestroyed()) return
+    if (!win || win.isDestroyed()) return false
     win.webContents.send(channel, ...args)
+    return true
   }
 
   broadcastAll(channel: string, ...args: unknown[]): void {

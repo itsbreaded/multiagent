@@ -69,6 +69,13 @@ export function markConnected(paneId: string): void {
   if (entry) entry.connected = true
 }
 
+/** Apply a scrollback limit to every existing xterm instance. */
+export function setScrollbackLines(lines: number): void {
+  for (const entry of registry.values()) {
+    entry.xterm.options.scrollback = lines
+  }
+}
+
 /** Permanently dispose the xterm instance and remove it from the registry. */
 export function dispose(paneId: string): void {
   const entry = registry.get(paneId)
