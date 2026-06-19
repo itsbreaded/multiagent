@@ -61,6 +61,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   const queueFitRef = useRef<(() => void) | null>(null)
   const ptyIdRef = useRef<string | null>(pane.ptyId ?? null)
   const setPtyId = usePanesStore((s) => s.setPtyId)
+  const resumeAgentPane = usePanesStore((s) => s.resumeAgentPane)
+  const startNewAgentInPane = usePanesStore((s) => s.startNewAgentInPane)
+  const closePane = usePanesStore((s) => s.closePane)
 
   // If a live xterm already exists for this pane (e.g. we're remounting after a
   // layout change), start in 'ready' so the terminal content is shown immediately
@@ -295,6 +298,12 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     if (!xterm || status === 'mounting') return
     const terminal: XTerm = xterm
 
+    if (pane.paneType === 'agent' && !pane.ptyId && pane.agentDisconnected) {
+      setStatus('ready')
+      setErrorMsg(pane.resumeError ?? pane.sessionDetectionError ?? null)
+      return
+    }
+
     if (pane.paneType === 'agent' && !pane.ptyId && (pane.resumeError || pane.sessionDetectionError)) {
       setStatus('error')
       setErrorMsg(pane.resumeError ?? pane.sessionDetectionError ?? 'Agent session is not recoverable')
@@ -466,7 +475,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // PTYs are killed explicitly by closePane() in the panes store.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id, pane.ptyId, pane.paneType, pane.resumeError, pane.sessionDetectionError, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, status === 'mounting' ? 'mounting' : 'ready'])
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -476,6 +485,16 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       hasSelection: !!(xtermRef.current?.getSelection()),
     })
   }, [])
+
+  const disconnected = pane.paneType === 'agent' && !!pane.agentDisconnected && !pane.ptyId
+  const disconnectedAt = pane.agentDisconnected?.at
+    ? new Date(pane.agentDisconnected.at).toLocaleString()
+    : null
+  const exitDescription = pane.agentDisconnected
+    ? pane.agentDisconnected.exitCode === 0
+      ? 'Exited normally'
+      : `Exited with code ${pane.agentDisconnected.exitCode ?? 'unknown'}`
+    : ''
 
   return (
     <div
@@ -510,9 +529,148 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
           {errorMsg}
         </div>
       )}
+      {disconnected && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'rgba(14, 16, 17, 0.72)',
+          zIndex: 20,
+          padding: 16,
+          pointerEvents: 'auto',
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{
+            width: 'min(520px, 100%)',
+            backgroundColor: '#17191b',
+            border: '1px solid #2a2d30',
+            borderRadius: 6,
+            boxShadow: '0 12px 36px rgba(0,0,0,0.45)',
+            padding: 16,
+            color: '#d4d4d4',
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
+              Agent session disconnected
+            </div>
+            <div style={{ color: '#9da3aa', fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
+              The {agentLabel(pane.agentKind ?? 'claude')} process has exited. The terminal output is preserved, but this pane is no longer connected to a live agent.
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto minmax(0, 1fr)',
+              gap: '6px 12px',
+              fontSize: 12,
+              lineHeight: 1.4,
+              marginBottom: 14,
+            }}>
+              <span style={{ color: '#6f7780' }}>Agent</span>
+              <span>{agentLabel(pane.agentKind ?? 'claude')}</span>
+              <span style={{ color: '#6f7780' }}>Status</span>
+              <span>{exitDescription}</span>
+              {disconnectedAt && (
+                <>
+                  <span style={{ color: '#6f7780' }}>Disconnected</span>
+                  <span>{disconnectedAt}</span>
+                </>
+              )}
+              <span style={{ color: '#6f7780' }}>Directory</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pane.cwd}>{pane.cwd}</span>
+              <span style={{ color: '#6f7780' }}>Session</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pane.sessionId}>
+                {pane.sessionId ?? 'No session id captured'}
+              </span>
+            </div>
+            {!pane.sessionId && (
+              <div style={{
+                marginBottom: 12,
+                color: '#fbbf24',
+                backgroundColor: '#211a08',
+                border: '1px solid #49360b',
+                borderRadius: 4,
+                padding: '7px 9px',
+                fontSize: 12,
+              }}>
+                This pane cannot resume the exact session because no session id was captured. Start a new session to keep using this pane.
+              </div>
+            )}
+            {errorMsg && (
+              <div style={{
+                marginBottom: 12,
+                color: '#f87171',
+                backgroundColor: '#1e1010',
+                border: '1px solid #3a1010',
+                borderRadius: 4,
+                padding: '7px 9px',
+                fontSize: 12,
+              }}>
+                {errorMsg}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {pane.sessionId && (
+                <button
+                  data-window-drag-exempt="true"
+                  onClick={() => resumeAgentPane(pane.id)}
+                  style={{
+                    backgroundColor: '#2d6cdf',
+                    border: '1px solid #3979ee',
+                    color: '#ffffff',
+                    borderRadius: 4,
+                    padding: '7px 12px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Resume session
+                </button>
+              )}
+              <button
+                data-window-drag-exempt="true"
+                onClick={() => startNewAgentInPane(pane.id)}
+                style={{
+                  backgroundColor: '#24272a',
+                  border: '1px solid #3a3f44',
+                  color: '#d4d4d4',
+                  borderRadius: 4,
+                  padding: '7px 12px',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                Start new session
+              </button>
+              <button
+                data-window-drag-exempt="true"
+                onClick={() => closePane(pane.id)}
+                style={{
+                  backgroundColor: 'transparent',
+                  border: '1px solid #3a3f44',
+                  color: '#b8bec5',
+                  borderRadius: 4,
+                  padding: '7px 12px',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  marginLeft: 'auto',
+                }}
+              >
+                Close pane
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div
         ref={containerRef}
-        style={{ position: 'absolute', inset: 0 }}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 0,
+          pointerEvents: disconnected ? 'none' : 'auto',
+        }}
       />
 
       {contextMenu && (

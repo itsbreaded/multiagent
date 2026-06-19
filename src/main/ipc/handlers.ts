@@ -208,11 +208,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
   })
 
-  ptyManager.on('exit', (ptyId: string, exitCode: number) => {
+  ptyManager.on('exit', (ptyId: string, exitCode: number, signal?: number) => {
     flushCoalesceEntry(ptyId)
     if (exitCode !== 0) {
       windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`)
     }
+    windowManager.sendToWindowForPty(ptyId, 'pty:exit', ptyId, exitCode, signal)
     windowManager.unroutePty(ptyId)
   })
 

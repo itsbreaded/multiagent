@@ -367,10 +367,13 @@ interface PanesStore {
   setPtyId: (paneId: string, ptyId: string) => void
   setSessionId: (paneId: string, sessionId: string) => void
   updatePane: (paneId: string, patch: Partial<PaneLeaf>) => void
+  markPtyExited: (ptyId: string, exitCode: number | null, signal?: number) => void
 
   // Session / PTY actions (Phase 2)
   resumeSession: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
   resumeSessionInNewTab: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
+  resumeAgentPane: (paneId: string) => Promise<void>
+  startNewAgentInPane: (paneId: string) => Promise<void>
   newSession: (cwd: string, direction?: SplitDirection, agentKind?: AgentKind) => Promise<void>
   addShellPane: (cwd: string, direction?: SplitDirection) => Promise<void>
   setLastAgentKind: (agentKind: AgentKind) => void
@@ -1029,7 +1032,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setPtyId: (paneId, ptyId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { ptyId, resumeError: undefined }) } : t),
+      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, {
+        ptyId,
+        agentDisconnected: undefined,
+        resumeError: undefined,
+      }) } : t),
     }))
   },
 
@@ -1071,6 +1078,31 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => ({
       tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, patch) } : t),
     }))
+  },
+
+  markPtyExited: (ptyId, exitCode, signal) => {
+    let shouldRefreshSessions = false
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (!t.rootNode) return t
+        function patchExited(node: PaneNode): PaneNode {
+          if (node.type === 'leaf') {
+            if (node.ptyId !== ptyId || node.paneType !== 'agent') return node
+            shouldRefreshSessions = !!node.sessionId
+            return {
+              ...node,
+              ptyId: undefined,
+              agentDisconnected: { exitCode, signal, at: Date.now() },
+            }
+          }
+          return { ...node, first: patchExited(node.first), second: patchExited(node.second) }
+        }
+        return { ...t, rootNode: patchExited(t.rootNode) }
+      }),
+    }))
+    if (shouldRefreshSessions && typeof window !== 'undefined' && window.ipc) {
+      window.ipc.invoke('sessions:refresh').catch(() => {})
+    }
   },
 
   setLastAgentKind: (agentKind) => {
@@ -1148,6 +1180,88 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       }
     } else {
       markTabHydrated(tab.id)
+    }
+  },
+
+  resumeAgentPane: async (paneId) => {
+    const pane = get().findPaneInAnyTab(paneId)
+    if (!pane || pane.paneType !== 'agent' || !pane.agentKind) return
+    if (!pane.sessionId) {
+      get().updatePane(paneId, { resumeError: 'No session id is available for this pane' })
+      return
+    }
+    const { agentKind, sessionId, cwd } = pane
+    get().setLastAgentKind(agentKind)
+    get().updatePane(paneId, {
+      ptyId: undefined,
+      agentDisconnected: undefined,
+      resumeError: undefined,
+      sessionDetectionError: undefined,
+    })
+    try {
+      const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd) as { ptyId: string }
+      const current = get().findPaneInAnyTab(paneId)
+      if (
+        current?.paneType === 'agent' &&
+        current.agentKind === agentKind &&
+        current.sessionId === sessionId &&
+        result?.ptyId
+      ) {
+        get().updatePane(paneId, {
+          ptyId: result.ptyId,
+          agentDisconnected: undefined,
+          resumeError: undefined,
+          sessionDetectionError: undefined,
+        })
+      }
+    } catch (err) {
+      console.error('session:resume IPC failed', err)
+      get().updatePane(paneId, {
+        resumeError: 'Session resume failed',
+        agentDisconnected: pane.agentDisconnected,
+      })
+    }
+  },
+
+  startNewAgentInPane: async (paneId) => {
+    const pane = get().findPaneInAnyTab(paneId)
+    if (!pane || pane.paneType !== 'agent' || !pane.agentKind) return
+    const { agentKind, cwd } = pane
+    get().setLastAgentKind(agentKind)
+    get().updatePane(paneId, {
+      ptyId: undefined,
+      sessionId: undefined,
+      agentDisconnected: undefined,
+      resumeError: undefined,
+      sessionDetectionState: 'pending',
+      sessionDetectionStartedAt: Date.now(),
+      sessionDetectionCwd: cwd,
+      sessionDetectionError: undefined,
+    })
+    try {
+      const result = await window.ipc.invoke('session:new', agentKind, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
+      const patch: Partial<PaneLeaf> = {
+        ptyId: result.ptyId,
+        agentDisconnected: undefined,
+        resumeError: undefined,
+        sessionDetectionError: undefined,
+      }
+      if (typeof result.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
+      if (result.sessionId) {
+        patch.sessionId = result.sessionId
+        patch.sessionDetectionState = 'detected'
+      } else {
+        patch.sessionDetectionState = 'pending'
+      }
+      get().updatePane(paneId, patch)
+    } catch (err) {
+      console.error('session:new IPC failed', err)
+      get().updatePane(paneId, {
+        sessionDetectionState: 'failed',
+        sessionDetectionError: 'Session detection failed to start',
+        resumeError: 'Session detection failed to start',
+        agentDisconnected: pane.agentDisconnected,
+      })
     }
   },
 
@@ -1582,6 +1696,12 @@ if (typeof window !== 'undefined' && window.ipc) {
     if (typeof ptyId === 'string' && typeof cwd === 'string') {
       usePanesStore.getState().setPaneCwd(ptyId, cwd)
     }
+  })
+
+  window.ipc.on('pty:exit', (ptyId: unknown, exitCode: unknown, signal: unknown) => {
+    if (typeof ptyId !== 'string') return
+    const code = typeof exitCode === 'number' ? exitCode : null
+    usePanesStore.getState().markPtyExited(ptyId, code, typeof signal === 'number' ? signal : undefined)
   })
 
   window.ipc.on('session:detected', (ptyId: unknown, agentKind: unknown, sessionId: unknown) => {

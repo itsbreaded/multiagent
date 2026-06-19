@@ -56,6 +56,11 @@ export interface PaneLeaf {
   cwd: string
   sessionId?: string    // set when paneType === 'agent'
   ptyId?: string        // set once PTY is created
+  agentDisconnected?: {
+    exitCode: number | null
+    signal?: number
+    at: number
+  }
   resumeError?: string  // set when a restored agent session failed to resume
   sessionDetectionState?: 'pending' | 'detected' | 'failed'
   sessionDetectionStartedAt?: number
@@ -177,6 +182,9 @@ export interface IPCChannels {
 
   // Main pushes PTY output to renderer
   'pty:data': (ptyId: string, data: string) => void
+
+  // Main notifies renderer when a PTY exits
+  'pty:exit': (ptyId: string, exitCode: number | null, signal?: number) => void
 
   // Main pushes CWD changes to renderer (parsed from OSC 7 sequences)
   'pty:cwd': (ptyId: string, cwd: string) => void
@@ -315,6 +323,7 @@ export type InvokeChannels =
 export type EventChannels =
   | 'sessions:updated'
   | 'pty:data'
+  | 'pty:exit'
   | 'pty:cwd'
   | 'session:detected'
   | 'session:detection-failed'
