@@ -30,6 +30,7 @@ export function DirPicker({
   const nameRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const autoBrowseStartedRef = useRef(false)
+  const mouseDownOnOverlay = useRef(false)
 
   useEffect(() => {
     if (nameField) {
@@ -84,7 +85,8 @@ export function DirPicker({
         justifyContent: 'center',
         paddingTop: '15vh',
       }}
-      onClick={onSkip}
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
+      onClick={() => { if (mouseDownOnOverlay.current) onSkip() }}
     >
       <div
         onClick={(e) => e.stopPropagation()}

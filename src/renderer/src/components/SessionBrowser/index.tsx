@@ -44,6 +44,7 @@ export function SessionBrowser(): JSX.Element {
   const [deepResults, setDeepResults] = useState<SessionSearchResult[]>([])
   const [deepSearching, setDeepSearching] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const mouseDownOnOverlay = useRef(false)
   const searchGenRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -146,7 +147,8 @@ export function SessionBrowser(): JSX.Element {
         alignItems: 'center',
         justifyContent: 'center',
       }}
-      onClick={closeOverlays}
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
+      onClick={() => { if (mouseDownOnOverlay.current) closeOverlays() }}
     >
       <div
         onClick={(e) => e.stopPropagation()}

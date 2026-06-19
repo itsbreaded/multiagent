@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { usePanesStore } from '../../store/panes'
 import {
   DEFAULT_TERMINAL_SCROLLBACK_LINES,
@@ -49,6 +49,7 @@ export function SettingsPanel(): JSX.Element {
   const [recording, setRecording] = useState<HotkeyId | null>(null)
   const [conflictLabel, setConflictLabel] = useState<string | null>(null)
   const [scrollbackDraft, setScrollbackDraft] = useState(String(terminalScrollbackLines))
+  const mouseDownOnOverlay = useRef(false)
 
   const customizedCount = Object.keys(hotkeyOverrides).length
   const sections = useMemo(() => [
@@ -142,7 +143,8 @@ export function SettingsPanel(): JSX.Element {
         alignItems: 'center',
         justifyContent: 'center',
       }}
-      onClick={() => { setRecording(null); setConflictLabel(null); closeOverlays() }}
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
+      onClick={() => { if (mouseDownOnOverlay.current) { setRecording(null); setConflictLabel(null); closeOverlays() } }}
     >
       <div
         role="dialog"

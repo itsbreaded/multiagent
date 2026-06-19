@@ -38,6 +38,7 @@ export function CommandPalette(): JSX.Element {
   const [selectedIdx, setSelectedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const mouseDownOnOverlay = useRef(false)
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -165,7 +166,8 @@ export function CommandPalette(): JSX.Element {
         justifyContent: 'center',
         paddingTop: '15vh',
       }}
-      onClick={closeOverlays}
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
+      onClick={() => { if (mouseDownOnOverlay.current) closeOverlays() }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
