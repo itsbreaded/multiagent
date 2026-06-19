@@ -979,7 +979,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const pane = tab?.rootNode ? findLeaf(tab.rootNode, paneId) : null
     if (!pane) return
     if (pane.ptyId && typeof window !== 'undefined' && window.ipc) {
-      window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
+      window.ipc.invoke('pty:kill', pane.ptyId)
+        .catch(() => {})
+        .finally(() => {
+          if (pane.paneType === 'agent' && pane.sessionId) {
+            window.ipc.invoke('sessions:refresh').catch(() => {})
+          }
+        })
+    } else if (pane.paneType === 'agent' && pane.sessionId && typeof window !== 'undefined' && window.ipc) {
+      window.ipc.invoke('sessions:refresh').catch(() => {})
     }
     xtermRegistry.dispose(paneId)
     set((s) => {

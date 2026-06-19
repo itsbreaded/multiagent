@@ -141,6 +141,9 @@ export interface IPCChannels {
   // Renderer asks to delete a transcript
   'sessions:delete': (agentKind: AgentKind, sessionId: string) => void
 
+  // Renderer asks main to rescan transcripts immediately
+  'sessions:refresh': () => Session[]
+
   // Renderer tries to recover a pane whose session detection was pending during shutdown
   'sessions:recover-pending': (agentKind: AgentKind, cwd: string, startedAt: number) => string | null
 
@@ -270,6 +273,7 @@ export interface IPCChannels {
 export type InvokeChannels =
   | 'sessions:search'
   | 'sessions:delete'
+  | 'sessions:refresh'
   | 'sessions:recover-pending'
   | 'sessions:validate'
   | 'session:new'

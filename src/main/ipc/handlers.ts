@@ -180,7 +180,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   let lastSessionsJson = ''
 
-  async function pollSessions(): Promise<void> {
+  async function pollSessions(forceBroadcast = false): Promise<void> {
     try {
       const sessions = await scanAllSessions()
       for (const session of sessions) {
@@ -188,7 +188,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       }
       const all = index.getAll()
       const json = JSON.stringify(all)
-      if (json !== lastSessionsJson) {
+      if (forceBroadcast || json !== lastSessionsJson) {
         lastSessionsJson = json
         windowManager.broadcastAll('sessions:updated', all)
       }
@@ -221,6 +221,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ipcMain.handle('sessions:search', (_e, query: string) => index.search(query))
 
   ipcMain.handle('sessions:delete', (_e, agentKind, sessionId: string) => index.delete(agentKind, sessionId))
+
+  ipcMain.handle('sessions:refresh', async () => {
+    await pollSessions(true)
+    return index.getAll()
+  })
 
   ipcMain.handle('sessions:latest-for-cwd', async (_e, agentKind, cwd: string) => {
     const scanner = agentKind === 'codex' ? codexScanner : claudeScanner

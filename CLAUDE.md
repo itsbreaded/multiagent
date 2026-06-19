@@ -91,17 +91,17 @@ All non-terminal scrollable renderer surfaces should use the shared `dark-scroll
 
 ### Session Indexing
 
-`SessionIndex` wraps better-sqlite3 with FTS5 for full-text search over session transcripts. `TranscriptScanner` reads `~/.claude/projects/**/*.jsonl` and extracts metadata. Sessions are polled every 5 seconds and pushed to the renderer on change.
+`SessionIndex` wraps better-sqlite3 with FTS5 for full-text search over session transcripts. `TranscriptScanner` reads `~/.claude/projects/**/*.jsonl` and `CodexSessionScanner` reads `~/.codex/sessions/**/*.jsonl`; both extract metadata into the same index. Sessions are polled every 5 seconds and pushed to the renderer on change. Closing an agent pane with a known `sessionId` also triggers an immediate `sessions:refresh` scan so the session can move from the live pane list to Recent without waiting for the next poll.
 
 ### Session Detection
 
-`SessionSpawner` detects which session file belongs to a newly spawned PTY. Claude uses a single shared chokidar watcher (chokidar v5, ESM-only - must use dynamic `import()`) watching `~/.claude/projects/` for new `.jsonl` files, but detection is not FIFO. New Claude JSONL files are batched briefly, parsed for `sessionId` and `cwd`, statted for `mtimeMs`, and matched only to active pending panes with the same normalized cwd and `mtimeMs >= startedAt - 5000`. Ambiguous matches are ignored rather than assigned. Codex detection intentionally does not use a global filesystem FIFO watcher; it polls `CodexSessionScanner.scanAll()` and only accepts sessions matching the requested cwd with `mtimeMs >= startedAt - 5000`, so unrelated Codex JSONL writes cannot claim a pane.
+`SessionSpawner` detects which session belongs to a newly spawned PTY differently by agent. Claude is assigned up front: new Claude panes generate a UUID and launch `claude --session-id <uuid>`, so the renderer receives the session id immediately. Codex cannot be assigned a new rollout id at launch, so Codex detection watches for user input, snapshots the existing `~/.codex/sessions/` files, then polls new rollout JSONL files every second and claims only one unambiguous cwd/time-matching candidate. Codex resume still needs this detection because interactive `codex resume` can fork to a new rollout id.
 
 Key constraints:
 
-- One shared watcher (not one per session) - prevents concurrent watchers from racing on the same file.
-- Never assign Claude detections by queue order. If cwd/time scoring cannot produce a single unambiguous pending pane, leave the pane pending/failed and preserve its recovery state.
-- `readSessionInfo` scans up to 10 lines - `sessionId` and `cwd` may be on different records in the JSONL.
+- Do not reintroduce Claude filesystem matching for new panes; preserve the launch-time `--session-id` path unless Claude removes that flag.
+- Codex detection starts polling only after the pane submits its first real message; opening and closing a never-messaged Codex pane usually leaves no rollout transcript to index.
+- Codex candidates are matched by normalized cwd, baseline snapshot diff, and start-time grace. Ambiguous matches are ignored rather than assigned.
 - Codex resume still needs detection because interactive `codex resume` can fork to a new rollout id; preserve the cwd/time-constrained scanner path unless Codex behavior is re-verified.
 - Startup should default to resume. Do not reintroduce a restore prompt unless explicitly requested.
 - New agent panes persist `sessionDetectionState`, `sessionDetectionStartedAt`, and `sessionDetectionCwd` while detection is pending. On startup, panes with a pending marker and no `sessionId` may recover only from an exact single cwd/time transcript match; otherwise they remain visible as agent recovery placeholders. Legacy agent panes with no `sessionId` and no pending marker are still converted back to shell panes.
