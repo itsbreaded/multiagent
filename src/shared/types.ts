@@ -52,6 +52,32 @@ export interface SessionRepairCwdResult {
   error?: string
 }
 
+export interface SessionSearchRequest {
+  query: string
+  mode?: 'summary' | 'deep'
+  agentKinds?: AgentKind[]
+  cwd?: string
+  limit?: number
+  matchesPerSession?: number
+  caseSensitive?: boolean
+  regex?: boolean
+}
+
+export interface SessionSearchMatch {
+  transcriptPath: string
+  lineNumber: number
+  timestamp: string | null
+  role: 'user' | 'assistant' | 'tool' | 'system' | 'unknown'
+  snippet: string
+}
+
+export interface SessionSearchResult {
+  session: Session
+  score: number
+  matchCount: number
+  matches: SessionSearchMatch[]
+}
+
 // Pane tree - binary split layout (same model as tmux)
 export type PaneType = 'shell' | 'agent'
 
@@ -147,8 +173,11 @@ export interface IPCChannels {
   // Main pushes full session list whenever it changes
   'sessions:updated': (sessions: Session[]) => void
 
-  // Renderer invokes search (FTS5)
+  // Renderer invokes summary search (FTS5 over metadata)
   'sessions:search': (query: string) => Session[]
+
+  // Renderer invokes deep search across full transcript content
+  'sessions:search-deep': (request: SessionSearchRequest) => SessionSearchResult[]
 
   // Renderer asks to delete a transcript
   'sessions:delete': (agentKind: AgentKind, sessionId: string) => void
@@ -294,6 +323,7 @@ export interface IPCChannels {
 // (used in preload.ts to type window.ipc correctly)
 export type InvokeChannels =
   | 'sessions:search'
+  | 'sessions:search-deep'
   | 'sessions:delete'
   | 'sessions:repair-cwd'
   | 'sessions:refresh'

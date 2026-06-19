@@ -270,6 +270,13 @@ export class SessionIndex {
     return !!this.db.prepare('SELECT 1 FROM sessions WHERE agentKind = ? AND sessionId = ?').get(agentKind, sessionId)
   }
 
+  get(agentKind: AgentKind, sessionId: string): Session | null {
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE agentKind = ? AND sessionId = ?')
+      .get(agentKind, sessionId) as DbRow | undefined
+    return row ? scannedToSession(row) : null
+  }
+
   getAll(): Session[] {
     const rows = this.db
       .prepare(

@@ -64,6 +64,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const queueFitRef = useRef<(() => void) | null>(null)
   const ptyIdRef = useRef<string | null>(pane.ptyId ?? null)
+  const shellCreatePaneRef = useRef<string | null>(null)
   const setPtyId = usePanesStore((s) => s.setPtyId)
   const resumeAgentPane = usePanesStore((s) => s.resumeAgentPane)
   const startNewAgentInPane = usePanesStore((s) => s.startNewAgentInPane)
@@ -296,7 +297,38 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     }
   }, [pane.id, pane.paneType, pane.agentKind])
 
-  // Effect 2: connect to the PTY once a ptyId is available
+  // Effect 2: create a shell PTY when this pane needs one. Attachment happens
+  // in the next effect after the ptyId is committed to pane state.
+  useEffect(() => {
+    if (status === 'mounting' || pane.paneType !== 'shell' || pane.ptyId) return
+    if (shellCreatePaneRef.current === pane.id) return
+
+    let cancelled = false
+    shellCreatePaneRef.current = pane.id
+    setStatus('connecting')
+
+    window.ipc.invoke('pty:create', pane.cwd)
+      .then((result) => {
+        if (cancelled) return
+        const ptyId = (result as { ptyId?: unknown })?.ptyId
+        if (typeof ptyId !== 'string') throw new Error('PTY creation returned no ptyId')
+        ptyIdRef.current = ptyId
+        setPtyId(pane.id, ptyId)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          shellCreatePaneRef.current = null
+          setStatus('error')
+          setErrorMsg(String(err))
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, status === 'mounting' ? 'mounting' : 'ready'])
+
+  // Effect 3: connect to the PTY once a ptyId is available
   useEffect(() => {
     const xterm = xtermRef.current
     if (!xterm || status === 'mounting') return
@@ -346,27 +378,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       return { chunk }
     }
 
-    async function connect(): Promise<void> {
-      let ptyId = pane.ptyId ?? null
-
-      if (!ptyId && pane.paneType === 'shell') {
-        try {
-          const result = await window.ipc.invoke('pty:create', pane.cwd) as { ptyId: string }
-          if (cancelled) return
-          ptyId = result.ptyId
-          ptyIdRef.current = ptyId
-          setPtyId(pane.id, ptyId)
-        } catch (err) {
-          if (!cancelled) {
-            setStatus('error')
-            setErrorMsg(String(err))
-          }
-          return
-        }
-      }
-
-      if (!ptyId || cancelled) return
-
+    function connect(ptyId: string): void {
       ptyIdRef.current = ptyId
       setStatus('ready')
       xtermRegistry.markConnected(pane.id)
@@ -449,7 +461,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       sendResize(terminal.cols, terminal.rows)
     }
 
-    connect()
+    if (pane.ptyId) connect(pane.ptyId)
 
     return () => {
       cancelled = true

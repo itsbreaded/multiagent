@@ -6,13 +6,14 @@ import { execFile, execFileSync } from 'child_process'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
+import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, McpSettings, PaneTransferPayload, Tab } from '../../shared/types'
+import type { AgentKind, McpSettings, PaneTransferPayload, SessionSearchRequest, Tab } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
@@ -98,6 +99,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const index = new SessionIndex()
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
+  const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index)
   const ptyManager = new PtyManager()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
   const coalesceBuffer = new Map<string, CoalesceEntry>()
@@ -405,6 +407,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // --- IPC handlers ---
 
   ipcMain.handle('sessions:search', (_e, query: string) => index.search(query))
+
+  ipcMain.handle('sessions:search-deep', async (_e, request: SessionSearchRequest) => {
+    const allSessions = index.getAll()
+    return deepSearcher.search(request, allSessions)
+  })
 
   ipcMain.handle('sessions:delete', (_e, agentKind, sessionId: string) => index.delete(agentKind, sessionId))
 
