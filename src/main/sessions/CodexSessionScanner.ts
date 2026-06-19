@@ -12,9 +12,19 @@ interface CodexRecord {
     id?: string
     cwd?: string
     timestamp?: string
+    originator?: string
+    source?: string
     type?: string
     message?: string
   }
+}
+
+export interface CodexSessionMeta {
+  sessionId: string
+  cwd: string
+  timestamp: string | null
+  originator: string | null
+  source: string | null
 }
 
 interface SessionIndexRecord {
@@ -66,6 +76,45 @@ async function walkJsonlFiles(dir: string): Promise<string[]> {
     }
   }
   return results
+}
+
+export async function listCodexSessionFilePaths(): Promise<string[]> {
+  return walkJsonlFiles(codexSessionsDir())
+}
+
+export async function readCodexSessionMeta(filePath: string): Promise<CodexSessionMeta | null> {
+  return new Promise((resolve) => {
+    const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+    let settled = false
+
+    const done = (value: CodexSessionMeta | null): void => {
+      if (settled) return
+      settled = true
+      rl.close()
+      stream.destroy()
+      resolve(value)
+    }
+
+    rl.on('line', (line) => {
+      if (!line.trim()) return
+      const record = parseRecord(line)
+      if (record?.type !== 'session_meta' || !record.payload?.id || !record.payload.cwd) {
+        done(null)
+        return
+      }
+      done({
+        sessionId: record.payload.id,
+        cwd: record.payload.cwd,
+        timestamp: record.payload.timestamp ?? record.timestamp ?? null,
+        originator: record.payload.originator ?? null,
+        source: record.payload.source ?? null,
+      })
+    })
+    rl.on('close', () => done(null))
+    rl.on('error', () => done(null))
+    stream.on('error', () => done(null))
+  })
 }
 
 async function readSessionIndex(): Promise<Map<string, SessionIndexRecord>> {

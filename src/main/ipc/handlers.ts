@@ -257,7 +257,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return { ptyId }
   })
 
-  ipcMain.on('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
+  ipcMain.on('pty:write', (_e, ptyId: string, data: string) => {
+    spawner.notePtyWrite(ptyId, data)
+    ptyManager.write(ptyId, data)
+  })
 
   ipcMain.on('pty:pause-output', (_e, ptyId: string) => ptyManager.pause(ptyId))
 

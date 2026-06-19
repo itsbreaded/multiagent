@@ -38,6 +38,10 @@ Observed runtime behavior the matching MUST be built around:
 - **Consequence for disambiguation:** files appear in user-driven *message* order, not spawn order,
   so spawn-order/stagger correlation does NOT work for Codex. The correlation signal must be
   **which pane received its first message**.
+- **Source-backed timing evidence:** Codex's rollout writer precomputes the rollout path and
+  `session_meta` when a new session is created, but defers materializing/opening the file until
+  `RolloutRecorder::persist()`/flush. Absence of a rollout file after process spawn is expected,
+  not a race that can be fixed with a longer spawn-time timeout.
 
 ## Current behavior (reverted-to baseline)
 
@@ -65,6 +69,28 @@ A real rollout file's **first record** is `session_meta`:
   messaged* (first-message correlation, since the file appears at first message).
 - `CODEX_HOME` relocates the **entire** `~/.codex` (auth + config + sessions), so per-pane session
   isolation via `CODEX_HOME` would break login unless auth is shared in — heavy; see Option C.
+
+- Official docs list `log_dir` and `sqlite_home`, but no standalone documented
+  sessions/rollout-directory override. `log_dir` only enables plaintext diagnostics; `sqlite_home`
+  only moves SQLite-backed state. As of the investigated Codex docs/version, `CODEX_HOME` remains
+  the only documented way to move the sessions tree.
+- For new-file candidates, prefer rollout files whose first `session_meta` has the expected
+  normalized `cwd`, `originator: "codex-tui"`, and `source: "cli"` when those fields are present.
+  Treat `originator`/`source` as narrowing filters, not hard schema assumptions across future Codex
+  versions.
+
+## What NOT to rely on
+
+- Do **not** depend on Codex's indexed state (`state_*.sqlite`, `session_index.jsonl`) or Codex
+  list/resume APIs for immediate correlation of a just-messaged pane. Public Codex issues show the
+  filesystem rollout scan, SQLite state, and UI-visible session indexes can disagree or reconcile
+  asynchronously. Use JSONL snapshot-diff as the source of truth for newly appeared rollout files.
+- Do **not** use `mtime` as a tiebreaker for same-cwd pending panes. Once there is more than one
+  unassigned pending pane for a cwd, the only acceptable exact correlation signal is the pane's
+  first-message event.
+- Long-term alternative: replace raw TUI PTY orchestration with `codex app-server`/SDK integration.
+  `thread/start` returns the thread id directly, eliminating filesystem session discovery. This is
+  a larger product architecture change and should not block the PTY/TUI fix.
 
 ## Intended behavior
 
@@ -103,6 +129,10 @@ time, the reliable correlation is **message → file**, not spawn → file:
     renderer flags the pane on first user submit (Enter with non-empty composer) via a new IPC; or
     main infers it from `pty:write` carrying a carriage return to a still-pending pane. Pick the
     most robust; document it.
+- If multiple first-message events and/or multiple new same-cwd rollout files are observed within
+  one coordinator poll, claim only when there is exactly one unclaimed same-cwd rollout for exactly
+  one pending first-message pane. Otherwise leave the ambiguous pane(s) pending and log the
+  ambiguity. Never fall back to newest-by-mtime/meta for same-cwd pending panes.
 - **B (optional, exact): per-pane sessions directory.** If Codex can be pointed at a distinct
   rollout/sessions directory per pane *without* relocating auth (investigate a config key for the
   sessions path, or a `CODEX_HOME` that still loads shared auth+config), each pane's file is alone
@@ -122,8 +152,10 @@ time, the reliable correlation is **message → file**, not spawn → file:
   flag on first submit vs. main-side inference from `pty:write`. Confirm it fires once, only on a
   real message, and carries the paneId.
 - Check `~/.codex/config.toml` schema + `codex -c` keys for a sessions/rollout directory override
-  that does **not** move auth (the optional per-pane-directory path in Phase 3). Also re-check
-  `codex exec --help`'s "run without persisting session files" flag for relevance.
+  that does **not** move auth (the optional per-pane-directory path in Phase 3). Prior investigation
+  found no documented override beyond `CODEX_HOME`; re-check only if the local Codex version or
+  config reference has changed. Also re-check `codex exec --help`'s "run without persisting session
+  files" flag for relevance.
 - Confirm the `session_meta` record is always the first line and always present (Phase 1/2 rely on
   it); handle the file-not-yet-flushed case with a short retry (the scanner already tolerates this).
 

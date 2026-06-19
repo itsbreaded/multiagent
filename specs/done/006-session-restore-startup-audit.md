@@ -2,7 +2,11 @@
 
 ## Status
 
-Partially implemented, still pending follow-up work.
+Abandoned in favor of `007-claude-session-id-at-launch.md` and
+`008-codex-filesystem-session-matching.md`.
+
+The remaining session-identification work was split into the focused Claude and Codex specs.
+This audit is kept for historical context only.
 
 This spec supersedes the original startup restore audit in this file. The audit is still related and useful, but several items have already been fixed in the current working tree:
 
