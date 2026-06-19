@@ -44,6 +44,18 @@ export class SessionSpawner {
 
   constructor(private ptyManager: PtyManager, private mainWindow: BrowserWindow) {}
 
+  dispose(): void {
+    if (this.codexPollTimer) {
+      clearInterval(this.codexPollTimer)
+      this.codexPollTimer = null
+    }
+    for (const pending of this.pendingCodexDetections.values()) {
+      clearTimeout(pending.timeout)
+      this.ptyManager.off('exit', pending.onExit)
+    }
+    this.pendingCodexDetections.clear()
+  }
+
   async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null; detectionStartedAt: number }> {
     const targetWin = senderWin ?? this.mainWindow
     const startedAt = Date.now()
@@ -83,7 +95,7 @@ export class SessionSpawner {
     if (!pending || pending.firstMessageAt !== null) return
     if (codexWriteContainsFirstMessageSubmit(pending, data)) {
       pending.firstMessageAt = Date.now()
-      void this._pollCodexDetections()
+      this._ensureCodexPoll()
     }
   }
 
@@ -135,10 +147,10 @@ export class SessionSpawner {
       timeout,
       onExit,
     })
-    this._ensureCodexPoll()
   }
 
   private _ensureCodexPoll(): void {
+    if (!this._hasMessagedCodexPending()) return
     if (this.codexPollTimer) return
     this.codexPollTimer = setInterval(() => {
       void this._pollCodexDetections()
@@ -147,13 +159,17 @@ export class SessionSpawner {
   }
 
   private _stopCodexPollIfIdle(): void {
-    if (this.pendingCodexDetections.size > 0 || !this.codexPollTimer) return
+    if (this._hasMessagedCodexPending() || !this.codexPollTimer) return
     clearInterval(this.codexPollTimer)
     this.codexPollTimer = null
   }
 
+  private _hasMessagedCodexPending(): boolean {
+    return Array.from(this.pendingCodexDetections.values()).some((pending) => pending.firstMessageAt !== null)
+  }
+
   private async _pollCodexDetections(): Promise<void> {
-    if (this.codexPollInFlight || this.pendingCodexDetections.size === 0) return
+    if (this.codexPollInFlight || this.pendingCodexDetections.size === 0 || !this._hasMessagedCodexPending()) return
     this.codexPollInFlight = true
     try {
       const pending = Array.from(this.pendingCodexDetections.values())

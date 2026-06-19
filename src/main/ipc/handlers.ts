@@ -806,6 +806,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       for (const entry of coalesceBuffer.values()) clearImmediate(entry.immediate)
       coalesceBuffer.clear()
       index.close()
+      spawner.dispose()
       ptyManager.destroy()
     },
     registerWindowHandlers,
