@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
-import type { AgentKind, PaneLeaf, PaneType, SplitDirection } from '../../../../shared/types'
+import React, { useState, useRef, useEffect } from 'react'
+import type { PaneLeaf, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { paneLabelText } from '../../utils/tabLabels'
@@ -9,22 +9,16 @@ import { displayGitBranch } from '../../utils/git'
 import { encodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
-import { menuStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
+import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnChoiceMenu'
 import vsCodeIcon from '../../assets/vscode.png'
 import folderOpenIcon from '../../assets/folderopen.png'
-import splitRightIcon from '../../assets/splitright.png'
-import splitDownIcon from '../../assets/splitdown.png'
+import addBoxIcon from '../../assets/addbox.png'
 import fullscreenOpenIcon from '../../assets/fullscreenopen.png'
 import fullscreenCloseIcon from '../../assets/fullscreenclose.png'
 import closeSmallIcon from '../../assets/closesmall.png'
 
 const ICON_IMG: React.CSSProperties = { width: 16, height: 16, display: 'block' }
-
-type SplitSpawnChoice = {
-  paneType: PaneType
-  agentKind?: AgentKind
-}
 
 interface PaneHeaderProps {
   pane: PaneLeaf
@@ -51,8 +45,8 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const [renameValue, setRenameValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const [splitMenu, setSplitMenu] = useState<{ direction: SplitDirection; x: number; y: number } | null>(null)
-  const [dirPickerForSplit, setDirPickerForSplit] = useState<{ direction: SplitDirection; choice: SplitSpawnChoice } | null>(null)
+  const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
+  const [dirPickerForSplit, setDirPickerForSplit] = useState<{ direction: SplitDirection; choice: SpawnChoice } | null>(null)
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
@@ -225,20 +219,12 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         </HeaderButton>
       )}
       {!isZoomed && (
-        <>
-          <HeaderButton
-            title={`Split vertical (${HOTKEYS.splitVertical.display})`}
-            onClick={(e) => setSplitMenu({ direction: 'vertical', x: e.clientX, y: e.clientY })}
-          >
-            <img src={splitRightIcon} alt="Split right" style={ICON_IMG} />
-          </HeaderButton>
-          <HeaderButton
-            title={`Split horizontal (${HOTKEYS.splitHorizontal.display})`}
-            onClick={(e) => setSplitMenu({ direction: 'horizontal', x: e.clientX, y: e.clientY })}
-          >
-            <img src={splitDownIcon} alt="Split down" style={ICON_IMG} />
-          </HeaderButton>
-        </>
+        <HeaderButton
+          title="Split pane / new session"
+          onClick={(e) => setSplitMenu({ x: e.clientX, y: e.clientY })}
+        >
+          <img src={addBoxIcon} alt="Split pane" style={ICON_IMG} />
+        </HeaderButton>
       )}
       <HeaderButton
         title={isZoomed ? 'Unzoom' : `Zoom pane (${HOTKEYS.zoomPane.display})`}
@@ -250,19 +236,19 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         <img src={closeSmallIcon} alt="Close pane" style={{ ...ICON_IMG, opacity: 0.5 }} />
       </HeaderButton>
 
-      {/* Split direction context menu */}
+      {/* Spawn choice context menu */}
       {splitMenu && (
-        <SplitDirMenu
-          direction={splitMenu.direction}
+        <SpawnChoiceMenu
           x={splitMenu.x}
           y={splitMenu.y}
+          currentDirLabel="In current directory"
           onClose={() => setSplitMenu(null)}
-          onSplit={(choice) => {
-            splitPane(pane.id, splitMenu.direction, choice.paneType, pane.cwd, choice.agentKind)
+          onSpawn={(choice, direction) => {
+            splitPane(pane.id, direction, choice.paneType, pane.cwd, choice.agentKind)
             setSplitMenu(null)
           }}
-          onBrowse={(choice) => {
-            setDirPickerForSplit({ direction: splitMenu.direction, choice })
+          onBrowse={(choice, direction) => {
+            setDirPickerForSplit({ direction, choice })
             setSplitMenu(null)
           }}
         />
@@ -271,7 +257,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       {/* DirPicker for one-off split directory */}
       {dirPickerForSplit && (
         <DirPicker
-          title={`Start ${splitChoiceLabel(dirPickerForSplit.choice)} in...`}
+          title={`Start ${spawnChoiceLabel(dirPickerForSplit.choice)} in...`}
           initial={activeTab?.defaultCwd ?? pane.cwd}
           confirmLabel="Split"
           skipLabel="Cancel"
@@ -286,119 +272,6 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       )}
     </div>
   )
-}
-
-// --- Split directory context menu ---
-
-function SplitDirMenu({
-  direction,
-  x,
-  y,
-  onClose,
-  onSplit,
-  onBrowse,
-}: {
-  direction: SplitDirection
-  x: number
-  y: number
-  onClose: () => void
-  onSplit: (choice: SplitSpawnChoice) => void
-  onBrowse: (choice: SplitSpawnChoice) => void
-}): JSX.Element {
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ left: number; top: number; visible: boolean }>({ left: x, top: y, visible: false })
-
-  useLayoutEffect(() => {
-    const el = menuRef.current
-    if (!el) return
-    const { width, height } = el.getBoundingClientRect()
-    const margin = 6
-    setPos({
-      left: Math.min(x, window.innerWidth - width - margin),
-      top: Math.min(y, window.innerHeight - height - margin),
-      visible: true,
-    })
-  }, [x, y])
-
-  const dirLabel = direction === 'vertical' ? 'Split vertical' : 'Split horizontal'
-  const choices: SplitSpawnChoice[] = [
-    { paneType: 'agent', agentKind: 'claude' },
-    { paneType: 'agent', agentKind: 'codex' },
-    { paneType: 'shell' },
-  ]
-
-  function row(choice: SplitSpawnChoice, label: string, onClick: () => void): JSX.Element {
-    return (
-      <button
-        onClick={onClick}
-        style={{
-          ...menuStyles.item,
-          color: ui.color.text,
-          cursor: 'pointer',
-        }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
-      >
-        <span>{label}</span>
-        <span style={{ fontSize: 13, opacity: 0.8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
-          {choice.paneType === 'agent'
-            ? <AgentIcon agentKind={choice.agentKind ?? 'claude'} size={16} />
-            : <ShellIcon size={16} />}
-        </span>
-      </button>
-    )
-  }
-
-  function sep(): JSX.Element {
-    return <div style={menuStyles.separator} />
-  }
-
-  return (
-    <>
-      <div style={menuStyles.backdrop} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
-      <div
-        ref={menuRef}
-        style={{
-          ...menuStyles.panel,
-          left: pos.left,
-          top: pos.top,
-          minWidth: 220,
-          visibility: pos.visible ? 'visible' : 'hidden',
-        }}
-      >
-        <div style={menuStyles.label}>
-          {dirLabel}
-        </div>
-        {sep()}
-        <MenuLabel>Current Directory</MenuLabel>
-        {choices.map((choice) => (
-          <React.Fragment key={`current:${splitChoiceKey(choice)}`}>
-            {row(choice, splitChoiceLabel(choice), () => onSplit(choice))}
-          </React.Fragment>
-        ))}
-        {sep()}
-        <MenuLabel>Choose Directory</MenuLabel>
-        {choices.map((choice) => (
-          <React.Fragment key={`browse:${splitChoiceKey(choice)}`}>
-            {row(choice, `${splitChoiceLabel(choice)}...`, () => onBrowse(choice))}
-          </React.Fragment>
-        ))}
-      </div>
-    </>
-  )
-}
-
-function MenuLabel({ children }: { children: React.ReactNode }): JSX.Element {
-  return <div style={menuStyles.label}>{children}</div>
-}
-
-function splitChoiceLabel(choice: SplitSpawnChoice): string {
-  if (choice.paneType === 'shell') return 'Shell'
-  return choice.agentKind === 'codex' ? 'Codex CLI' : 'Claude Code'
-}
-
-function splitChoiceKey(choice: SplitSpawnChoice): string {
-  return choice.paneType === 'shell' ? 'shell' : `agent:${choice.agentKind ?? 'claude'}`
 }
 
 function SessionIdBadge({ sessionId }: { sessionId: string }): JSX.Element {

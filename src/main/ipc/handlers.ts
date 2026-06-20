@@ -8,13 +8,13 @@ import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner } from '../sessions/SessionSpawner'
-import { PtyManager } from '../pty/PtyManager'
+import { PtyManager, setCustomEnvVars } from '../pty/PtyManager'
 import type { PtyReadyEvent } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, CwdRepairMapping, McpSettings, PaneTransferPayload, SessionSearchRequest, Tab } from '../../shared/types'
+import type { AgentKind, CwdRepairMapping, EnvVarEntry, McpSettings, PaneTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
@@ -26,6 +26,7 @@ try {
 }
 
 let remoteFocusRequestSeq = 0
+let remoteSpawnRequestSeq = 0
 let focusTargetVersionSeq = 0
 let tabReleaseSeq = 0
 const GIT_BRANCH_CACHE_MS = 10_000
@@ -534,6 +535,39 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return { tools }
   })
 
+  // --- Environment variable overrides ---
+  const ENV_VARS_FILE = path.join(app.getPath('userData'), 'env-var-overrides.json')
+
+  function loadEnvVarOverrides(): EnvVarEntry[] {
+    try {
+      const raw = fs.readFileSync(ENV_VARS_FILE, 'utf-8')
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
+  function applyEnvVarOverrides(entries: EnvVarEntry[]): void {
+    const active: Record<string, string> = {}
+    for (const entry of entries) {
+      if (entry.enabled && entry.key.trim()) {
+        active[entry.key.trim()] = entry.value
+      }
+    }
+    setCustomEnvVars(active)
+  }
+
+  // Load and apply on startup
+  applyEnvVarOverrides(loadEnvVarOverrides())
+
+  ipcMain.handle('settings:get-env-vars', () => loadEnvVarOverrides())
+
+  ipcMain.handle('settings:save-env-vars', (_e, entries: EnvVarEntry[]) => {
+    fs.writeFileSync(ENV_VARS_FILE, JSON.stringify(entries, null, 2), 'utf-8')
+    applyEnvVarOverrides(entries)
+  })
+
   // --- Multi-window IPC ---
 
   ipcMain.handle('window:get-id', (e) => {
@@ -660,6 +694,56 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     win.webContents.send('pane:focus-remote', tabId, paneId, requestId)
     setTimeout(focusTarget, 1000)
     return true
+  })
+
+  ipcMain.handle('tab:spawn-in-project', async (_e, tabId: string, payload: SpawnInTabPayload) => {
+    if (
+      typeof tabId !== 'string' ||
+      !payload ||
+      typeof payload !== 'object' ||
+      (payload.paneType !== 'agent' && payload.paneType !== 'shell') ||
+      (payload.agentKind !== undefined && payload.agentKind !== 'claude' && payload.agentKind !== 'codex') ||
+      typeof payload.cwd !== 'string' ||
+      (payload.direction !== 'vertical' && payload.direction !== 'horizontal')
+    ) return false
+
+    const winId = windowManager.getWindowIdForTab(tabId)
+    if (winId === null) return false
+    const expectedGeneration = windowManager.getOwnershipGeneration(tabId)
+    const win = windowManager.getWindowById(winId)
+    if (!win || win.isDestroyed()) return false
+
+    const requestId = `${Date.now()}:${++remoteSpawnRequestSeq}`
+    return await new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        ipcMain.removeListener('tab:spawn-in-project-applied', onApplied)
+        if (
+          ok &&
+          windowManager.getWindowIdForTab(tabId) === winId &&
+          windowManager.getOwnershipGeneration(tabId) === expectedGeneration
+        ) {
+          const currentWin = windowManager.getWindowById(winId)
+          if (currentWin && !currentWin.isDestroyed()) {
+            if (currentWin.isMinimized()) currentWin.restore()
+            currentWin.focus()
+          }
+        }
+        resolve(ok)
+      }
+      const onApplied = (event: Electron.IpcMainEvent, ackRequestId: unknown, ok: unknown): void => {
+        if (ackRequestId !== requestId) return
+        const ackWin = BrowserWindow.fromWebContents(event.sender)
+        if (!ackWin || ackWin.id !== win.id) return
+        finish(ok !== false)
+      }
+
+      ipcMain.on('tab:spawn-in-project-applied', onApplied)
+      win.webContents.send('tab:spawn-in-project-remote', tabId, payload, requestId)
+      setTimeout(() => finish(false), 3000)
+    })
   })
 
   ipcMain.handle('tab:adopt', (e, ptyIds: string[]) => {

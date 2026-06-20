@@ -18,7 +18,7 @@ import maximizeIcon from '../../assets/maximize.png'
 import closeIcon from '../../assets/close.png'
 import arrowLeftIcon from '../../assets/arrowleft.png'
 import arrowRightIcon from '../../assets/arrowright.png'
-import addBoxIcon from '../../assets/addbox.png'
+import newFolderIcon from '../../assets/newfolder.png'
 
 const TAB_DRAG_MIME = 'application/x-multiagent-tab'
 const CHROME_DRAG_EXEMPT_SELECTOR = 'button, input, textarea, select, [data-window-drag-exempt="true"]'
@@ -205,7 +205,7 @@ function NewTabButton({
         ...appRegion('no-drag'),
       }}
     >
-      <img src={addBoxIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+      <img src={newFolderIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
     </button>
   )
 }

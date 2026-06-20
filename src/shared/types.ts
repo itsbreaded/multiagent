@@ -20,6 +20,13 @@ export interface McpSettings {
   customServers: McpServerEntry[]
 }
 
+export interface EnvVarEntry {
+  id: string
+  key: string
+  value: string
+  enabled: boolean
+}
+
 export interface McpStatus {
   port: number | null
   running: boolean
@@ -156,6 +163,13 @@ export interface PaneTransferPayload {
   targetWindowId?: number
 }
 
+export interface SpawnInTabPayload {
+  paneType: PaneType
+  agentKind?: AgentKind
+  cwd: string
+  direction: SplitDirection
+}
+
 export interface PtyReadyMetadata {
   pid: number | null
   cwd: string
@@ -284,6 +298,10 @@ export interface IPCChannels {
   'mcp:save-settings': (settings: McpSettings) => void
   'mcp:probe-stdio': (command: string, args: string[], env?: Record<string, string>) => { tools: string[] }
 
+  // --- Environment variable overrides ---
+  'settings:get-env-vars': () => EnvVarEntry[]
+  'settings:save-env-vars': (entries: EnvVarEntry[]) => void
+
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
   'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
@@ -335,6 +353,10 @@ export interface IPCChannels {
 
   // Renderer asks main to focus the window owning a tab AND activate a specific pane
   'window:focus-pane': (tabId: string, paneId: string) => boolean
+  // Renderer asks main to spawn in the window owning a detached tab
+  'tab:spawn-in-project': (tabId: string, payload: SpawnInTabPayload) => boolean
+  // Main tells the owning renderer to spawn in one of its tabs
+  'tab:spawn-in-project-remote': (tabId: string, payload: SpawnInTabPayload, requestId: string) => void
   // Main tells a window's renderer to activate a tab/pane (cross-window pane click)
   'pane:focus-remote': (tabId: string, paneId: string, requestId?: string) => void
   'focus:target-changed': (target: FocusTarget) => void
@@ -369,6 +391,8 @@ export type InvokeChannels =
   | 'mcp:get-settings'
   | 'mcp:save-settings'
   | 'mcp:probe-stdio'
+  | 'settings:get-env-vars'
+  | 'settings:save-env-vars'
   | 'window:get-id'
   | 'window:get-init-data'
   | 'window:get-all-bounds'
@@ -386,6 +410,7 @@ export type InvokeChannels =
   | 'tab:bring-home'
   | 'tab:reattach-home'
   | 'window:focus-pane'
+  | 'tab:spawn-in-project'
 
 export type EventChannels =
   | 'sessions:updated'
@@ -407,6 +432,7 @@ export type EventChannels =
   | 'pane:remove-remote'
   | 'pane:transfer-rolledback'
   | 'pane:move-remote'
+  | 'tab:spawn-in-project-remote'
   | 'pane:focus-remote'
   // Immediate focus-change notification (bypasses the debounced tab:state-sync)
   | 'pane:focus-changed'
@@ -427,6 +453,7 @@ export type SendChannels =
   | 'focus:target-report'
   | 'pane:received-applied'
   | 'pane:focus-remote-applied'
+  | 'tab:spawn-in-project-applied'
   // Shutdown layout collection responses
   | 'layout:state-response'
   | 'layout:detached-state-response'

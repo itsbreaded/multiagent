@@ -566,6 +566,24 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
               Repair directory
             </button>
           )}
+          {pane.paneType === 'agent' && pane.sessionDetectionState === 'failed' && (
+            <button
+              data-window-drag-exempt="true"
+              onClick={() => startNewAgentInPane(pane.id)}
+              style={{
+                backgroundColor: '#24272a',
+                border: '1px solid #3a3f44',
+                color: '#d4d4d4',
+                borderRadius: 4,
+                padding: '4px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              Start new session
+            </button>
+          )}
         </div>
       )}
       {disconnected && (

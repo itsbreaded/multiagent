@@ -201,6 +201,16 @@ export class PtyManager extends EventEmitter {
   }
 }
 
+// User-defined environment variable overrides from Settings > Environment.
+// Applied after process.env but before terminal/profile forced vars, so
+// users can override API-level vars (e.g. ANTHROPIC_BASE_URL for DeepSeek)
+// without being able to accidentally override rendering-critical vars.
+let _customEnvVars: Record<string, string> = {}
+
+export function setCustomEnvVars(vars: Record<string, string>): void {
+  _customEnvVars = vars
+}
+
 function buildEnv(
   extraVars?: Record<string, string>,
   profile: 'agent' | 'shell' = 'agent',
@@ -211,6 +221,10 @@ function buildEnv(
   delete env['ELECTRON_NO_ASAR']
 
   if (env['ANTHROPIC_API_KEY'] === '') delete env['ANTHROPIC_API_KEY']
+
+  // Apply user-defined env vars before forced terminal/profile vars so that
+  // TERM, COLORTERM, TERM_PROGRAM, CLAUDECODE etc. always win.
+  if (Object.keys(_customEnvVars).length > 0) Object.assign(env, _customEnvVars)
 
   env['TERM'] = 'xterm-256color'
   env['COLORTERM'] = 'truecolor'

@@ -35,7 +35,7 @@ export function paneLabelText(pane: PaneLeaf, sessions: Session[]): string {
 }
 
 function baseLabel(tab: Tab, sessions: Session[]): string {
-  if (!tab.rootNode) return 'New Tab'
+  if (!tab.rootNode) return 'Tab'
   const leaf = findLeafById(tab.rootNode, tab.focusedPaneId) ?? firstLeaf(tab.rootNode)
   if (!leaf) return 'Shell'
   if (leaf.sessionId) {
@@ -50,7 +50,13 @@ function baseLabel(tab: Tab, sessions: Session[]): string {
 
 export function computeLabels(tabs: Tab[], sessions: Session[]): Map<string, string> {
   const labels = new Map<string, string>()
+  const usedLabels = new Set(
+    tabs
+      .map((tab) => tab.customLabel?.trim().toLowerCase())
+      .filter((label): label is string => !!label)
+  )
   let shellCount = 0
+  let tabCount = 0
   for (const tab of tabs) {
     if (tab.customLabel) {
       labels.set(tab.id, tab.customLabel)
@@ -60,6 +66,13 @@ export function computeLabels(tabs: Tab[], sessions: Session[]): Map<string, str
     if (base === 'Shell') {
       shellCount++
       labels.set(tab.id, shellCount === 1 ? 'Shell' : `Shell ${shellCount}`)
+    } else if (base === 'Tab') {
+      tabCount++
+      let n = tabCount
+      while (usedLabels.has(`tab ${n}`)) n++
+      const label = `Tab ${n}`
+      usedLabels.add(label.toLowerCase())
+      labels.set(tab.id, label)
     } else {
       labels.set(tab.id, base)
     }

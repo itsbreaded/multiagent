@@ -23,6 +23,7 @@ interface SidebarSectionProps {
   onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
   headerDropActive?: boolean
   titleSuffix?: React.ReactNode
+  headerActionsAlways?: React.ReactNode
   headerActions?: React.ReactNode
   style?: React.CSSProperties
   contentStyle?: React.CSSProperties
@@ -49,6 +50,7 @@ export function SidebarSection({
   onHeaderDrop,
   headerDropActive,
   titleSuffix,
+  headerActionsAlways,
   headerActions,
   style,
   contentStyle,
@@ -143,11 +145,23 @@ export function SidebarSection({
           </span>
         )}
         {titleSuffix && !renaming && titleSuffix}
+        {headerActionsAlways && !renaming && (
+          <div
+            style={{
+              marginLeft: count === undefined && !titleSuffix ? 'auto' : 0,
+              display: 'flex',
+              alignItems: 'center',
+              flexShrink: 0,
+            }}
+          >
+            {headerActionsAlways}
+          </div>
+        )}
         {headerActions && !renaming && (
           <div
             style={{
               ...sidebarStyles.hoverActionGroup,
-              marginLeft: count === undefined && !titleSuffix ? 'auto' : 0,
+              marginLeft: count === undefined && !titleSuffix && !headerActionsAlways ? 'auto' : 0,
               opacity: hovered ? 1 : 0,
               pointerEvents: hovered ? 'auto' : 'none',
             }}

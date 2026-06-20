@@ -16,8 +16,9 @@ import {
   type HotkeyOverride,
 } from '../../utils/hotkeys'
 import { McpSection } from './McpSection'
+import { EnvVarsSection } from './EnvVarsSection'
 
-type SettingsSection = 'appearance' | 'hotkeys' | 'general' | 'mcp'
+type SettingsSection = 'appearance' | 'hotkeys' | 'general' | 'mcp' | 'environment'
 
 // Terminal-only shortcuts shown read-only for visibility
 const TERMINAL_SHORTCUTS = [
@@ -51,13 +52,16 @@ export function SettingsPanel(): JSX.Element {
   const [scrollbackDraft, setScrollbackDraft] = useState(String(terminalScrollbackLines))
   const mouseDownOnOverlay = useRef(false)
 
+  const envVarOverrides = useSettingsStore((s) => s.envVarOverrides)
   const customizedCount = Object.keys(hotkeyOverrides).length
+  const activeEnvVarCount = envVarOverrides.filter((e) => e.enabled && e.key.trim()).length
   const sections = useMemo(() => [
-    { id: 'appearance' as const, label: 'Appearance', count: 2 },
-    { id: 'hotkeys' as const,    label: 'Hotkeys',    count: customizedCount },
-    { id: 'mcp' as const,        label: 'MCP',        count: 0, experimental: true },
-    { id: 'general' as const,    label: 'General',    count: 1 },
-  ], [customizedCount])
+    { id: 'appearance' as const,   label: 'Appearance',   count: 2 },
+    { id: 'hotkeys' as const,      label: 'Hotkeys',      count: customizedCount },
+    { id: 'mcp' as const,          label: 'MCP',          count: 0, experimental: true },
+    { id: 'environment' as const,  label: 'Environment',  count: activeEnvVarCount },
+    { id: 'general' as const,      label: 'General',      count: 1 },
+  ], [customizedCount, activeEnvVarCount])
 
   // Listen for key recording
   useEffect(() => {
@@ -421,6 +425,9 @@ export function SettingsPanel(): JSX.Element {
 
             {/* MCP section */}
             {activeSection === 'mcp' && <McpSection />}
+
+            {/* Environment section */}
+            {activeSection === 'environment' && <EnvVarsSection />}
 
             {/* General section */}
             {activeSection === 'general' && (

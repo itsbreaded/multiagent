@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
+import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
@@ -24,6 +24,7 @@ const LOCAL_REARM_MS = 150
 const SKIP_DISARM_TTL_MS = 400
 const hydratingPaneSessions: Record<string, string> = {}
 const hydratingTabs = new Map<string, Promise<void>>()
+const DEFAULT_AGENT_KIND: AgentKind = 'claude'
 
 function clearPendingRemoteFocus(): void {
   pendingRemoteFocusWindowId = null
@@ -44,7 +45,7 @@ function makeLeaf(cwd: string, paneType: PaneType = 'shell', agentKind?: AgentKi
     type: 'leaf',
     id: uuid(),
     paneType,
-    agentKind: paneType === 'agent' ? (agentKind ?? 'claude') : undefined,
+    agentKind: paneType === 'agent' ? (agentKind ?? DEFAULT_AGENT_KIND) : undefined,
     cwd
   }
 }
@@ -204,30 +205,6 @@ function findLeafBySessionId(node: PaneNode, agentKind: AgentKind, sessionId: st
     return node.agentKind === agentKind && node.sessionId === sessionId ? node : null
   }
   return findLeafBySessionId(node.first, agentKind, sessionId) ?? findLeafBySessionId(node.second, agentKind, sessionId)
-}
-
-function initialLastAgent(): AgentKind {
-  if (typeof localStorage === 'undefined') return 'claude'
-  return localStorage.getItem('multiagent:lastAgent') === 'codex' ? 'codex' : 'claude'
-}
-
-function rememberAgent(agentKind: AgentKind): void {
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('multiagent:lastAgent', agentKind)
-  }
-}
-
-export type ShellSpawnMode = 'current' | 'choose'
-
-function initialLastShellSpawnMode(): ShellSpawnMode {
-  if (typeof localStorage === 'undefined') return 'current'
-  return localStorage.getItem('multiagent:lastShellSpawnMode') === 'choose' ? 'choose' : 'current'
-}
-
-function rememberShellSpawnMode(mode: ShellSpawnMode): void {
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('multiagent:lastShellSpawnMode', mode)
-  }
 }
 
 function agentIpcErrorMessage(err: unknown, fallback: string): string {
@@ -396,6 +373,28 @@ function hydrateTabForActivation(tabId: string, previousHydrated?: Record<string
   if (!hydrated) void hydrateTabRuntime(tabId, true)
 }
 
+function isSpawnInTabPayload(value: unknown): value is SpawnInTabPayload {
+  if (!value || typeof value !== 'object') return false
+  const payload = value as SpawnInTabPayload
+  return (
+    (payload.paneType === 'agent' || payload.paneType === 'shell') &&
+    (payload.agentKind === undefined || payload.agentKind === 'claude' || payload.agentKind === 'codex') &&
+    typeof payload.cwd === 'string' &&
+    (payload.direction === 'vertical' || payload.direction === 'horizontal')
+  )
+}
+
+function nextDefaultTabLabel(tabs: Tab[]): string {
+  const used = new Set(
+    tabs
+      .map((tab) => tab.customLabel?.trim().toLowerCase())
+      .filter((label): label is string => !!label)
+  )
+  let n = tabs.length + 1
+  while (used.has(`tab ${n}`)) n++
+  return `Tab ${n}`
+}
+
 export const RECENT_SECTION_ID = 'recent'
 
 export function tabSidebarSectionId(tabId: string): string {
@@ -436,8 +435,6 @@ interface PanesStore {
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
   settingsOpen: boolean
-  lastAgentKind: AgentKind
-  lastShellSpawnMode: ShellSpawnMode
   vsCodeAvailable: boolean
   setVsCodeAvailable: (available: boolean) => void
   cwdGitBranches: Record<string, { status: 'loading' | 'ready'; branch: string | null }>
@@ -463,6 +460,7 @@ interface PanesStore {
   focusLocalPaneFromSidebar: (tabId: string, paneId: string) => void
   focusDetachedPaneOptimistically: (windowId: number, tabId: string, paneId?: string) => void
   splitPane: (paneId: string, direction: SplitDirection, paneType?: PaneType, cwdOverride?: string, agentKind?: AgentKind) => Promise<void>
+  spawnInTab: (tabId: string, opts: { paneType: PaneType; agentKind?: AgentKind; cwd: string; direction: SplitDirection }) => Promise<void>
   closePane: (paneId: string) => void
   closePaneInTab: (tabId: string, paneId: string) => void
   zoomPane: (paneId: string) => void
@@ -481,8 +479,6 @@ interface PanesStore {
   startNewAgentInPane: (paneId: string) => Promise<void>
   newSession: (cwd: string, direction?: SplitDirection, agentKind?: AgentKind) => Promise<void>
   addShellPane: (cwd: string, direction?: SplitDirection) => Promise<void>
-  setLastAgentKind: (agentKind: AgentKind) => void
-  setLastShellSpawnMode: (mode: ShellSpawnMode) => void
   setPaneCwd: (ptyId: string, cwd: string) => void
   setPaneCustomName: (paneId: string, name: string) => void
 
@@ -510,6 +506,121 @@ interface PanesStore {
   getFocusedPane: () => PaneLeaf | undefined
   findPane: (paneId: string) => PaneLeaf | undefined
   findPaneBySessionId: (agentKind: AgentKind, sessionId: string) => PaneLeaf | undefined
+}
+
+type PanesGet = () => PanesStore
+type PanesSet = (
+  partial: Partial<PanesStore> | PanesStore | ((state: PanesStore) => Partial<PanesStore> | PanesStore)
+) => void
+
+interface SpawnPaneCoreArgs {
+  tabId: string
+  basePaneId: string | null
+  paneType: PaneType
+  agentKind?: AgentKind
+  cwd: string
+  direction: SplitDirection
+}
+
+function findTabContainingPane(tabs: Tab[], paneId: string): { tab: Tab; pane: PaneLeaf } | null {
+  for (const tab of tabs) {
+    if (!tab.rootNode) continue
+    const pane = findLeaf(tab.rootNode, paneId)
+    if (pane) return { tab, pane }
+  }
+  return null
+}
+
+function lastLeafInTab(tab: Tab): PaneLeaf | null {
+  if (!tab.rootNode) return null
+  const leaves = collectLeaves(tab.rootNode)
+  return leaves[leaves.length - 1] ?? null
+}
+
+function liveBasePaneId(tab: Tab): string | null {
+  if (!tab.rootNode || !tab.focusedPaneId) return lastLeafInTab(tab)?.id ?? null
+  return findLeaf(tab.rootNode, tab.focusedPaneId)?.id ?? lastLeafInTab(tab)?.id ?? null
+}
+
+async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: AgentKind, cwd: string, extraFailurePatch: Partial<PaneLeaf> = {}): Promise<void> {
+  if (typeof window === 'undefined' || !window.ipc) return
+  try {
+    const result = await window.ipc.invoke('session:new', agentKind, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
+    const patch: Partial<PaneLeaf> = {
+      agentDisconnected: undefined,
+      resumeError: undefined,
+      sessionDetectionError: undefined,
+    }
+    if (result?.ptyId) patch.ptyId = result.ptyId
+    if (typeof result?.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
+    if (result?.sessionId) {
+      patch.sessionId = result.sessionId
+      patch.sessionDetectionState = 'detected'
+      patch.sessionDetectionError = undefined
+    } else {
+      patch.sessionDetectionState = 'pending'
+    }
+    get().updatePane(paneId, patch)
+  } catch (err) {
+    console.error('session:new IPC failed', err)
+    const message = agentIpcErrorMessage(err, 'Session detection failed to start')
+    get().updatePane(paneId, {
+      sessionDetectionState: 'failed',
+      sessionDetectionError: message,
+      resumeError: message,
+      ...extraFailurePatch,
+    })
+  }
+}
+
+async function spawnPaneCore(get: PanesGet, set: PanesSet, args: SpawnPaneCoreArgs): Promise<void> {
+  const resolvedAgent = args.paneType === 'agent' ? (args.agentKind ?? DEFAULT_AGENT_KIND) : undefined
+  const newLeaf = args.paneType === 'agent'
+    ? markSessionDetectionPending(makeLeaf(args.cwd, args.paneType, resolvedAgent))
+    : makeLeaf(args.cwd, args.paneType)
+
+  set((s) => {
+    let foundTab = false
+    const tabs = s.tabs.map((tab) => {
+      if (tab.id !== args.tabId) return tab
+      foundTab = true
+      if (!tab.rootNode) return { ...tab, rootNode: newLeaf, focusedPaneId: newLeaf.id }
+
+      const baseLeaf = args.basePaneId ? findLeaf(tab.rootNode, args.basePaneId) : null
+      const fallbackLeaf = baseLeaf ?? lastLeafInTab(tab)
+      if (!fallbackLeaf) return { ...tab, rootNode: newLeaf, focusedPaneId: newLeaf.id }
+
+      const split = makeSplit(args.direction, fallbackLeaf, newLeaf)
+      return {
+        ...tab,
+        rootNode: replaceNode(tab.rootNode, fallbackLeaf.id, split),
+        focusedPaneId: newLeaf.id,
+      }
+    })
+
+    if (!foundTab) return s
+    return {
+      tabs,
+      activeTabId: args.tabId,
+      hydratedTabIds: markHydrated(s.hydratedTabIds, args.tabId),
+      sidebarSectionOpen: {
+        ...s.sidebarSectionOpen,
+        [tabSidebarSectionId(args.tabId)]: true,
+      },
+      localFocusArmed: true,
+    }
+  })
+
+  focusTerminalWhenMounted(newLeaf.id)
+  const current = get()
+  if (current.isDetachedWindow && current.windowId !== null && typeof window !== 'undefined' && window.ipc) {
+    window.ipc.send('pane:focus-changed', current.windowId, args.tabId, newLeaf.id)
+  }
+  reportCurrentFocusTarget()
+
+  if (args.paneType === 'agent' && resolvedAgent) {
+    await runNewAgentSession(get, newLeaf.id, resolvedAgent, args.cwd)
+  }
 }
 
 export const usePanesStore = create<PanesStore>((set, get) => ({
@@ -771,8 +882,6 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
   settingsOpen: false,
-  lastAgentKind: initialLastAgent(),
-  lastShellSpawnMode: initialLastShellSpawnMode(),
   vsCodeAvailable: false,
   setVsCodeAvailable: (available: boolean) => set({ vsCodeAvailable: available }),
   cwdGitBranches: {},
@@ -814,7 +923,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setPendingRenameTabId: (id) => set({ pendingRenameTabId: id }),
 
   addTab: (defaultCwd?: string, name?: string) => {
-    const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined, customLabel: name || undefined }
+    const customLabel = name?.trim() || nextDefaultTabLabel(get().tabs)
+    const tab: Tab = { id: uuid(), focusedPaneId: '', defaultCwd: defaultCwd || undefined, customLabel }
     set((s) => ({
       tabs: [...s.tabs, tab],
       activeTabId: tab.id,
@@ -1035,55 +1145,37 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   splitPane: async (paneId, direction, paneType, cwdOverride, agentKind) => {
-    const existing = get().findPane(paneId)
-    const tab = get().activeTab()
+    const found = findTabContainingPane(get().tabs, paneId)
+    const activeTab = get().activeTab()
+    const targetTab = found?.tab ?? activeTab
+    if (!targetTab) return
+    const existing = found?.pane
     const resolvedType: PaneType = paneType ?? existing?.paneType ?? 'shell'
     const resolvedAgent = resolvedType === 'agent'
-      ? (agentKind ?? existing?.agentKind ?? get().lastAgentKind)
+      ? (agentKind ?? existing?.agentKind ?? DEFAULT_AGENT_KIND)
       : undefined
-    const cwd = cwdOverride ?? existing?.cwd ?? tab?.defaultCwd ?? 'C:\\'
-    const newLeaf = resolvedType === 'agent'
-      ? markSessionDetectionPending(makeLeaf(cwd, resolvedType, resolvedAgent))
-      : makeLeaf(cwd, resolvedType, resolvedAgent)
-
-    set((s) => {
-      const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId) return t
-        if (!t.rootNode) return t
-        const existingNode = findLeaf(t.rootNode, paneId)
-        if (!existingNode) return t
-        const split = makeSplit(direction, existingNode, newLeaf)
-        const rootNode = replaceNode(t.rootNode, paneId, split)
-        return { ...t, rootNode, focusedPaneId: newLeaf.id }
-      })
-      return { tabs }
+    const cwd = cwdOverride ?? existing?.cwd ?? targetTab.defaultCwd ?? 'C:\\'
+    await spawnPaneCore(get, set, {
+      tabId: targetTab.id,
+      basePaneId: found ? paneId : liveBasePaneId(targetTab),
+      paneType: resolvedType,
+      agentKind: resolvedAgent,
+      cwd,
+      direction,
     })
-    focusTerminalWhenMounted(newLeaf.id)
+  },
 
-    if (resolvedType === 'agent' && resolvedAgent && typeof window !== 'undefined' && window.ipc) {
-      get().setLastAgentKind(resolvedAgent)
-      try {
-        const result = await window.ipc.invoke('session:new', resolvedAgent, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
-        const patch: Partial<PaneLeaf> = {}
-        if (result?.ptyId) patch.ptyId = result.ptyId
-        if (typeof result?.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
-        if (result?.sessionId) {
-          patch.sessionId = result.sessionId
-          patch.sessionDetectionState = 'detected'
-          patch.sessionDetectionError = undefined
-        }
-        if (Object.keys(patch).length > 0) get().updatePane(newLeaf.id, patch)
-      } catch (err) {
-        console.error('session:new IPC failed', err)
-        const message = agentIpcErrorMessage(err, 'Session detection failed to start')
-        get().updatePane(newLeaf.id, {
-          sessionDetectionState: 'failed',
-          sessionDetectionError: message,
-          resumeError: message,
-        })
-      }
-    }
-    // shell panes: Terminal handles pty:create automatically on mount
+  spawnInTab: async (tabId, opts) => {
+    const tab = get().tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    await spawnPaneCore(get, set, {
+      tabId,
+      basePaneId: liveBasePaneId(tab),
+      paneType: opts.paneType,
+      agentKind: opts.agentKind,
+      cwd: opts.cwd,
+      direction: opts.direction,
+    })
   },
 
   closePane: (paneId) => {
@@ -1247,18 +1339,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  setLastAgentKind: (agentKind) => {
-    rememberAgent(agentKind)
-    set({ lastAgentKind: agentKind })
-  },
-
-  setLastShellSpawnMode: (mode) => {
-    rememberShellSpawnMode(mode)
-    set({ lastShellSpawnMode: mode })
-  },
-
   resumeSession: async (agentKind, sessionId, cwd) => {
-    get().setLastAgentKind(agentKind)
     const leaf = makeLeaf(cwd, 'agent', agentKind)
     leaf.sessionId = sessionId
     let targetTabId = ''
@@ -1300,7 +1381,6 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   resumeSessionInNewTab: async (agentKind, sessionId, cwd) => {
-    get().setLastAgentKind(agentKind)
     const leaf = makeLeaf(cwd, 'agent', agentKind)
     leaf.sessionId = sessionId
     const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
@@ -1333,7 +1413,6 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return
     }
     const { agentKind, sessionId, cwd } = pane
-    get().setLastAgentKind(agentKind)
     get().updatePane(paneId, {
       ptyId: undefined,
       agentDisconnected: undefined,
@@ -1369,7 +1448,6 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const pane = get().findPaneInAnyTab(paneId)
     if (!pane || pane.paneType !== 'agent' || !pane.agentKind) return
     const { agentKind, cwd } = pane
-    get().setLastAgentKind(agentKind)
     get().updatePane(paneId, {
       ptyId: undefined,
       sessionId: undefined,
@@ -1380,102 +1458,44 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       sessionDetectionCwd: cwd,
       sessionDetectionError: undefined,
     })
-    try {
-      const result = await window.ipc.invoke('session:new', agentKind, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
-      const patch: Partial<PaneLeaf> = {
-        ptyId: result.ptyId,
-        agentDisconnected: undefined,
-        resumeError: undefined,
-        sessionDetectionError: undefined,
-      }
-      if (typeof result.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
-      if (result.sessionId) {
-        patch.sessionId = result.sessionId
-        patch.sessionDetectionState = 'detected'
-      } else {
-        patch.sessionDetectionState = 'pending'
-      }
-      get().updatePane(paneId, patch)
-    } catch (err) {
-      console.error('session:new IPC failed', err)
-      const message = agentIpcErrorMessage(err, 'Session detection failed to start')
-      get().updatePane(paneId, {
-        sessionDetectionState: 'failed',
-        sessionDetectionError: message,
-        resumeError: message,
-        agentDisconnected: pane.agentDisconnected,
-      })
-    }
+    await runNewAgentSession(get, paneId, agentKind, cwd, { agentDisconnected: pane.agentDisconnected })
   },
 
   newSession: async (cwd, direction = 'vertical', agentKind) => {
-    const resolvedAgent = agentKind ?? get().lastAgentKind
-    get().setLastAgentKind(resolvedAgent)
-    const leaf = markSessionDetectionPending(makeLeaf(cwd, 'agent', resolvedAgent))
-    set((s) => {
-      if (s.tabs.length === 0) {
-        const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
-        return {
-          tabs: [tab],
-          activeTabId: tab.id,
-          hydratedTabIds: markHydrated(s.hydratedTabIds, tab.id),
-          sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
-        }
-      }
-      const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId) return t
-        if (!t.rootNode) return { ...t, rootNode: leaf, focusedPaneId: leaf.id }
-        const split = makeSplit(direction, t.rootNode, leaf)
-        return { ...t, rootNode: split, focusedPaneId: leaf.id }
-      })
-      return { tabs, hydratedTabIds: s.activeTabId ? markHydrated(s.hydratedTabIds, s.activeTabId) : s.hydratedTabIds }
-    })
-    focusTerminalWhenMounted(leaf.id)
-    if (typeof window !== 'undefined' && window.ipc) {
-      try {
-        const result = (await window.ipc.invoke('session:new', resolvedAgent, cwd)) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
-        const patch: Partial<PaneLeaf> = {}
-        if (result?.ptyId) patch.ptyId = result.ptyId
-        if (typeof result?.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
-        if (result?.sessionId) {
-          patch.sessionId = result.sessionId
-          patch.sessionDetectionState = 'detected'
-          patch.sessionDetectionError = undefined
-        }
-        if (Object.keys(patch).length > 0) get().updatePane(leaf.id, patch)
-      } catch (err) {
-        console.error('session:new IPC failed', err)
-        const message = agentIpcErrorMessage(err, 'Session detection failed to start')
-        get().updatePane(leaf.id, {
-          sessionDetectionState: 'failed',
-          sessionDetectionError: message,
-          resumeError: message,
-        })
-      }
+    let tabId = get().activeTabId
+    if (get().tabs.length === 0) {
+      const tab: Tab = { id: uuid(), focusedPaneId: '' }
+      tabId = tab.id
+      set({ tabs: [tab], activeTabId: tab.id })
     }
+    const tab = get().tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    await spawnPaneCore(get, set, {
+      tabId,
+      basePaneId: liveBasePaneId(tab),
+      paneType: 'agent',
+      agentKind: agentKind ?? DEFAULT_AGENT_KIND,
+      cwd,
+      direction,
+    })
   },
 
   addShellPane: async (cwd, direction = 'vertical') => {
-    const leaf = makeLeaf(cwd, 'shell')
-    set((s) => {
-      if (s.tabs.length === 0) {
-        const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
-        return {
-          tabs: [tab],
-          activeTabId: tab.id,
-          hydratedTabIds: markHydrated(s.hydratedTabIds, tab.id),
-          sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
-        }
-      }
-      const tabs = s.tabs.map((t) => {
-        if (t.id !== s.activeTabId) return t
-        if (!t.rootNode) return { ...t, rootNode: leaf, focusedPaneId: leaf.id }
-        const split = makeSplit(direction, t.rootNode, leaf)
-        return { ...t, rootNode: split, focusedPaneId: leaf.id }
-      })
-      return { tabs, hydratedTabIds: s.activeTabId ? markHydrated(s.hydratedTabIds, s.activeTabId) : s.hydratedTabIds }
+    let tabId = get().activeTabId
+    if (get().tabs.length === 0) {
+      const tab: Tab = { id: uuid(), focusedPaneId: '' }
+      tabId = tab.id
+      set({ tabs: [tab], activeTabId: tab.id })
+    }
+    const tab = get().tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    await spawnPaneCore(get, set, {
+      tabId,
+      basePaneId: liveBasePaneId(tab),
+      paneType: 'shell',
+      cwd,
+      direction,
     })
-    focusTerminalWhenMounted(leaf.id)
   },
 
   applyLayout: async (saved) => {
@@ -1858,9 +1878,7 @@ if (typeof window !== 'undefined' && window.ipc) {
       const leaves = collectLeaves(tab.rootNode)
       const pane = leaves.find((l) => l.ptyId === ptyId)
       if (pane) {
-        rememberAgent(agentKind)
         usePanesStore.setState((s) => ({
-          lastAgentKind: agentKind,
           tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, pane.id, {
             sessionId,
             sessionDetectionState: 'detected',
@@ -1968,6 +1986,18 @@ if (typeof window !== 'undefined' && window.ipc) {
         })
       })
     }
+  })
+
+  window.ipc.on('tab:spawn-in-project-remote', (tabId: unknown, payload: unknown, requestId: unknown) => {
+    if (typeof tabId !== 'string' || typeof requestId !== 'string' || !isSpawnInTabPayload(payload)) return
+    usePanesStore.getState().spawnInTab(tabId, payload)
+      .then(() => {
+        window.ipc.send('tab:spawn-in-project-applied', requestId, true)
+      })
+      .catch((err) => {
+        console.error('tab:spawn-in-project-remote failed', err)
+        window.ipc.send('tab:spawn-in-project-applied', requestId, false)
+      })
   })
 
   // Immediate focus update from a detached window — updates the synced tab's

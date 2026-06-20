@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import type { PaneLeaf, Session, Tab } from '../../../../shared/types'
+import type { PaneLeaf, Session, SpawnInTabPayload, SplitDirection, Tab } from '../../../../shared/types'
 import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
@@ -7,12 +7,16 @@ import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabe
 import { displayGitBranch } from '../../utils/git'
 import { decodePaneDragPayload, encodePaneDragPayload, PANE_DRAG_MIME, type PaneDragPayload } from '../../utils/paneDrag'
 import { DirPicker } from '../DirPicker'
+import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnChoiceMenu'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { border, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
 import closeIcon from '../../assets/close.png'
 import threeDotIcon from '../../assets/threedot.png'
+import addBoxIcon from '../../assets/addbox.png'
+
+const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -35,6 +39,7 @@ export function TabSections(): JSX.Element {
   const localFocusArmed = usePanesStore((s) => s.localFocusArmed)
   const focusDetachedPaneOptimistically = usePanesStore((s) => s.focusDetachedPaneOptimistically)
   const focusLocalPaneFromSidebar = usePanesStore((s) => s.focusLocalPaneFromSidebar)
+  const spawnInTab = usePanesStore((s) => s.spawnInTab)
   // Which window is effectively active: pending remote click wins, otherwise OS focus.
   // Only one window shows a highlighted pane at a time — confirmedFocusTarget is
   // intentionally excluded so that OS focus changes immediately de-highlight the old window.
@@ -47,11 +52,15 @@ export function TabSections(): JSX.Element {
 
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
   const [dirPickerTabId, setDirPickerTabId] = useState<string | null>(null)
+  const [spawnMenu, setSpawnMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  const [dirPickerSpawn, setDirPickerSpawn] = useState<{ tabId: string; choice: SpawnChoice; direction: SplitDirection } | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [dropTabId, setDropTabId] = useState<string | null>(null)
 
   const dirPickerTab = dirPickerTabId ? tabs.find((t) => t.id === dirPickerTabId) : null
+  const spawnMenuTab = spawnMenu ? tabs.find((t) => t.id === spawnMenu.tabId) : null
+  const dirPickerSpawnTab = dirPickerSpawn ? tabs.find((t) => t.id === dirPickerSpawn.tabId) : null
 
   function startRename(tabId: string) {
     setRenameValue(tabLabels.get(tabId) ?? '')
@@ -73,6 +82,22 @@ export function TabSections(): JSX.Element {
       return
     }
     window.ipc?.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId }).catch(console.error)
+  }
+
+  function projectCwd(tab: Tab): string {
+    if (tab.defaultCwd) return tab.defaultCwd
+    if (!tab.rootNode) return DEFAULT_CWD
+    const leaves = collectLeaves(tab.rootNode)
+    const focused = leaves.find((pane) => pane.id === tab.focusedPaneId)
+    return focused?.cwd ?? leaves[leaves.length - 1]?.cwd ?? DEFAULT_CWD
+  }
+
+  function spawnInProject(tab: Tab, payload: SpawnInTabPayload): void {
+    if (tab.detached) {
+      window.ipc?.invoke('tab:spawn-in-project', tab.id, payload).catch(console.error)
+      return
+    }
+    void spawnInTab(tab.id, payload)
   }
 
   useEffect(() => {
@@ -128,6 +153,11 @@ export function TabSections(): JSX.Element {
                   closeTitle="Close tab"
                   onMenu={(e) => setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
                   onClose={() => closeTab(tab.id)}
+                />
+              }
+              headerActionsAlways={
+                <ProjectSpawnButton
+                  onClick={(e) => setSpawnMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
                 />
               }
               titleSuffix={
@@ -207,6 +237,11 @@ export function TabSections(): JSX.Element {
                 onClose={() => closeTab(tab.id)}
               />
             }
+            headerActionsAlways={
+              <ProjectSpawnButton
+                onClick={(e) => setSpawnMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
+              />
+            }
             headerDropActive={dropTabId === tab.id}
             onHeaderDragOver={(e) => {
               if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
@@ -269,6 +304,40 @@ export function TabSections(): JSX.Element {
           autoBrowse
           onConfirm={(dir) => { setTabDefaultCwd(dirPickerTabId, dir); setDirPickerTabId(null) }}
           onSkip={() => setDirPickerTabId(null)}
+        />
+      )}
+
+      {spawnMenu && spawnMenuTab && (
+        <SpawnChoiceMenu
+          x={spawnMenu.x}
+          y={spawnMenu.y}
+          currentDirLabel="In project directory"
+          onClose={() => setSpawnMenu(null)}
+          onSpawn={(choice, direction) => {
+            spawnInProject(spawnMenuTab, { ...choice, cwd: projectCwd(spawnMenuTab), direction })
+            setSpawnMenu(null)
+          }}
+          onBrowse={(choice, direction) => {
+            setDirPickerSpawn({ tabId: spawnMenu.tabId, choice, direction })
+            setSpawnMenu(null)
+          }}
+        />
+      )}
+
+      {dirPickerSpawn && dirPickerSpawnTab && (
+        <DirPicker
+          title={`Start ${spawnChoiceLabel(dirPickerSpawn.choice)} in...`}
+          initial={projectCwd(dirPickerSpawnTab)}
+          confirmLabel="Start"
+          skipLabel="Cancel"
+          autoBrowse
+          onConfirm={(dir) => {
+            const { tabId, choice, direction } = dirPickerSpawn
+            const tab = tabs.find((t) => t.id === tabId)
+            if (tab) spawnInProject(tab, { ...choice, cwd: dir, direction })
+            setDirPickerSpawn(null)
+          }}
+          onSkip={() => setDirPickerSpawn(null)}
         />
       )}
     </>
@@ -513,6 +582,20 @@ function SidebarHoverActions({
       <SidebarIconButton title={menuTitle} icon={threeDotIcon} onClick={onMenu} />
       <SidebarIconButton title={closeTitle} icon={closeIcon} onClick={onClose} />
     </>
+  )
+}
+
+function ProjectSpawnButton({
+  onClick,
+}: {
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
+}): JSX.Element {
+  return (
+    <SidebarIconButton
+      title="Start in project"
+      icon={addBoxIcon}
+      onClick={onClick}
+    />
   )
 }
 
