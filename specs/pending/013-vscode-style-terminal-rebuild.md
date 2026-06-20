@@ -1,15 +1,28 @@
 # 013 - VS Code-style terminal rebuild
 
-Status: **Working idea found and shipped for shell panes; agent panes not yet aligned.**
+Status: **Shell fix shipped and stable. Worker unification ATTEMPTED AND REVERTED — not viable.**
 Supersedes `specs/done/012-conpty-no-scroll-output-loss.md` as the implementation direction. Spec
 012 remains the historical record of why the bug is the *pane code path*, not the environment.
 
-The original symptom is fixed for normal shell panes: `git pull` in an up-to-date repo now prints
-`Already up to date.` and `echo hi` at the top of a fresh viewport now prints `hi`. This was
-achieved by building a real, VS Code-shaped **direct** path for shell panes instead of grafting
-onto the agent pipeline. The remaining work — and the new definition of done — is to **migrate the
-agent (Claude/Codex) panes onto the same rendering path** so we do not keep two diverging terminal
-stacks that can silently re-break shell output.
+The original symptom is fixed for normal shell panes: `git pull` in an up-to-date repo prints
+`Already up to date.` and `echo hi` at the top of a fresh viewport prints `hi`. This was achieved by
+building a VS Code-shaped **direct** path for shell panes (`ShellPtyHost` + `shellWorker`) instead
+of grafting onto the agent pipeline.
+
+> ⚠️ **Do not try to merge shell + agent into one worker process.** Commit `27ec130` attempted
+> exactly that: a single `PtyManager` + `ptyWorker`, with shell vs agent reduced to a per-PTY
+> `flowControl` policy (shell = seq=0 direct relay, agent = coalesce/ack). It kept the identical
+> seq=0 direct write, the identical renderer, and identical ConPTY spawn config — **and the
+> `git pull` no-scroll drop returned immediately on the Win11 target.** It was reverted (commit
+> `defaf3a`). Conclusion: **the dedicated `shellWorker` *process* is load-bearing**, not just the
+> direct data policy. This is consistent with spec 012's note that a direct `pty:data` send through
+> the `ptyManager`/`ptyWorker` path *still dropped*. Shell and agents must keep **separate worker
+> processes**. You may share host contracts/types and renderer code; you may NOT share the worker.
+
+What is still legitimately open: aligning the *shared, safe* pieces (renderer xterm setup, ready
+gating, OSC 633 CWD, resize debouncer — already shared) and reducing duplicated host/worker
+*code* (not process) if it can be done without merging the processes. The original "migrate agents
+onto one worker" goal is abandoned.
 
 Reference local repo: `C:\Users\cdhan\Desktop\vscode` (confirmed present). Key files listed under
 "VS Code baseline" below.
@@ -109,7 +122,7 @@ Non-negotiables when touching the terminal stack:
 
 ---
 
-## 3. Current architecture — two paths exist (the problem)
+## 3. Current architecture — two paths (intentional; do not merge the workers)
 
 Shell and agent panes now share the IPC surface (`pty:*`, `pty:ready`, `pty:cwd`, window routing,
 close/transfer) but run on **different hosts, workers, data flows, and xterm lifecycles**:
@@ -149,24 +162,25 @@ File map of the change set (current branch, untracked + modified):
 
 ---
 
-## 4. Known gaps / risks introduced by the dual path
+## 4. Known gaps / risks in the (intentional) dual-worker design
 
 - **G1 — FIXED.** Shell xterm used to `dispose()` on unmount, losing scrollback across tab
   switches / pane moves / layout remounts. Shell panes now go through `xtermRegistry` like agent
   panes (registry defers `open()` until attach), so the instance and its full scrollback survive
   remounts and are disposed only on explicit `closePane`. The shell write path (seq===0 direct
   `terminal.write`) is unchanged.
-- **G2 — duplicated handler blocks.** `handlers.ts` has near-identical `on('data')`,
-  `on('ready')`, and `on('exit')` blocks for `ptyManager` and `shellPtyHost`. Easy to fix one and
-  forget the other. Unify behind one host interface.
-- **G3 — duplicated worker logic.** `windowsBuildNumber`, conpty flags, ready/pid handling, and
-  the spawn/queue scaffolding are copy-pasted across `ptyWorker.ts` and `shellWorker.ts`.
-- **G4 — dead `PtyManager.createShell`.** Shell panes go through `ShellPtyHost`; `createShell` /
-  `_shellCmd` are now unused for production shell panes (agents use `createDeferred`). Remove or
-  fold in once the host is unified, so future readers don't wire shell panes back through it.
-- **G5 — agent panes still on the suspect stack.** They have not been proven against the spec 012
-  symptom. Low-volume agent output at the top of a fresh viewport could in principle drop the same
-  way. The migration is what closes this.
+- **G2 — duplicated handler blocks (ACCEPTED).** `handlers.ts` has near-identical `on('data')`,
+  `on('ready')`, `on('exit')` blocks for `ptyManager` and `shellPtyHost`. Tempting to "unify behind
+  one host," but that path leads to merging the workers — which is what broke it. Acceptable
+  duplication; optionally share a *helper* without merging the hosts/processes.
+- **G3 — duplicated worker logic (ACCEPTED).** `windowsBuildNumber`, conpty flags, ready/pid
+  handling exist in both `ptyWorker.ts` and `shellWorker.ts`. May be deduped into a shared imported
+  module, but the two must stay separate entrypoints / separate processes.
+- **G4 — `PtyManager.createShell` is dead for production shell panes.** Shell panes go through
+  `ShellPtyHost`; `createShell`/`_shellCmd` are unused (agents use `createDeferred`). Safe to leave;
+  if removed, do not re-route shell panes through `PtyManager` to compensate.
+- **G5 — agent panes use flow control (by design).** They have not shown the spec 012 symptom in
+  practice (their output volume is exactly why flow control exists). Not a defect; just noted.
 
 ---
 
@@ -188,44 +202,32 @@ Reference local repo: `C:\Users\cdhan\Desktop\vscode`. Key files:
 
 ---
 
-## 6. New definition of done — fully migrate and align onto the working path
+## 6. Definition of done — keep two workers; align only the safe pieces
 
-The goal is no longer "make shell work" (done) — it is **one terminal rendering path** that both
-shell and agent panes use, shaped like VS Code's, so the working behavior cannot drift apart.
+The earlier goal of **one worker / one host** is abandoned (see the warning at the top): merging
+the worker processes reintroduces the no-scroll drop. Shell stays on `shellWorker`, agents stay on
+`ptyWorker`. The remaining, *safe* alignment is already largely in place and should be preserved:
 
-Target end state:
+1. **Two worker processes — keep them.** `ShellPtyHost`/`shellWorker` for shell, `PtyManager`/
+   `ptyWorker` for agents. Do NOT collapse them. This is the non-negotiable constraint from the
+   reverted `27ec130` experiment.
+2. **Shared renderer data switch.** The renderer keeps `seq===0 → terminal.write` (shell, direct)
+   vs `enqueueOutput → slice-write → ack` (agent). Main routes shell via `sendDirectPtyOutput`
+   (`shellPtyHost.on('data')`) and agents via `enqueuePtyOutput` (`ptyManager.on('data')`).
+3. **One xterm lifecycle (done).** Both pane types share the registry; scrollback survives
+   remounts (G1 fixed).
+4. **Ready-gated ConPTY setup, OSC 633 CWD, VS Code resize debouncer** — shared model for both
+   pane types. Keep it.
+5. **Agent throughput unaffected.** Codex/Claude output stays smooth; resume/start still work.
 
-1. **One pty-host primitive + one worker.** Collapse `ShellPtyHost`/`shellWorker` and
-   `PtyManager`/`ptyWorker` into a single host contract (`create/write/resize/kill` +
-   `data/ready/exit/error`, ConPTY traits, ready-when-pid) with one worker implementation.
-   Shell vs agent differ by **policy passed in**, not by a parallel stack. Resolve G3, G4.
-2. **One renderer data path.** Default everything to the synchronous direct write
-   (the seq===0 behavior). If flow control is still required for high-volume agent output, it
-   must be an **opt-in policy behind the host contract** and proven to leave shell output
-   untouched — not a separate renderer branch. Remove the duplicated handler blocks (G2).
-3. **One xterm lifecycle.** Done — both pane types share the registry creation/attach/detach
-   model and preserve scrollback across remounts (G1 fixed). Keep it unified as the host work
-   lands.
-4. **Ready-gated ConPTY setup, OSC 633 CWD, VS Code resize debouncer** remain the shared model for
-   both pane types (already true; keep it that way).
-5. **Agent throughput unaffected.** Codex/Claude output stays smooth; resume/start still work; no
-   flicker regressions from the Codex TUI flags.
-6. Bare Term / `shellterm:*` scaffolding stays removed; durable lessons live in `CLAUDE.md`
-   (already updated for the dual-path reality — update again when paths unify).
+### Optional cleanup (low priority, code-only — NOT process)
 
-### Migration plan
-
-1. Define the unified host interface and move `ptyWorker`/`shellWorker` onto one worker with a
-   `flowControl: boolean` (or similar) spawn option. Keep shell = no flow control.
-2. Unify the `handlers.ts` data/ready/exit handlers onto the single host; keep the seq===0 direct
-   write as the default and gate coalesce/ack on the policy flag.
-3. Xterm lifecycle already unified (both pane types on the registry, G1 fixed); just keep it that
-   way as the host/worker collapse lands.
-4. Delete dead `PtyManager.createShell`/`_shellCmd` shell branch once nothing routes through it.
-5. Re-verify the full test plan with both pane types before removing any old code.
-
-Migrate incrementally and re-run the test plan after **each** step — the seq===0 direct-write
-contract (section 2) is the thing most likely to be lost in a refactor.
+If duplicated *code* between `ptyWorker.ts`/`shellWorker.ts` (e.g. `windowsBuildNumber`, conpty
+flags, ready-when-pid) is worth deduping, extract a shared module they both `import` — but they
+must remain two distinct entrypoints producing two distinct worker processes. Likewise the
+duplicated `on('data'|'ready'|'exit')` blocks in `handlers.ts` may share a helper, as long as
+shell data still goes through `sendDirectPtyOutput` from `shellPtyHost`. Re-run the full Test plan
+on the Win11 target after any such change — the `git pull` no-scroll case is the canary.
 
 ---
 
