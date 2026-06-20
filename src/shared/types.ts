@@ -148,6 +148,15 @@ export interface PaneTransferPayload {
   targetWindowId?: number
 }
 
+export interface PtyReadyMetadata {
+  pid: number | null
+  cwd: string
+  windowsPty?: {
+    backend: 'conpty'
+    buildNumber: number
+  }
+}
+
 // Full app state shape (used by renderer Zustand store)
 export interface AppState {
   tabs: Tab[]
@@ -209,7 +218,10 @@ export interface IPCChannels {
 
   // --- PTY ---
   // Create a PTY (for shell panes)
-  'pty:create': (cwd: string) => { ptyId: string }
+  'pty:create': (cwd: string, cols?: number, rows?: number) => { ptyId: string }
+
+  // Fetch cached ready metadata in case the live pty:ready event was missed
+  'pty:get-ready': (ptyId: string) => PtyReadyMetadata | null
 
   // Write data to a PTY
   'pty:write': (ptyId: string, data: string) => void
@@ -225,6 +237,9 @@ export interface IPCChannels {
 
   // Main pushes PTY output to renderer
   'pty:data': (ptyId: string, data: string, seq: number, byteLength: number) => void
+
+  // Main notifies renderer when the PTY process is ready
+  'pty:ready': (ptyId: string, event: PtyReadyMetadata) => void
 
   // Main notifies renderer when a PTY exits
   'pty:exit': (ptyId: string, exitCode: number | null, signal?: number) => void
@@ -332,6 +347,7 @@ export type InvokeChannels =
   | 'session:new'
   | 'session:resume'
   | 'pty:create'
+  | 'pty:get-ready'
   | 'pty:kill'
   | 'shell:open-folder'
   | 'shell:open-external'
@@ -367,6 +383,7 @@ export type InvokeChannels =
 export type EventChannels =
   | 'sessions:updated'
   | 'pty:data'
+  | 'pty:ready'
   | 'pty:exit'
   | 'pty:cwd'
   | 'session:detected'

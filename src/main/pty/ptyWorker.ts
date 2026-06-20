@@ -9,7 +9,7 @@
 
 import * as pty from 'node-pty'
 import { existsSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, release } from 'os'
 import { basename } from 'path'
 import { defaultShell } from './shell'
 
@@ -24,10 +24,15 @@ type WorkerMessage =
 type ParentMessage =
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number; signal?: number }
-  | { type: 'ready'; id: string }
+  | { type: 'ready'; id: string; pid: number | null; cwd: string; windowsPty?: WindowsPtyTraits }
   | { type: 'error'; id: string; message: string }
 
 const instances = new Map<string, pty.IPty>()
+
+interface WindowsPtyTraits {
+  backend: 'conpty'
+  buildNumber: number
+}
 
 function send(msg: ParentMessage) {
   process.send!(msg)
@@ -48,6 +53,10 @@ process.on('message', (msg: WorkerMessage) => {
           rows: msg.rows,
           cwd: safeCwd,
           env: msg.env,
+          ...(process.platform === 'win32' ? {
+            useConpty: windowsBuildNumber() >= 18309,
+            conptyInheritCursor: false,
+          } : {}),
         })
 
         ptyProcess.onData((data) => send({ type: 'data', id: msg.id, data }))
@@ -57,7 +66,7 @@ process.on('message', (msg: WorkerMessage) => {
         })
 
         instances.set(msg.id, ptyProcess)
-        send({ type: 'ready', id: msg.id })
+        sendReadyWhenPidIsAvailable(msg.id, ptyProcess, safeCwd)
       } catch (err) {
         send({ type: 'error', id: msg.id, message: String(err) })
       }
@@ -96,4 +105,33 @@ process.on('message', (msg: WorkerMessage) => {
     }
   }
 })
+
+function sendReadyWhenPidIsAvailable(id: string, ptyProcess: pty.IPty, cwd: string): void {
+  const sendReady = () => {
+    send({
+      type: 'ready',
+      id,
+      pid: ptyProcess.pid > 0 ? ptyProcess.pid : null,
+      cwd,
+      windowsPty: process.platform === 'win32'
+        ? { backend: 'conpty', buildNumber: windowsBuildNumber() }
+        : undefined,
+    })
+  }
+
+  if (ptyProcess.pid > 0 || process.platform !== 'win32') {
+    sendReady()
+    return
+  }
+
+  const disposable = ptyProcess.onData(() => {
+    disposable.dispose()
+    sendReady()
+  })
+}
+
+function windowsBuildNumber(): number {
+  const build = Number.parseInt(release().split('.')[2] ?? '0', 10)
+  return Number.isFinite(build) ? build : 0
+}
 

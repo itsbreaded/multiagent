@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
-import type { PaneLeaf } from '../../../../shared/types'
+import type { PaneLeaf, PtyReadyMetadata } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
@@ -36,8 +36,8 @@ const XTERM_THEME = {
 }
 
 const RESIZE_COL_DEBOUNCE_MS = 100
+const RESIZE_DEBOUNCE_BUFFER_THRESHOLD = 200
 const XTERM_WRITE_CHUNK_CHARS = 64 * 1024
-const IS_WINDOWS = navigator.userAgent.includes('Windows')
 const ALT_ENTER_SEQUENCE = '\x1b\r'
 
 interface QueuedOutputPayload {
@@ -122,7 +122,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   useEffect(() => {
     if (!containerRef.current) return
 
-    const entry = xtermRegistry.getOrCreate(pane.id, () => {
+    const createXterm = (): { xterm: XTerm; fitAddon: FitAddon } => {
       const theme = pane.paneType === 'agent'
         ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
         : XTERM_THEME
@@ -156,14 +156,14 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         })
         xterm.loadAddon(webglAddon)
       } catch { /* fall back to xterm's DOM renderer */ }
-      if (IS_WINDOWS) {
-        const buildNumber = parseInt(window.osRelease?.split('.')[2] ?? '0', 10)
-        xterm.options.windowsPty = { backend: 'conpty', buildNumber }
-      }
-
       return { xterm, fitAddon }
-    })
+    }
 
+    // Both shell and agent panes use the registry so the xterm instance (and its
+    // scrollback) survives remounts. The registry defers xterm.open() until the
+    // wrapper is attached to a live container (see xtermRegistry.attach), which is
+    // what made the old "direct open" shell path unnecessary.
+    const entry = xtermRegistry.getOrCreate(pane.id, createXterm)
     // Attach the wrapper div (which xterm opened into) to our container.
     xtermRegistry.attach(pane.id, containerRef.current)
 
@@ -307,22 +307,23 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     shellCreatePaneRef.current = pane.id
     setStatus('connecting')
 
-    window.ipc.invoke('pty:create', pane.cwd)
-      .then((result) => {
-        if (cancelled) return
-        const ptyId = (result as { ptyId?: unknown })?.ptyId
-        if (typeof ptyId !== 'string') throw new Error('PTY creation returned no ptyId')
-        ptyIdRef.current = ptyId
-        setPtyId(pane.id, ptyId)
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          shellCreatePaneRef.current = null
-          setStatus('error')
-          setErrorMsg(String(err))
-        }
-      })
-
+    const fitAndGetSize = (): { cols: number; rows: number } => {
+      try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+      const term = xtermRef.current
+      return { cols: term?.cols ?? 80, rows: term?.rows ?? 24 }
+    }
+    const initialSize = fitAndGetSize()
+    window.ipc.invoke('pty:create', pane.cwd, initialSize.cols, initialSize.rows).then((result) => {
+      if (cancelled) return
+      const ptyId = (result as { ptyId?: unknown } | null)?.ptyId
+      if (typeof ptyId !== 'string') throw new Error('pty:create did not return a ptyId')
+      ptyIdRef.current = ptyId
+      setPtyId(pane.id, ptyId)
+    }).catch((err) => {
+      if (cancelled) return
+      setStatus('error')
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to create terminal')
+    })
     return () => {
       cancelled = true
     }
@@ -355,12 +356,14 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
     let cancelled = false
     let unsubData: (() => void) | undefined
+    let unsubReady: (() => void) | undefined
     let dataDisposable: { dispose(): void } | undefined
     let resizeDisposable: { dispose(): void } | undefined
     let conptyDa1Handler: { dispose(): void } | undefined
     let lastResize: { cols: number; rows: number } | null = null
-    let pendingResizeCols: number | null = null
+    let latestResize: { cols: number; rows: number } | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
+    let suppressResizeUntil = 0
     let queuedOutput: QueuedOutputPayload[] = []
     let writeInFlight = false
 
@@ -401,6 +404,32 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         drainOutput()
       }
 
+      const applyReadyMetadata = (metadata: PtyReadyMetadata): void => {
+        if (cancelled) return
+        if (metadata.windowsPty?.backend === 'conpty') {
+          terminal.options.windowsPty = metadata.windowsPty
+          conptyDa1Handler?.dispose()
+          conptyDa1Handler = terminal.parser.registerCsiHandler({ final: 'c' }, (params) => {
+            if (params.length === 0 || (params.length === 1 && params[0] === 0)) {
+              if (!cancelled) window.ipc.send('pty:write', ptyId, '\x1b[?61;4c')
+              return true
+            }
+            return false
+          })
+        }
+      }
+
+      unsubReady = window.ipc.on('pty:ready', (receivedId: unknown, event: unknown) => {
+        if (receivedId !== ptyId || !event || typeof event !== 'object') return
+        const metadata = event as PtyReadyMetadata
+        if (typeof metadata.cwd === 'string') applyReadyMetadata(metadata)
+      })
+      window.ipc.invoke('pty:get-ready', ptyId).then((event) => {
+        if (!event || typeof event !== 'object') return
+        const metadata = event as PtyReadyMetadata
+        if (typeof metadata.cwd === 'string') applyReadyMetadata(metadata)
+      }).catch(() => {})
+
       unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown, seq: unknown, byteLength: unknown) => {
         if (
           receivedId === ptyId &&
@@ -409,23 +438,18 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
           typeof byteLength === 'number' &&
           !cancelled
         ) {
-          enqueueOutput(data, seq, byteLength)
+          if (seq === 0) {
+            terminal.write(data)
+          } else {
+            enqueueOutput(data, seq, byteLength)
+          }
         }
       })
 
       dataDisposable = terminal.onData((data) => {
-        if (!cancelled) window.ipc.send('pty:write', ptyId, data)
+        if (cancelled) return
+        window.ipc.send('pty:write', ptyId, data)
       })
-
-      conptyDa1Handler = IS_WINDOWS
-        ? terminal.parser.registerCsiHandler({ final: 'c' }, (params) => {
-            if (params.length === 0 || (params.length === 1 && params[0] === 0)) {
-              if (!cancelled) window.ipc.send('pty:write', ptyId, '\x1b[?61;4c')
-              return true
-            }
-            return false
-          })
-        : undefined
 
       const sendResize = (cols: number, rows: number): void => {
         if (lastResize?.cols === cols && lastResize.rows === rows) return
@@ -435,28 +459,44 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
       const flushPendingResize = (): void => {
         pendingResizeTimer = null
-        if (pendingResizeCols === null) return
-        sendResize(pendingResizeCols, terminal.rows)
-        pendingResizeCols = null
+        if (!latestResize) return
+        sendResize(latestResize.cols, latestResize.rows)
+        latestResize = null
       }
 
       const queueResize = ({ cols, rows }: { cols: number; rows: number }): void => {
         if (lastResize?.cols === cols && lastResize.rows === rows) return
-        if (lastResize && lastResize.rows !== rows) {
+        if (Date.now() < suppressResizeUntil) {
+          latestResize = { cols, rows }
+          if (!pendingResizeTimer) pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
+          return
+        }
+        const bufferIsSmall = terminal.buffer.normal.length < RESIZE_DEBOUNCE_BUFFER_THRESHOLD
+        if (!lastResize) {
           if (pendingResizeTimer) {
             clearTimeout(pendingResizeTimer)
             pendingResizeTimer = null
-            pendingResizeCols = null
+            latestResize = null
           }
           sendResize(cols, rows)
           return
         }
 
-        pendingResizeCols = cols
+        if (bufferIsSmall && lastResize.rows === rows) {
+          latestResize = { cols, rows }
+          if (!pendingResizeTimer) pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
+          return
+        }
+
+        if (lastResize.rows !== rows) {
+          sendResize(lastResize.cols, rows)
+        }
+        latestResize = { cols, rows }
         if (pendingResizeTimer) return
         pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
       }
       resizeDisposable = terminal.onResize(queueResize)
+      suppressResizeUntil = Date.now() + 750
       try { fitAddonRef.current?.fit() } catch { /* ignore */ }
       sendResize(terminal.cols, terminal.rows)
     }
@@ -468,6 +508,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       queuedOutput = []
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
+      unsubReady?.()
       dataDisposable?.dispose()
       conptyDa1Handler?.dispose()
       resizeDisposable?.dispose()

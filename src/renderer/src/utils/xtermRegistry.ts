@@ -5,6 +5,7 @@ export interface TerminalEntry {
   xterm: XTerm
   fitAddon: FitAddon
   wrapper: HTMLDivElement
+  opened: boolean
   // Set to true once the PTY data subscription is active.
   // Used to skip the "connecting" overlay on remounts caused by layout changes.
   connected: boolean
@@ -42,9 +43,8 @@ export function getOrCreate(
   const wrapper = document.createElement('div')
   wrapper.style.cssText = 'position:absolute;inset:0'
   getOffscreen().appendChild(wrapper)
-  xterm.open(wrapper)
 
-  const entry: TerminalEntry = { xterm, fitAddon, wrapper, connected: false }
+  const entry: TerminalEntry = { xterm, fitAddon, wrapper, opened: false, connected: false }
   registry.set(paneId, entry)
   return entry
 }
@@ -54,6 +54,10 @@ export function attach(paneId: string, container: HTMLElement): void {
   const entry = registry.get(paneId)
   if (!entry) return
   container.appendChild(entry.wrapper)
+  if (!entry.opened) {
+    entry.xterm.open(entry.wrapper)
+    entry.opened = true
+  }
 }
 
 /** Move the xterm wrapper back to the off-screen holder without disposing it. */

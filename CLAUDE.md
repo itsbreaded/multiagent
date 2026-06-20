@@ -42,7 +42,13 @@ All IPC channel names and their signatures are the single source of truth in `sr
 
 `node-pty` runs in a child process (`src/main/pty/ptyWorker.ts`) spawned with `ELECTRON_RUN_AS_NODE=1`. This prevents Chromium's IPC handles from being inherited into ConPTY, which would crash Claude (a Bun binary). `PtyManager` communicates with the worker over Node IPC (`process.send`/`process.on('message')`).
 
-On Windows, shell panes use `-EncodedCommand` (UTF-16LE base64) to inject a PowerShell prompt wrapper that emits OSC 7 (`\x1b]7;file:///path\x07`) on every prompt. Main process parses these in `parseOsc7()` (in `handlers.ts`) and fires `pty:cwd` events to the renderer for live CWD tracking. Use `[char]27`/`[char]7` in PowerShell scripts - backtick-e (`` `e ``) is unreliable in Windows PowerShell 5.x.
+The terminal stack intentionally follows VS Code's integrated-terminal shape for agent panes. `node-pty` stays isolated in `src/main/pty/ptyWorker.ts`; `PtyManager` is the agent pty-host contract for create/input/resize/kill/data/exit/ready. The worker's ready event carries pid, initial cwd, and Windows ConPTY traits. The renderer must apply xterm `windowsPty` and the DA1 `\x1b[?61;4c` response only after `pty:ready`, not at xterm construction time.
+
+Normal shell panes use `ShellPtyHost` + `shellWorker.ts`, a direct worker relay based on the proven in-app Bare Term path from spec 012. Do not route shell panes back through the agent `PtyManager` batching/ack path; that path repeatedly dropped short no-scroll output such as `git pull -> Already up to date.` on the target Windows machine. Shell panes still use normal pane IDs, `pty:*` IPC, `pty:ready`, `pty:cwd`, window routing, and close/transfer plumbing.
+
+On Windows, shell panes inject `src/main/pty/shellIntegration.ps1`, emitted beside `out/main/index.js` by `electron.vite.config.ts`. The script uses VS Code-style OSC 633 (`OSC 633;P;Cwd=...`) for CWD reporting; main parses it in `handlers.ts` and sends `pty:cwd`. OSC 7 parsing remains only as compatibility fallback. Do not reintroduce ad hoc prompt wrapping or the removed `shellterm:*`/Bare Term scaffolding as a production terminal path.
+
+Renderer resize uses the VS Code principle: immediate resize for first/small-buffer changes, vertical updates immediately once established, and horizontal reflow debounced with a deterministic flush. Avoid raw `ResizeObserver -> pty.resize` loops.
 
 `createShell` uses `_shellCmd()` for the interactive prompt/CWD wrapper. Agent panes must not start an interactive shell and then wait for a prompt before typing `codex`/`claude`; `SessionSpawner` launches the agent command immediately through a non-profile shell command. Keep this direct launch path so restored Codex panes do not pay the old 10s prompt-detection fallback.
 

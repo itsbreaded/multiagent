@@ -1047,16 +1047,25 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setPaneCwd: (ptyId, cwd) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => {
+    set((s) => {
+      let changed = false
+      const tabs = s.tabs.map((t) => {
         if (!t.rootNode) return t
         function patchCwd(node: PaneNode): PaneNode {
-          if (node.type === 'leaf') return node.ptyId === ptyId ? { ...node, cwd } : node
-          return { ...node, first: patchCwd(node.first), second: patchCwd(node.second) }
+          if (node.type === 'leaf') {
+            if (node.ptyId !== ptyId || node.cwd === cwd) return node
+            changed = true
+            return { ...node, cwd }
+          }
+          const first = patchCwd(node.first)
+          const second = patchCwd(node.second)
+          return first === node.first && second === node.second ? node : { ...node, first, second }
         }
-        return { ...t, rootNode: patchCwd(t.rootNode) }
-      }),
-    }))
+        const rootNode = patchCwd(t.rootNode)
+        return rootNode === t.rootNode ? t : { ...t, rootNode }
+      })
+      return changed ? { tabs } : s
+    })
   },
 
   setPaneCustomName: (paneId, name) => {

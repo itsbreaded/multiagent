@@ -14,7 +14,18 @@ import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { defaultShell } from './shell'
+import { shellIntegrationCommand } from './terminalEnvironment'
 import type { AgentKind } from '../../shared/types'
+
+export interface PtyReadyEvent {
+  id: string
+  pid: number | null
+  cwd: string
+  windowsPty?: {
+    backend: 'conpty'
+    buildNumber: number
+  }
+}
 
 type WorkerMessage =
   | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
@@ -27,13 +38,14 @@ type WorkerMessage =
 type ParentMessage =
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number; signal?: number }
-  | { type: 'ready'; id: string }
+  | { type: 'ready'; id: string; pid: number | null; cwd: string; windowsPty?: PtyReadyEvent['windowsPty'] }
   | { type: 'error'; id: string; message: string }
 
 export class PtyManager extends EventEmitter {
   private worker: ChildProcess
   private pendingResizes = new Map<string, { cols: number; rows: number }>()
   private readyIds = new Set<string>()
+  private readyEvents = new Map<string, PtyReadyEvent>()
   private pausedIds = new Set<string>()
 
   constructor() {
@@ -69,17 +81,25 @@ export class PtyManager extends EventEmitter {
         case 'exit':
           this.pendingResizes.delete(msg.id)
           this.readyIds.delete(msg.id)
+          this.readyEvents.delete(msg.id)
           this.pausedIds.delete(msg.id)
           this.emit('exit', msg.id, msg.exitCode, msg.signal)
           break
         case 'ready': {
           this.readyIds.add(msg.id)
+          const readyEvent = {
+            id: msg.id,
+            pid: msg.pid,
+            cwd: msg.cwd,
+            windowsPty: msg.windowsPty,
+          } satisfies PtyReadyEvent
+          this.readyEvents.set(msg.id, readyEvent)
           const pending = this.pendingResizes.get(msg.id)
           if (pending) {
             this.pendingResizes.delete(msg.id)
             this._send({ type: 'resize', id: msg.id, cols: pending.cols, rows: pending.rows })
           }
-          this.emit('ready', msg.id)
+          this.emit('ready', readyEvent)
           break
         }
         case 'error':
@@ -101,7 +121,12 @@ export class PtyManager extends EventEmitter {
     this.worker.send(msg)
   }
 
-  createDeferred(cwd: string, cmd: string[], extraEnv?: Record<string, string>): string {
+  createDeferred(
+    cwd: string,
+    cmd: string[],
+    extraEnv?: Record<string, string>,
+    initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
+  ): string {
     const id = randomUUID()
     setImmediate(() => {
       this._send({
@@ -110,8 +135,8 @@ export class PtyManager extends EventEmitter {
         cwd: existsSync(cwd) ? cwd : homedir(),
         cmd,
         env: buildEnv(extraEnv),
-        cols: 80,
-        rows: 24,
+        cols: initialSize.cols,
+        rows: initialSize.rows,
       })
     })
     return id
@@ -119,21 +144,13 @@ export class PtyManager extends EventEmitter {
 
   private _shellCmd(): string[] {
     if (process.platform === 'win32') {
-      // Use [char]27/[char]7 for ESC/BEL — backtick-e is unreliable in Windows PowerShell 5.x.
-      // The wrapped prompt emits an OSC 7 sequence (parsed by main process for CWD tracking)
-      // before the visible prompt text. -NoLogo suppresses the copyright banner.
-      const script = [
-        '$__mp = if (Test-Path Function:prompt) { ${Function:prompt} } else { $null }',
-        "function prompt { $e=[char]27; $bel=[char]7; $b = if ($__mp) { & $__mp } else { 'PS ' + $pwd + '> ' }; $c = $pwd.Path.Replace('\\', '/'); \"${e}]7;file:///$c${bel}$b\" }",
-      ].join('; ')
-      const encoded = Buffer.from(script, 'utf16le').toString('base64')
-      return ['powershell.exe', '-NoLogo', '-NoExit', '-EncodedCommand', encoded]
+      return ['powershell.exe', ...shellIntegrationCommand()]
     }
     return [defaultShell()]
   }
 
-  createShell(cwd: string): string {
-    return this.createDeferred(cwd, this._shellCmd())
+  createShell(cwd: string, initialSize?: { cols: number; rows: number }): string {
+    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize)
   }
 
   createClaude(cwd: string): string {
@@ -176,8 +193,13 @@ export class PtyManager extends EventEmitter {
   kill(ptyId: string): void {
     this.pendingResizes.delete(ptyId)
     this.readyIds.delete(ptyId)
+    this.readyEvents.delete(ptyId)
     this.pausedIds.delete(ptyId)
     this._send({ type: 'kill', id: ptyId })
+  }
+
+  getReadyEvent(ptyId: string): PtyReadyEvent | undefined {
+    return this.readyEvents.get(ptyId)
   }
 
   destroy(): void {
