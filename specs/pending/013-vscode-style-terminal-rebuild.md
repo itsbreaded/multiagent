@@ -1,15 +1,21 @@
 # 013 - VS Code-style terminal rebuild
 
-Status: **Working idea found and shipped for shell panes; agent panes not yet aligned.**
+Status: **Implemented — paths unified onto one host; pending real-app verification.**
 Supersedes `specs/done/012-conpty-no-scroll-output-loss.md` as the implementation direction. Spec
 012 remains the historical record of why the bug is the *pane code path*, not the environment.
 
 The original symptom is fixed for normal shell panes: `git pull` in an up-to-date repo now prints
-`Already up to date.` and `echo hi` at the top of a fresh viewport now prints `hi`. This was
-achieved by building a real, VS Code-shaped **direct** path for shell panes instead of grafting
-onto the agent pipeline. The remaining work — and the new definition of done — is to **migrate the
-agent (Claude/Codex) panes onto the same rendering path** so we do not keep two diverging terminal
-stacks that can silently re-break shell output.
+`Already up to date.` and `echo hi` at the top of a fresh viewport now prints `hi`. This was first
+achieved by building a VS Code-shaped **direct** path for shell panes (the `ShellPtyHost` /
+`shellWorker` stack) instead of grafting onto the agent pipeline.
+
+That dual stack has now been **collapsed onto a single pty host** (`PtyManager` + `ptyWorker`).
+Shell vs agent differ only by a per-PTY flow-control policy (`directIds` / `flowControl:false`),
+not by separate hosts/workers/xterm lifecycles. `ShellPtyHost` and `shellWorker` are deleted. The
+remaining work is real-app verification (see Test plan) before moving this spec to `done`.
+
+The durable contract now lives in `CLAUDE.md`; sections below are the rationale and the
+do-not-break details.
 
 Reference local repo: `C:\Users\cdhan\Desktop\vscode` (confirmed present). Key files listed under
 "VS Code baseline" below.
@@ -109,64 +115,65 @@ Non-negotiables when touching the terminal stack:
 
 ---
 
-## 3. Current architecture — two paths exist (the problem)
+## 3. Current architecture — one path, two policies
 
-Shell and agent panes now share the IPC surface (`pty:*`, `pty:ready`, `pty:cwd`, window routing,
-close/transfer) but run on **different hosts, workers, data flows, and xterm lifecycles**:
+Shell and agent panes share the IPC surface (`pty:*`, `pty:ready`, `pty:cwd`, window routing,
+close/transfer) **and** the same host (`PtyManager`), worker (`ptyWorker`), and xterm lifecycle
+(`xtermRegistry`). The only difference is the data-flow policy, selected at create time:
 
 ```
-SHELL pane                              AGENT pane (Claude/Codex)
-  pty:create (cols,rows)                  SessionSpawner.createDeferred(agent cmd)
-    -> ShellPtyHost.create                  -> PtyManager.createDeferred
-      -> shellWorker.js (ELECTRON_RUN_AS_NODE)  -> ptyWorker.js (ELECTRON_RUN_AS_NODE)
-        node-pty -> onData -> send direct        node-pty -> onData -> send raw
-  handlers: shellPtyHost.on('data')        handlers: ptyManager.on('data')
-    -> sendDirectPtyOutput (seq 0)            -> enqueuePtyOutput (coalesce, seq>0, ack, pause)
+SHELL pane                                AGENT pane (Claude/Codex)
+  pty:create (cols,rows)                    SessionSpawner.createDeferred(agent cmd)
+    -> PtyManager.createShell                 -> PtyManager.createDeferred
+       (flowControl:false, envProfile shell)     (flowControl:true,  envProfile agent)
+    ----------------- one ptyWorker.js (ELECTRON_RUN_AS_NODE) -----------------
+                       node-pty -> onData -> send raw
+  handlers: ptyManager.on('data')           handlers: ptyManager.on('data')
+    isDirect(id) -> sendDirectPtyOutput        !isDirect -> enqueuePtyOutput
+                    (seq 0)                                 (coalesce, seq>0, ack, pause)
   renderer: seq===0 -> terminal.write       renderer: enqueueOutput -> slice-write -> ack
-  xterm: xtermRegistry cache, survives      xterm: xtermRegistry cache, survives  (unified)
+  xterm: xtermRegistry cache, survives      xterm: xtermRegistry cache, survives
 ```
 
-Shared/aligned already: both workers emit ConPTY traits + ready; both `*.on('ready')` blocks in
-`handlers.ts` send `pty:ready` + `pty:cwd`; both parse OSC 633; renderer ready-gating + resize
-debouncer + stable `setPaneCwd` apply to both. So the agent path has *received* the VS Code-shaped
-ready/resize/cwd improvements — it just still carries the coalesce/ack data stack and the registry
-xterm lifecycle.
+Fully shared: one worker emits ConPTY traits + ready (ready-when-pid); one `on('ready')` /
+`on('exit')` / `on('error')` block in `handlers.ts`; OSC 633 parsing; renderer ready-gating +
+resize debouncer + stable `setPaneCwd`; the registry xterm lifecycle. The `directIds` set in
+`PtyManager` is the single source of truth for which policy a PTY uses; `isDirect(id)` is checked
+in the `data`/`exit`/`error` handlers.
 
-File map of the change set (current branch, untracked + modified):
+Key files:
 
-- New: `ShellPtyHost.ts`, `shellWorker.ts`, `terminalEnvironment.ts`, `shellIntegration.ps1`.
-- Modified main: `handlers.ts` (dual data/ready/exit handlers, `parseShellIntegrationCwd`,
-  `sendDirectPtyOutput`, `pty:get-ready`, size-aware `pty:create`), `PtyManager.ts` (ready event
-  with pid/cwd/traits, `getReadyEvent`, `_shellCmd` switched to `shellIntegrationCommand`),
-  `ptyWorker.ts` (conpty traits, ready-when-pid), `electron.vite.config.ts` (emit script +
-  `shellWorker` input), `shared/types.ts` (`PtyReadyMetadata`, `pty:ready`, `pty:get-ready`,
-  size args).
-- Modified renderer: `Terminal/index.tsx` (seq===0 direct write, direct-vs-registry xterm,
-  ready-gated windowsPty/DA1, resize rewrite), `store/panes.ts` (stable `setPaneCwd`),
-  `xtermRegistry.ts` (deferred `open` via `opened` flag).
-- `App.tsx` and `PaneGrid/PaneContainer.tsx` show as modified but are **line-ending only** (no
-  content diff) — leave them or normalize EOL, do not treat as logic changes.
+- `PtyManager.ts` — `directIds`, `createShell` (`flowControl:false`/`envProfile:'shell'`),
+  `createDeferred` (options bag), `isDirect()`, `buildEnv(extraVars, profile)`.
+- `ptyWorker.ts` — the single worker (ConPTY traits, ready-when-pid).
+- `handlers.ts` — unified `on('data'|'ready'|'exit'|'error')` branching on `isDirect`;
+  `sendDirectPtyOutput` (seq 0) vs `enqueuePtyOutput` (coalesce/ack); `pty:get-ready`.
+- `terminalEnvironment.ts` + `shellIntegration.ps1` — OSC 633 shell integration (used by
+  `_shellCmd()`); `.ps1` emitted beside `out/main/index.js` by `electron.vite.config.ts`.
+- `Terminal/index.tsx` — `seq===0 → terminal.write` switch; ready-gated windowsPty/DA1; resize
+  debouncer. `store/panes.ts` — stable `setPaneCwd`. `xtermRegistry.ts` — deferred `open`.
 
 ---
 
-## 4. Known gaps / risks introduced by the dual path
+## 4. Gap status (from the former dual-path implementation)
 
 - **G1 — FIXED.** Shell xterm used to `dispose()` on unmount, losing scrollback across tab
   switches / pane moves / layout remounts. Shell panes now go through `xtermRegistry` like agent
   panes (registry defers `open()` until attach), so the instance and its full scrollback survive
   remounts and are disposed only on explicit `closePane`. The shell write path (seq===0 direct
   `terminal.write`) is unchanged.
-- **G2 — duplicated handler blocks.** `handlers.ts` has near-identical `on('data')`,
-  `on('ready')`, and `on('exit')` blocks for `ptyManager` and `shellPtyHost`. Easy to fix one and
-  forget the other. Unify behind one host interface.
-- **G3 — duplicated worker logic.** `windowsBuildNumber`, conpty flags, ready/pid handling, and
-  the spawn/queue scaffolding are copy-pasted across `ptyWorker.ts` and `shellWorker.ts`.
-- **G4 — dead `PtyManager.createShell`.** Shell panes go through `ShellPtyHost`; `createShell` /
-  `_shellCmd` are now unused for production shell panes (agents use `createDeferred`). Remove or
-  fold in once the host is unified, so future readers don't wire shell panes back through it.
-- **G5 — agent panes still on the suspect stack.** They have not been proven against the spec 012
-  symptom. Low-volume agent output at the top of a fresh viewport could in principle drop the same
-  way. The migration is what closes this.
+- **G2 — FIXED.** `handlers.ts` now has a single `on('data')` / `on('ready')` / `on('exit')` /
+  `on('error')` block on `ptyManager`, branching on `ptyManager.isDirect(id)` for the data-flow
+  policy. The duplicate `shellPtyHost` blocks are gone.
+- **G3 — FIXED.** There is one worker (`ptyWorker.ts`). `shellWorker.ts` is deleted;
+  `windowsBuildNumber`, conpty flags, and ready/pid handling exist in one place.
+- **G4 — FIXED.** `PtyManager.createShell` is the live shell entry point again (it sets
+  `flowControl:false` + `envProfile:'shell'`). `ShellPtyHost` is deleted, so nothing competes
+  with it.
+- **G5 — agent panes still use flow control (by design), but now on the *same* host/worker as
+  shell.** Flow control is opt-in (`flowControl:true`, the default for `createDeferred`). If an
+  agent ever shows the spec 012 symptom, it can be moved to the direct policy without touching the
+  host. Not expected — agent output volume is exactly why flow control exists.
 
 ---
 
@@ -188,44 +195,33 @@ Reference local repo: `C:\Users\cdhan\Desktop\vscode`. Key files:
 
 ---
 
-## 6. New definition of done — fully migrate and align onto the working path
+## 6. Definition of done — unify onto one path (DONE; verify)
 
-The goal is no longer "make shell work" (done) — it is **one terminal rendering path** that both
-shell and agent panes use, shaped like VS Code's, so the working behavior cannot drift apart.
+The goal is **one terminal rendering path** that both shell and agent panes use, shaped like VS
+Code's, so the working behavior cannot drift apart. End state, now implemented:
 
-Target end state:
+1. **One pty-host primitive + one worker — DONE.** `ShellPtyHost`/`shellWorker` deleted; everything
+   runs on `PtyManager` + `ptyWorker` (`create/write/resize/kill` + `data/ready/exit/error`,
+   ConPTY traits, ready-when-pid). Shell vs agent differ by **policy passed in**
+   (`createShell` → `flowControl:false` + `envProfile:'shell'`), not by a parallel stack.
+2. **One renderer data path — DONE.** The renderer keeps its single `seq===0 → terminal.write`
+   vs `enqueueOutput` switch; main decides which by `ptyManager.isDirect(id)`. Flow control is an
+   opt-in policy behind the host (default `flowControl:true` for `createDeferred`), not a separate
+   renderer branch. The duplicated handler blocks are gone.
+3. **One xterm lifecycle — DONE.** Both pane types use the registry creation/attach/detach model
+   and preserve scrollback across remounts (G1 fixed).
+4. **Ready-gated ConPTY setup, OSC 633 CWD, VS Code resize debouncer** — shared model for both
+   pane types. Keep it that way.
+5. **Agent throughput unaffected** — agents still use flow control on the same host; verify
+   Codex/Claude start, resume, and heavy-output smoothness in the real app.
+6. Bare Term / `shellterm:*` / `ShellPtyHost` / `shellWorker` scaffolding removed; durable
+   contract documented in `CLAUDE.md`.
 
-1. **One pty-host primitive + one worker.** Collapse `ShellPtyHost`/`shellWorker` and
-   `PtyManager`/`ptyWorker` into a single host contract (`create/write/resize/kill` +
-   `data/ready/exit/error`, ConPTY traits, ready-when-pid) with one worker implementation.
-   Shell vs agent differ by **policy passed in**, not by a parallel stack. Resolve G3, G4.
-2. **One renderer data path.** Default everything to the synchronous direct write
-   (the seq===0 behavior). If flow control is still required for high-volume agent output, it
-   must be an **opt-in policy behind the host contract** and proven to leave shell output
-   untouched — not a separate renderer branch. Remove the duplicated handler blocks (G2).
-3. **One xterm lifecycle.** Done — both pane types share the registry creation/attach/detach
-   model and preserve scrollback across remounts (G1 fixed). Keep it unified as the host work
-   lands.
-4. **Ready-gated ConPTY setup, OSC 633 CWD, VS Code resize debouncer** remain the shared model for
-   both pane types (already true; keep it that way).
-5. **Agent throughput unaffected.** Codex/Claude output stays smooth; resume/start still work; no
-   flicker regressions from the Codex TUI flags.
-6. Bare Term / `shellterm:*` scaffolding stays removed; durable lessons live in `CLAUDE.md`
-   (already updated for the dual-path reality — update again when paths unify).
+### Remaining work
 
-### Migration plan
-
-1. Define the unified host interface and move `ptyWorker`/`shellWorker` onto one worker with a
-   `flowControl: boolean` (or similar) spawn option. Keep shell = no flow control.
-2. Unify the `handlers.ts` data/ready/exit handlers onto the single host; keep the seq===0 direct
-   write as the default and gate coalesce/ack on the policy flag.
-3. Xterm lifecycle already unified (both pane types on the registry, G1 fixed); just keep it that
-   way as the host/worker collapse lands.
-4. Delete dead `PtyManager.createShell`/`_shellCmd` shell branch once nothing routes through it.
-5. Re-verify the full test plan with both pane types before removing any old code.
-
-Migrate incrementally and re-run the test plan after **each** step — the seq===0 direct-write
-contract (section 2) is the thing most likely to be lost in a refactor.
+Real-app verification only (build + typecheck already pass). Run the Test plan below on the Win11
+target; if it passes, move this spec to `specs/done/`. The thing most likely to regress in any
+future refactor is the **seq===0 direct-write contract** (section 2) — guard it.
 
 ---
 
