@@ -122,6 +122,7 @@ export class PtyManager extends EventEmitter {
     cmd: string[],
     extraEnv?: Record<string, string>,
     initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
+    envProfile: 'agent' | 'shell' = 'agent',
   ): string {
     const id = randomUUID()
     setImmediate(() => {
@@ -130,7 +131,7 @@ export class PtyManager extends EventEmitter {
         id,
         cwd: existsSync(cwd) ? cwd : homedir(),
         cmd,
-        env: buildEnv(extraEnv),
+        env: buildEnv(extraEnv, envProfile),
         cols: initialSize.cols,
         rows: initialSize.rows,
       })
@@ -146,7 +147,10 @@ export class PtyManager extends EventEmitter {
   }
 
   createShell(cwd: string, initialSize?: { cols: number; rows: number }): string {
-    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize)
+    // Shell panes use the 'shell' env profile: no CLAUDE_CODE_* vars (inert for a
+    // plain shell). Critically, no env rewrite reorders PATH — that is what broke
+    // short no-scroll output like `git pull -> Already up to date.` (see buildEnv).
+    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize, 'shell')
   }
 
   createClaude(cwd: string): string {
@@ -190,7 +194,10 @@ export class PtyManager extends EventEmitter {
   }
 }
 
-function buildEnv(extraVars?: Record<string, string>): Record<string, string> {
+function buildEnv(
+  extraVars?: Record<string, string>,
+  profile: 'agent' | 'shell' = 'agent',
+): Record<string, string> {
   const env = { ...process.env } as Record<string, string>
 
   delete env['ELECTRON_RUN_AS_NODE']
@@ -201,31 +208,28 @@ function buildEnv(extraVars?: Record<string, string>): Record<string, string> {
   env['TERM'] = 'xterm-256color'
   env['COLORTERM'] = 'truecolor'
 
-  // Claude Code keys its embedded-terminal rendering path on TERM_PROGRAM=vscode.
-  // Changing this value causes Claude to fall back to a rendering mode that does
-  // not behave correctly inside xterm.js.
+  // Claude Code keys its embedded-terminal rendering path on TERM_PROGRAM=vscode,
+  // and the shell integration script gates on it too, so both profiles set it.
   env['TERM_PROGRAM'] = 'vscode'
 
-  // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
-  // works correctly inside our ConPTY. The DISABLE_* flags suppress alternate-
-  // screen switching and mouse capture, both of which break in xterm.js.
-  env['CLAUDECODE'] = '1'
-  env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'] = '1'
-  env['CLAUDE_CODE_DISABLE_MOUSE'] = '1'
-  env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
-
-  if (process.platform === 'win32') {
-    const appData = process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming')
-    const npmGlobal = join(appData, 'npm')
-    const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files'
-    const nodeSystem = join(programFiles, 'nodejs')
-    const localBin = join(homedir(), '.local', 'bin')
-    const additions = [npmGlobal, nodeSystem, localBin].filter(existsSync)
-    if (additions.length > 0) {
-      const current = env['PATH'] ?? env['Path'] ?? ''
-      env['PATH'] = [...additions, current].join(';')
-    }
+  if (profile === 'agent') {
+    // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
+    // works correctly inside our ConPTY. The DISABLE_* flags suppress alternate-
+    // screen switching and mouse capture, both of which break in xterm.js. Scoped
+    // to agents so plain shells get a clean, inert environment.
+    env['CLAUDECODE'] = '1'
+    env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'] = '1'
+    env['CLAUDE_CODE_DISABLE_MOUSE'] = '1'
+    env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
   }
+
+  // NOTE: we deliberately do NOT rewrite PATH. An earlier version prepended
+  // %APPDATA%\npm, %ProgramFiles%\nodejs, and ~/.local/bin to PATH for agents.
+  // Those dirs are already on the inherited PATH (agents launch and shells run
+  // fine without the prepend), so it only *reordered* PATH — which shifted git's
+  // startup timing into ConPTY's no-scroll flush race and dropped short output
+  // like `git pull -> Already up to date.`. This was the real root cause of the
+  // whole "no-scroll drop" investigation (see spec 013); do not reintroduce it.
 
   if (extraVars) Object.assign(env, extraVars)
 

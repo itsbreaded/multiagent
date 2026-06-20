@@ -24,7 +24,6 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           ptyWorker: resolve('src/main/pty/ptyWorker.ts'),
-          shellWorker: resolve('src/main/pty/shellWorker.ts'),
         },
         output: {
           entryFileNames: '[name].js',

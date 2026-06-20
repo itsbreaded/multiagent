@@ -1,5 +1,20 @@
 # 010 - Terminal Output Throughput Tuning
 
+> **STATUS: SUPERSEDED / NOT PURSUED (see spec 013).** This spec proposed tuning the PTY
+> flow-control pipeline (bounded main-process batching, sequence-numbered acks, backpressure,
+> bounded xterm draining). That entire pipeline has since been **removed**, not tuned: PTY output
+> is now relayed directly to xterm (`sendDirectPtyOutput`, `seq=0`, synchronous `terminal.write`)
+> with no coalescing, acks, or pause/resume. In practice node-pty + xterm absorb the volume and the
+> result is noticeably more responsive. The "short no-scroll output dropped" problem this spec was
+> partly motivated by turned out to be an unrelated **PATH-rewrite** bug (see
+> `specs/done/013-vscode-style-terminal-rebuild.md`), not a throughput issue.
+>
+> What was kept from this spec: **Phase 5** (resize is now one-way `ipc.send('pty:resize')`, not
+> `invoke`) and the high default scrollback with a Settings control (Phase 6). The Warp research
+> below is retained as background only. Do **not** reintroduce batching/ack/backpressure for the
+> shell path; if an agent ever needs flood backpressure, add it agent-only and prove it leaves
+> shell no-scroll output untouched.
+
 ## Problem
 
 The app embeds xterm.js inside Electron and feeds it PTY output through:
