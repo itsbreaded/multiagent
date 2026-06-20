@@ -9,8 +9,10 @@ import { decodePaneDragPayload, encodePaneDragPayload, PANE_DRAG_MIME, type Pane
 import { DirPicker } from '../DirPicker'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
-import { border, menuStyles, ui } from '../../styles/theme'
+import { border, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
+import closeIcon from '../../assets/close.png'
+import threeDotIcon from '../../assets/threedot.png'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -120,6 +122,14 @@ export function TabSections(): JSX.Element {
                 e.preventDefault()
                 setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
               }}
+              headerActions={
+                <SidebarHoverActions
+                  menuTitle="Tab menu"
+                  closeTitle="Close tab"
+                  onMenu={(e) => setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
+                  onClose={() => closeTab(tab.id)}
+                />
+              }
               titleSuffix={
                 <span title="In separate window — click to focus" style={{ fontSize: 11, color: '#5a6050', marginLeft: 4, flexShrink: 0 }}>↗</span>
               }
@@ -189,6 +199,14 @@ export function TabSections(): JSX.Element {
             onRenameChange={setRenameValue}
             onRenameCommit={commitRename}
             onRenameCancel={() => setRenamingTabId(null)}
+            headerActions={
+              <SidebarHoverActions
+                menuTitle="Tab menu"
+                closeTitle="Close tab"
+                onMenu={(e) => setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
+                onClose={() => closeTab(tab.id)}
+              />
+            }
             headerDropActive={dropTabId === tab.id}
             onHeaderDragOver={(e) => {
               if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
@@ -368,6 +386,7 @@ function PaneRow({
           outlineOffset: -1,
           boxShadow: dropActive ? `inset -3px 0 0 ${ui.color.accent}` : 'none',
           transition: 'background-color 0.1s',
+          position: 'relative',
         }}
       >
         {pane.paneType === 'agent' && pane.agentKind ? (
@@ -413,7 +432,7 @@ function PaneRow({
             }}
           />
         ) : (
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, paddingRight: hovered ? 42 : 0 }}>
             <div style={{ fontSize: 12, color: isFocused ? ui.color.text : ui.color.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {name}
             </div>
@@ -440,6 +459,26 @@ function PaneRow({
             )}
           </div>
         )}
+        {!renaming && (
+          <div
+            style={{
+              ...sidebarStyles.paneHoverActionGroup,
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? 'auto' : 'none',
+            }}
+          >
+            <SidebarIconButton
+              title="Pane menu"
+              icon={threeDotIcon}
+              onClick={(e) => setMenu({ x: e.clientX, y: e.clientY })}
+            />
+            <SidebarIconButton
+              title="Close pane"
+              icon={closeIcon}
+              onClick={() => closePaneInTab(tab.id, pane.id)}
+            />
+          </div>
+        )}
       </div>
 
       {menu && (
@@ -455,6 +494,55 @@ function PaneRow({
         />
       )}
     </>
+  )
+}
+
+function SidebarHoverActions({
+  menuTitle,
+  closeTitle,
+  onMenu,
+  onClose,
+}: {
+  menuTitle: string
+  closeTitle: string
+  onMenu: (e: React.MouseEvent<HTMLButtonElement>) => void
+  onClose: () => void
+}): JSX.Element {
+  return (
+    <>
+      <SidebarIconButton title={menuTitle} icon={threeDotIcon} onClick={onMenu} />
+      <SidebarIconButton title={closeTitle} icon={closeIcon} onClick={onClose} />
+    </>
+  )
+}
+
+function SidebarIconButton({
+  title,
+  icon,
+  onClick,
+}: {
+  title: string
+  icon: string
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
+}): JSX.Element {
+  return (
+    <button
+      title={title}
+      onMouseDown={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+      }}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onClick(e)
+      }}
+      style={sidebarStyles.hoverIconButton}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent' }}
+    >
+      <img src={icon} alt="" style={sidebarStyles.hoverIconImage} />
+    </button>
   )
 }
 

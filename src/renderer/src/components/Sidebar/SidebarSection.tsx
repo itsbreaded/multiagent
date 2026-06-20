@@ -23,6 +23,7 @@ interface SidebarSectionProps {
   onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
   headerDropActive?: boolean
   titleSuffix?: React.ReactNode
+  headerActions?: React.ReactNode
   style?: React.CSSProperties
   contentStyle?: React.CSSProperties
   contentClassName?: string
@@ -48,11 +49,13 @@ export function SidebarSection({
   onHeaderDrop,
   headerDropActive,
   titleSuffix,
+  headerActions,
   style,
   contentStyle,
   contentClassName,
 }: SidebarSectionProps): JSX.Element {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
+  const [hovered, setHovered] = useState(false)
   const open = controlledOpen ?? uncontrolledOpen
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -73,6 +76,8 @@ export function SidebarSection({
         onDragOver={onHeaderDragOver}
         onDragLeave={onHeaderDragLeave}
         onDrop={onHeaderDrop}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{
           ...sidebarStyles.sectionHeader,
           outline: headerDropActive ? border.accent : 'none',
@@ -138,6 +143,18 @@ export function SidebarSection({
           </span>
         )}
         {titleSuffix && !renaming && titleSuffix}
+        {headerActions && !renaming && (
+          <div
+            style={{
+              ...sidebarStyles.hoverActionGroup,
+              marginLeft: count === undefined && !titleSuffix ? 'auto' : 0,
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? 'auto' : 'none',
+            }}
+          >
+            {headerActions}
+          </div>
+        )}
       </div>
       {open && <div className={contentClassName} style={contentStyle}>{children}</div>}
     </div>
