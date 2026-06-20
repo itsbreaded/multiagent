@@ -73,6 +73,18 @@ export function markConnected(paneId: string): void {
   if (entry) entry.connected = true
 }
 
+/** Focus the xterm input for a pane if its terminal has mounted. */
+export function focus(paneId: string): boolean {
+  const entry = registry.get(paneId)
+  if (!entry?.opened) return false
+  try {
+    entry.xterm.focus()
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Apply a scrollback limit to every existing xterm instance. */
 export function setScrollbackLines(lines: number): void {
   for (const entry of registry.values()) {

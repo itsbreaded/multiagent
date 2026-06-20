@@ -276,6 +276,28 @@ function reportCurrentFocusTarget(): void {
   window.ipc.send('focus:target-report', store.activeTabId, paneId)
 }
 
+function blurActiveElement(): void {
+  if (typeof document === 'undefined') return
+  const active = document.activeElement
+  if (active instanceof HTMLElement) active.blur()
+}
+
+function focusTerminalWhenMounted(paneId: string, attempts = 10): void {
+  if (typeof window === 'undefined') return
+  blurActiveElement()
+
+  const tryFocus = (remaining: number): void => {
+    if (xtermRegistry.focus(paneId)) return
+    if (remaining <= 0) {
+      blurActiveElement()
+      return
+    }
+    window.requestAnimationFrame(() => tryFocus(remaining - 1))
+  }
+
+  window.requestAnimationFrame(() => tryFocus(attempts))
+}
+
 function markTabHydrated(tabId: string): void {
   usePanesStore.setState((s) => ({ hydratedTabIds: markHydrated(s.hydratedTabIds, tabId) }))
 }
@@ -1036,6 +1058,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
       return { tabs }
     })
+    focusTerminalWhenMounted(newLeaf.id)
 
     if (resolvedType === 'agent' && resolvedAgent && typeof window !== 'undefined' && window.ipc) {
       get().setLastAgentKind(resolvedAgent)
@@ -1407,6 +1430,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
       return { tabs, hydratedTabIds: s.activeTabId ? markHydrated(s.hydratedTabIds, s.activeTabId) : s.hydratedTabIds }
     })
+    focusTerminalWhenMounted(leaf.id)
     if (typeof window !== 'undefined' && window.ipc) {
       try {
         const result = (await window.ipc.invoke('session:new', resolvedAgent, cwd)) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
@@ -1451,6 +1475,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
       return { tabs, hydratedTabIds: s.activeTabId ? markHydrated(s.hydratedTabIds, s.activeTabId) : s.hydratedTabIds }
     })
+    focusTerminalWhenMounted(leaf.id)
   },
 
   applyLayout: async (saved) => {
