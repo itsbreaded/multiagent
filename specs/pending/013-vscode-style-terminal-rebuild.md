@@ -1,28 +1,36 @@
 # 013 - VS Code-style terminal rebuild
 
-Status: **Shell fix shipped and stable. Worker unification ATTEMPTED AND REVERTED — not viable.**
+Status: **Shell fix stable. Data path unified onto the direct relay; flow control removed. Two
+workers kept (mandatory). Pending real-app verification of agent throughput.**
 Supersedes `specs/done/012-conpty-no-scroll-output-loss.md` as the implementation direction. Spec
 012 remains the historical record of why the bug is the *pane code path*, not the environment.
 
 The original symptom is fixed for normal shell panes: `git pull` in an up-to-date repo prints
 `Already up to date.` and `echo hi` at the top of a fresh viewport prints `hi`. This was achieved by
-building a VS Code-shaped **direct** path for shell panes (`ShellPtyHost` + `shellWorker`) instead
-of grafting onto the agent pipeline.
+building a VS Code-shaped **direct** path for shell panes (`ShellPtyHost` + `shellWorker`).
 
-> ⚠️ **Do not try to merge shell + agent into one worker process.** Commit `27ec130` attempted
-> exactly that: a single `PtyManager` + `ptyWorker`, with shell vs agent reduced to a per-PTY
-> `flowControl` policy (shell = seq=0 direct relay, agent = coalesce/ack). It kept the identical
-> seq=0 direct write, the identical renderer, and identical ConPTY spawn config — **and the
-> `git pull` no-scroll drop returned immediately on the Win11 target.** It was reverted (commit
-> `defaf3a`). Conclusion: **the dedicated `shellWorker` *process* is load-bearing**, not just the
-> direct data policy. This is consistent with spec 012's note that a direct `pty:data` send through
-> the `ptyManager`/`ptyWorker` path *still dropped*. Shell and agents must keep **separate worker
-> processes**. You may share host contracts/types and renderer code; you may NOT share the worker.
+**Unification went the *right* direction:** instead of moving shell onto the agent pipeline (which
+broke — see below), the agent panes were moved onto the **shell's direct relay**. The coalesce +
+sequence/ack + pause/resume flow control was deleted entirely; both shell and agent output now goes
+through `sendDirectPtyOutput` (`seq=0`) → synchronous `terminal.write`. Rationale: heavy interactive
+PowerShell sessions already run flood-prone commands with zero flow control on the target machine
+and are fine, so the flow control was over-engineering. Two worker processes are still kept — that
+part is mandatory:
 
-What is still legitimately open: aligning the *shared, safe* pieces (renderer xterm setup, ready
-gating, OSC 633 CWD, resize debouncer — already shared) and reducing duplicated host/worker
-*code* (not process) if it can be done without merging the processes. The original "migrate agents
-onto one worker" goal is abandoned.
+> ⚠️ **Do not merge shell + agent into one worker process.** Commit `27ec130` did exactly that
+> (single `PtyManager`/`ptyWorker`, per-PTY `flowControl` policy) and the `git pull` no-scroll drop
+> returned immediately on the Win11 target, despite an identical seq=0 relay, renderer, and ConPTY
+> spawn config. Reverted (`defaf3a`). **The dedicated `shellWorker` *process* is load-bearing**,
+> consistent with spec 012's note that a direct send through `ptyManager`/`ptyWorker` *still
+> dropped*. Shell on `shellWorker`, agents on `ptyWorker` — separate processes. Share host
+> contracts/types and renderer code; never the worker process.
+
+What changed for the flow-control removal: `handlers.ts` lost `coalesceBuffer`/`ptyFlow` and all
+the drain/pause/ack functions (replaced by `sendDirectPtyOutput` + a tiny `pendingDirectOutput`
+buffer used only while a pty has no routable window); `PtyManager`/`ptyWorker` lost `pause`/`resume`;
+the renderer lost the slice-write/ack queue and just `terminal.write`s; `pty:data-ack`/
+`pty:pause-output`/`pty:resume-output` channels removed. Remaining work: confirm agent throughput
+under heavy output on the real target.
 
 Reference local repo: `C:\Users\cdhan\Desktop\vscode` (confirmed present). Key files listed under
 "VS Code baseline" below.

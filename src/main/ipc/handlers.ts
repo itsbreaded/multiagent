@@ -31,44 +31,12 @@ let focusTargetVersionSeq = 0
 let tabReleaseSeq = 0
 const GIT_BRANCH_CACHE_MS = 10_000
 
-const PTY_BATCH_WINDOW_MS = 5
-const PTY_BATCH_MAX_BYTES = 256 * 1024
-const MAX_IN_FLIGHT_PTY_BYTES = 512 * 1024
-const PTY_BACKPRESSURE_HIGH_BYTES = 1024 * 1024
-const PTY_BACKPRESSURE_LOW_BYTES = 256 * 1024
+// PTY output is relayed straight to xterm (seq=0 direct write) for both shell and
+// agent panes — no coalescing, no ack, no backpressure. node-pty + xterm handle
+// the volume directly, exactly like a normal terminal. PTY_ROUTE_RETRY_MS is the
+// only timer left: it covers the brief window where a pane has no routable window
+// (e.g. mid cross-window move), buffering output until a window is available.
 const PTY_ROUTE_RETRY_MS = 50
-const DEBUG_PTY_THROUGHPUT = false
-
-interface CoalesceEntry {
-  chunks: string[]
-  bytes: number
-  timer: NodeJS.Timeout
-}
-
-interface PtyPayload {
-  seq: number
-  data: string
-  bytes: number
-}
-
-interface PtyFlowState {
-  nextSeq: number
-  queue: PtyPayload[]
-  queuedBytes: number
-  inFlightBytes: number
-  inFlight: Map<number, PtyPayload>
-  paused: boolean
-  drainImmediate: NodeJS.Immediate | null
-  routeRetryTimer: NodeJS.Timeout | null
-  metrics: {
-    receivedBytes: number
-    sentBytes: number
-    sentBatches: number
-    queueHighBytes: number
-    pauses: number
-    resumes: number
-  }
-}
 
 interface GitBranchCacheEntry {
   branch: string | null
@@ -118,192 +86,68 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const shellPtyHost = new ShellPtyHost()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
   const lastPtyCwd = new Map<string, string>()
-  const coalesceBuffer = new Map<string, CoalesceEntry>()
-  const ptyFlow = new Map<string, PtyFlowState>()
+  // Direct-output buffers: only used while a pty has no routable window.
+  const pendingDirectOutput = new Map<string, string[]>()
+  const directRetryTimers = new Map<string, NodeJS.Timeout>()
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
 
-  function getPtyFlowState(ptyId: string): PtyFlowState {
-    let state = ptyFlow.get(ptyId)
-    if (!state) {
-      state = {
-        nextSeq: 1,
-        queue: [],
-        queuedBytes: 0,
-        inFlightBytes: 0,
-        inFlight: new Map(),
-        paused: false,
-        drainImmediate: null,
-        routeRetryTimer: null,
-        metrics: {
-          receivedBytes: 0,
-          sentBytes: 0,
-          sentBatches: 0,
-          queueHighBytes: 0,
-          pauses: 0,
-          resumes: 0,
-        },
-      }
-      ptyFlow.set(ptyId, state)
-    }
-    return state
-  }
-
-  function totalBufferedBytes(ptyId: string, state = getPtyFlowState(ptyId)): number {
-    return state.queuedBytes + state.inFlightBytes + (coalesceBuffer.get(ptyId)?.bytes ?? 0)
-  }
-
-  function maybePausePty(ptyId: string): void {
-    const state = getPtyFlowState(ptyId)
-    state.metrics.queueHighBytes = Math.max(state.metrics.queueHighBytes, totalBufferedBytes(ptyId, state))
-    if (state.paused || totalBufferedBytes(ptyId, state) < PTY_BACKPRESSURE_HIGH_BYTES) return
-    state.paused = true
-    state.metrics.pauses += 1
-    ptyManager.pause(ptyId)
-  }
-
-  function maybeResumePty(ptyId: string): void {
-    const state = getPtyFlowState(ptyId)
-    if (!state.paused || totalBufferedBytes(ptyId, state) > PTY_BACKPRESSURE_LOW_BYTES) return
-    state.paused = false
-    state.metrics.resumes += 1
-    ptyManager.resume(ptyId)
-  }
-
-  function cleanupPtyFlow(ptyId: string): void {
-    const state = ptyFlow.get(ptyId)
-    if (!state) return
-    if (state.drainImmediate) clearImmediate(state.drainImmediate)
-    if (state.routeRetryTimer) clearTimeout(state.routeRetryTimer)
-    if (state.paused) ptyManager.resume(ptyId)
-    if (DEBUG_PTY_THROUGHPUT) {
-      console.debug('[pty-flow]', ptyId, state.metrics)
-    }
-    ptyFlow.delete(ptyId)
-  }
-
-  function reroutePtyFlow(ptyId: string): void {
-    const state = ptyFlow.get(ptyId)
-    if (!state || state.inFlight.size === 0) {
-      scheduleDrainPtyOutput(ptyId)
-      return
-    }
-    const inFlightPayloads = Array.from(state.inFlight.values()).sort((a, b) => a.seq - b.seq)
-    state.queue = [...inFlightPayloads, ...state.queue]
-    state.queuedBytes += inFlightPayloads.reduce((total, payload) => total + payload.bytes, 0)
-    state.inFlight.clear()
-    state.inFlightBytes = 0
-    maybeResumePty(ptyId)
-    scheduleDrainPtyOutput(ptyId)
-  }
-
-  function scheduleDrainPtyOutput(ptyId: string): void {
-    const state = getPtyFlowState(ptyId)
-    if (state.drainImmediate) return
-    state.drainImmediate = setImmediate(() => {
-      state.drainImmediate = null
-      drainPtyOutput(ptyId)
-    })
-  }
-
-  function scheduleRouteRetry(ptyId: string): void {
-    const state = getPtyFlowState(ptyId)
-    if (state.routeRetryTimer) return
-    state.routeRetryTimer = setTimeout(() => {
-      state.routeRetryTimer = null
-      drainPtyOutput(ptyId)
-    }, PTY_ROUTE_RETRY_MS)
-  }
-
-  function drainPtyOutput(ptyId: string): void {
-    const state = getPtyFlowState(ptyId)
-    while (state.queue.length > 0) {
-      const next = state.queue[0]
-      if (state.inFlightBytes > 0 && state.inFlightBytes + next.bytes > MAX_IN_FLIGHT_PTY_BYTES) break
-      const sent = windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, next.data, next.seq, next.bytes)
-      if (!sent) {
-        maybePausePty(ptyId)
-        scheduleRouteRetry(ptyId)
-        return
-      }
-      state.queue.shift()
-      state.queuedBytes -= next.bytes
-      state.inFlight.set(next.seq, next)
-      state.inFlightBytes += next.bytes
-      state.metrics.sentBytes += next.bytes
-      state.metrics.sentBatches += 1
-    }
-    maybePausePty(ptyId)
-    maybeResumePty(ptyId)
-  }
-
-  function forceDrainPtyOutput(ptyId: string): void {
-    const state = getPtyFlowState(ptyId)
-    while (state.queue.length > 0) {
-      const next = state.queue.shift()
-      if (!next) break
-      state.queuedBytes -= next.bytes
-      const sent = windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, next.data, next.seq, next.bytes)
-      if (!sent) continue
-      state.inFlight.set(next.seq, next)
-      state.inFlightBytes += next.bytes
-      state.metrics.sentBytes += next.bytes
-      state.metrics.sentBatches += 1
-    }
-  }
-
-  function enqueuePtyPayload(ptyId: string, data: string, byteLength?: number): void {
-    if (!data) return
-    const state = getPtyFlowState(ptyId)
-    const bytes = byteLength ?? Buffer.byteLength(data, 'utf8')
-    state.queue.push({ seq: state.nextSeq++, data, bytes })
-    state.queuedBytes += bytes
-    state.metrics.queueHighBytes = Math.max(state.metrics.queueHighBytes, totalBufferedBytes(ptyId, state))
-    maybePausePty(ptyId)
-    scheduleDrainPtyOutput(ptyId)
-  }
-
-  function enqueuePtyOutput(ptyId: string, chunk: string): void {
-    const chunkBytes = Buffer.byteLength(chunk, 'utf8')
-    const state = getPtyFlowState(ptyId)
-    state.metrics.receivedBytes += chunkBytes
-    const entry = coalesceBuffer.get(ptyId)
-    if (entry) {
-      entry.chunks.push(chunk)
-      entry.bytes += chunkBytes
-      state.metrics.queueHighBytes = Math.max(state.metrics.queueHighBytes, totalBufferedBytes(ptyId, state))
-      if (entry.bytes >= PTY_BATCH_MAX_BYTES) flushCoalesceEntry(ptyId)
-      maybePausePty(ptyId)
-      return
-    }
-    const newEntry: CoalesceEntry = {
-      chunks: [chunk],
-      bytes: chunkBytes,
-      timer: setTimeout(() => flushCoalesceEntry(ptyId), PTY_BATCH_WINDOW_MS),
-    }
-    coalesceBuffer.set(ptyId, newEntry)
-    state.metrics.queueHighBytes = Math.max(state.metrics.queueHighBytes, totalBufferedBytes(ptyId, state))
-    if (newEntry.bytes >= PTY_BATCH_MAX_BYTES) flushCoalesceEntry(ptyId)
-    maybePausePty(ptyId)
-  }
-
-  function flushCoalesceEntry(ptyId: string): void {
-    const entry = coalesceBuffer.get(ptyId)
-    if (!entry) return
-    clearTimeout(entry.timer)
-    coalesceBuffer.delete(ptyId)
-    enqueuePtyPayload(ptyId, entry.chunks.join(''), entry.bytes)
-  }
-
+  // Relay PTY output straight to the routed window with seq=0 (the renderer writes
+  // it to xterm synchronously). If no window is currently routable, buffer in order
+  // and retry — this only happens transiently, e.g. during a cross-window move.
   function sendDirectPtyOutput(ptyId: string, data: string): void {
-    const sent = windowManager.sendToWindowForPty(
-      ptyId,
-      'pty:data',
-      ptyId,
-      data,
-      0,
-      Buffer.byteLength(data, 'utf8'),
-    )
-    if (!sent) enqueuePtyOutput(ptyId, data)
+    if (!data) return
+    const buffered = pendingDirectOutput.get(ptyId)
+    if (buffered) {
+      buffered.push(data)
+      return
+    }
+    const sent = windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, data, 0, Buffer.byteLength(data, 'utf8'))
+    if (!sent) {
+      pendingDirectOutput.set(ptyId, [data])
+      scheduleDirectFlush(ptyId)
+    }
+  }
+
+  function scheduleDirectFlush(ptyId: string): void {
+    if (directRetryTimers.has(ptyId)) return
+    const timer = setTimeout(() => {
+      directRetryTimers.delete(ptyId)
+      const buffered = pendingDirectOutput.get(ptyId)
+      if (!buffered) return
+      const joined = buffered.join('')
+      const sent = windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, joined, 0, Buffer.byteLength(joined, 'utf8'))
+      if (sent) {
+        pendingDirectOutput.delete(ptyId)
+      } else {
+        pendingDirectOutput.set(ptyId, [joined])
+        scheduleDirectFlush(ptyId)
+      }
+    }, PTY_ROUTE_RETRY_MS)
+    directRetryTimers.set(ptyId, timer)
+  }
+
+  function cleanupDirectOutput(ptyId: string): void {
+    const timer = directRetryTimers.get(ptyId)
+    if (timer) {
+      clearTimeout(timer)
+      directRetryTimers.delete(ptyId)
+    }
+    pendingDirectOutput.delete(ptyId)
+  }
+
+  // Called after a pty is (re)routed to a window — e.g. on create or cross-window
+  // move. Flushes any output buffered while the pty had no routable window.
+  function flushDirectOutput(ptyId: string): void {
+    const buffered = pendingDirectOutput.get(ptyId)
+    if (!buffered) return
+    const joined = buffered.join('')
+    const sent = windowManager.sendToWindowForPty(ptyId, 'pty:data', ptyId, joined, 0, Buffer.byteLength(joined, 'utf8'))
+    if (sent) {
+      cleanupDirectOutput(ptyId)
+    } else {
+      pendingDirectOutput.set(ptyId, [joined])
+      scheduleDirectFlush(ptyId)
+    }
   }
 
   async function scanAllSessions() {
@@ -412,10 +256,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   const contentTimer = setInterval(() => { void pollSessions() }, 5000)
 
-  // PTY data -> renderer. Plain shell panes use direct host-to-xterm writes;
-  // agent panes keep coalescing + ack flow-control for high-volume CLI output.
+  // PTY data -> renderer. Both shell and agent panes relay output directly to
+  // xterm (seq=0). node-pty + xterm handle the volume; no coalescing/ack/backpressure.
   ptyManager.on('data', (ptyId: string, data: string) => {
-    enqueuePtyOutput(ptyId, data)
+    sendDirectPtyOutput(ptyId, data)
     if (data.includes('\x1b]7;') || data.includes('\x1b]633;P;Cwd=')) {
       const cwd = parseShellIntegrationCwd(data) ?? parseOsc7(data)
       if (cwd && lastPtyCwd.get(ptyId) !== cwd) {
@@ -456,27 +300,18 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     windowManager.sendToWindowForPty(event.id, 'pty:cwd', event.id, event.cwd)
   })
 
-  ptyManager.on('exit', (ptyId: string, exitCode: number, signal?: number) => {
-    flushCoalesceEntry(ptyId)
-    if (exitCode !== 0) {
-      const exitText = `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`
-      enqueuePtyPayload(ptyId, exitText)
-    }
-    forceDrainPtyOutput(ptyId)
-    windowManager.sendToWindowForPty(ptyId, 'pty:exit', ptyId, exitCode, signal)
-    windowManager.unroutePty(ptyId)
-    lastPtyCwd.delete(ptyId)
-    cleanupPtyFlow(ptyId)
-  })
-
-  shellPtyHost.on('exit', (ptyId: string, exitCode: number, signal?: number) => {
+  const handlePtyExit = (ptyId: string, exitCode: number, signal?: number): void => {
     if (exitCode !== 0) {
       sendDirectPtyOutput(ptyId, `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`)
     }
     windowManager.sendToWindowForPty(ptyId, 'pty:exit', ptyId, exitCode, signal)
     windowManager.unroutePty(ptyId)
     lastPtyCwd.delete(ptyId)
-  })
+    cleanupDirectOutput(ptyId)
+  }
+
+  ptyManager.on('exit', handlePtyExit)
+  shellPtyHost.on('exit', handlePtyExit)
 
   shellPtyHost.on('error', (ptyId: string, error: Error) => {
     console.error('[ShellPtyHost] error:', ptyId, error)
@@ -542,7 +377,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     const result = await spawner.spawnNew(agentKind, cwd, senderWin)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
-    reroutePtyFlow(result.ptyId)
+    flushDirectOutput(result.ptyId)
     return result
   })
 
@@ -550,7 +385,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     const result = await spawner.spawnResume(agentKind, sessionId, cwd, senderWin)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
-    reroutePtyFlow(result.ptyId)
+    flushDirectOutput(result.ptyId)
     return result
   })
 
@@ -562,7 +397,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const ptyId = shellPtyHost.create(cwd, initialSize)
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     windowManager.routePty(ptyId, senderWin.webContents.id)
-    reroutePtyFlow(ptyId)
+    flushDirectOutput(ptyId)
     return { ptyId }
   })
 
@@ -583,42 +418,22 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     ptyManager.write(ptyId, data)
   })
 
-  ipcMain.on('pty:pause-output', (_e, ptyId: string) => ptyManager.pause(ptyId))
-
-  ipcMain.on('pty:resume-output', (_e, ptyId: string) => ptyManager.resume(ptyId))
-
-  ipcMain.on('pty:data-ack', (e, ptyId: string, seq: number, byteLength: number) => {
-    const state = ptyFlow.get(ptyId)
-    if (!state || !windowManager.ownsPty(ptyId, e.sender.id)) return
-    const trackedPayload = state.inFlight.get(seq)
-    if (!trackedPayload) return
-    state.inFlight.delete(seq)
-    state.inFlightBytes = Math.max(0, state.inFlightBytes - trackedPayload.bytes)
-    if (typeof byteLength === 'number' && byteLength !== trackedPayload.bytes && DEBUG_PTY_THROUGHPUT) {
-      console.debug('[pty-flow] ack byte mismatch', { ptyId, seq, expected: trackedPayload.bytes, actual: byteLength })
-    }
-    maybeResumePty(ptyId)
-    scheduleDrainPtyOutput(ptyId)
-  })
-
   ipcMain.on('pty:resize', (_e, ptyId: string, cols: number, rows: number) => {
     if (shellPtyHost.has(ptyId)) {
       shellPtyHost.resize(ptyId, cols, rows)
       return
     }
-    flushCoalesceEntry(ptyId)
-    forceDrainPtyOutput(ptyId)
     ptyManager.resize(ptyId, cols, rows)
   })
 
   ipcMain.handle('pty:kill', (_e, ptyId: string) => {
     windowManager.unroutePty(ptyId)
     lastPtyCwd.delete(ptyId)
+    cleanupDirectOutput(ptyId)
     if (shellPtyHost.has(ptyId)) {
       shellPtyHost.kill(ptyId)
       return
     }
-    cleanupPtyFlow(ptyId)
     return ptyManager.kill(ptyId)
   })
 
@@ -879,7 +694,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     if (!win) return false
     for (const ptyId of ptyIds as string[]) {
       windowManager.routePty(ptyId, win.webContents.id)
-      reroutePtyFlow(ptyId)
+      flushDirectOutput(ptyId)
     }
     return true
   })
@@ -961,7 +776,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       }
       if (payload.pane.ptyId) {
         windowManager.transferPty(payload.pane.ptyId, toWin)
-        reroutePtyFlow(payload.pane.ptyId)
+        flushDirectOutput(payload.pane.ptyId)
       }
       sourceWin.webContents.send('pane:remove-remote', payload.pane.id)
       return true
@@ -1045,7 +860,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
     for (const ptyId of ptyIds as string[]) {
       windowManager.transferPty(ptyId, toWin)
-      reroutePtyFlow(ptyId)
+      flushDirectOutput(ptyId)
     }
     // PTYs are now routed to the absorbing window; only now is it safe for the source to
     // drop/detach its copy. Without this commit the source either lost the tab before the
@@ -1154,9 +969,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   return {
     cleanup: () => {
       clearInterval(contentTimer)
-      for (const entry of coalesceBuffer.values()) clearTimeout(entry.timer)
-      coalesceBuffer.clear()
-      for (const ptyId of Array.from(ptyFlow.keys())) cleanupPtyFlow(ptyId)
+      for (const timer of directRetryTimers.values()) clearTimeout(timer)
+      directRetryTimers.clear()
+      pendingDirectOutput.clear()
       index.close()
       spawner.dispose()
       shellPtyHost.destroy()

@@ -17,8 +17,6 @@ type WorkerMessage =
   | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
-  | { type: 'pause'; id: string }
-  | { type: 'resume'; id: string }
   | { type: 'kill'; id: string }
 
 type ParentMessage =
@@ -82,16 +80,6 @@ process.on('message', (msg: WorkerMessage) => {
       try {
         instances.get(msg.id)?.resize(msg.cols, msg.rows)
       } catch { /* ignore */ }
-      break
-    }
-
-    case 'pause': {
-      instances.get(msg.id)?.pause()
-      break
-    }
-
-    case 'resume': {
-      instances.get(msg.id)?.resume()
       break
     }
 

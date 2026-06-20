@@ -37,15 +37,7 @@ const XTERM_THEME = {
 
 const RESIZE_COL_DEBOUNCE_MS = 100
 const RESIZE_DEBOUNCE_BUFFER_THRESHOLD = 200
-const XTERM_WRITE_CHUNK_CHARS = 64 * 1024
 const ALT_ENTER_SEQUENCE = '\x1b\r'
-
-interface QueuedOutputPayload {
-  data: string
-  seq: number
-  byteLength: number
-  offset: number
-}
 
 interface ContextMenu {
   x: number
@@ -364,45 +356,11 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     let latestResize: { cols: number; rows: number } | null = null
     let pendingResizeTimer: ReturnType<typeof setTimeout> | null = null
     let suppressResizeUntil = 0
-    let queuedOutput: QueuedOutputPayload[] = []
-    let writeInFlight = false
-
-    const takeQueuedOutput = (): { chunk: string; ack?: { seq: number; byteLength: number } } | null => {
-      const first = queuedOutput[0]
-      if (!first) return null
-      const remaining = first.data.length - first.offset
-      if (remaining <= XTERM_WRITE_CHUNK_CHARS) {
-        queuedOutput.shift()
-        const chunk = first.data.slice(first.offset)
-        return { chunk, ack: { seq: first.seq, byteLength: first.byteLength } }
-      }
-      const chunk = first.data.slice(first.offset, first.offset + XTERM_WRITE_CHUNK_CHARS)
-      first.offset += chunk.length
-      return { chunk }
-    }
 
     function connect(ptyId: string): void {
       ptyIdRef.current = ptyId
       setStatus('ready')
       xtermRegistry.markConnected(pane.id)
-
-      const drainOutput = (): void => {
-        if (cancelled || writeInFlight) return
-        const next = takeQueuedOutput()
-        if (!next) return
-        writeInFlight = true
-        terminal.write(next.chunk, () => {
-          writeInFlight = false
-          if (next.ack) window.ipc.send('pty:data-ack', ptyId, next.ack.seq, next.ack.byteLength)
-          if (cancelled) return
-          drainOutput()
-        })
-      }
-
-      const enqueueOutput = (data: string, seq: number, byteLength: number): void => {
-        queuedOutput.push({ data, seq, byteLength, offset: 0 })
-        drainOutput()
-      }
 
       const applyReadyMetadata = (metadata: PtyReadyMetadata): void => {
         if (cancelled) return
@@ -430,19 +388,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         if (typeof metadata.cwd === 'string') applyReadyMetadata(metadata)
       }).catch(() => {})
 
-      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown, seq: unknown, byteLength: unknown) => {
-        if (
-          receivedId === ptyId &&
-          typeof data === 'string' &&
-          typeof seq === 'number' &&
-          typeof byteLength === 'number' &&
-          !cancelled
-        ) {
-          if (seq === 0) {
-            terminal.write(data)
-          } else {
-            enqueueOutput(data, seq, byteLength)
-          }
+      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
+        if (receivedId === ptyId && typeof data === 'string' && !cancelled) {
+          terminal.write(data)
         }
       })
 
@@ -505,7 +453,6 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
     return () => {
       cancelled = true
-      queuedOutput = []
       if (pendingResizeTimer) clearTimeout(pendingResizeTimer)
       unsubData?.()
       unsubReady?.()

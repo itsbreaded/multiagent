@@ -229,13 +229,11 @@ export interface IPCChannels {
   // Resize a PTY
   'pty:resize': (ptyId: string, cols: number, rows: number) => void
 
-  // Renderer acks a PTY output payload after xterm accepts the write
-  'pty:data-ack': (ptyId: string, seq: number, byteLength: number) => void
-
   // Kill a PTY
   'pty:kill': (ptyId: string) => void
 
-  // Main pushes PTY output to renderer
+  // Main pushes PTY output to renderer. seq is always 0 (direct relay; the
+  // byteLength arg is retained for the channel shape but no longer acked).
   'pty:data': (ptyId: string, data: string, seq: number, byteLength: number) => void
 
   // Main notifies renderer when the PTY process is ready
@@ -412,9 +410,6 @@ export type EventChannels =
 export type SendChannels =
   | 'pty:write'
   | 'pty:resize'
-  | 'pty:data-ack'
-  | 'pty:pause-output'
-  | 'pty:resume-output'
   | 'tab:state-sync'
   | 'tab:detached-ready'
   | 'tab:release-applied'

@@ -31,8 +31,6 @@ type WorkerMessage =
   | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
-  | { type: 'pause'; id: string }
-  | { type: 'resume'; id: string }
   | { type: 'kill'; id: string }
 
 type ParentMessage =
@@ -46,7 +44,6 @@ export class PtyManager extends EventEmitter {
   private pendingResizes = new Map<string, { cols: number; rows: number }>()
   private readyIds = new Set<string>()
   private readyEvents = new Map<string, PtyReadyEvent>()
-  private pausedIds = new Set<string>()
 
   constructor() {
     super()
@@ -82,7 +79,6 @@ export class PtyManager extends EventEmitter {
           this.pendingResizes.delete(msg.id)
           this.readyIds.delete(msg.id)
           this.readyEvents.delete(msg.id)
-          this.pausedIds.delete(msg.id)
           this.emit('exit', msg.id, msg.exitCode, msg.signal)
           break
         case 'ready': {
@@ -178,23 +174,10 @@ export class PtyManager extends EventEmitter {
     this._send({ type: 'resize', id: ptyId, cols, rows })
   }
 
-  pause(ptyId: string): void {
-    if (this.pausedIds.has(ptyId)) return
-    this.pausedIds.add(ptyId)
-    this._send({ type: 'pause', id: ptyId })
-  }
-
-  resume(ptyId: string): void {
-    if (!this.pausedIds.has(ptyId)) return
-    this.pausedIds.delete(ptyId)
-    this._send({ type: 'resume', id: ptyId })
-  }
-
   kill(ptyId: string): void {
     this.pendingResizes.delete(ptyId)
     this.readyIds.delete(ptyId)
     this.readyEvents.delete(ptyId)
-    this.pausedIds.delete(ptyId)
     this._send({ type: 'kill', id: ptyId })
   }
 
