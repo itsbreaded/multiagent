@@ -47,10 +47,6 @@ export class PtyManager extends EventEmitter {
   private readyIds = new Set<string>()
   private readyEvents = new Map<string, PtyReadyEvent>()
   private pausedIds = new Set<string>()
-  // PTYs that must NOT be flow-controlled: their output is relayed straight to
-  // xterm (seq=0 direct write) instead of the coalesce/ack pipeline. Shell panes
-  // use this so short no-scroll output (e.g. `git pull`) is never dropped.
-  private directIds = new Set<string>()
 
   constructor() {
     super()
@@ -88,8 +84,6 @@ export class PtyManager extends EventEmitter {
           this.readyEvents.delete(msg.id)
           this.pausedIds.delete(msg.id)
           this.emit('exit', msg.id, msg.exitCode, msg.signal)
-          // Delete after emit so the exit handler can still check isDirect().
-          this.directIds.delete(msg.id)
           break
         case 'ready': {
           this.readyIds.add(msg.id)
@@ -132,19 +126,15 @@ export class PtyManager extends EventEmitter {
     cmd: string[],
     extraEnv?: Record<string, string>,
     initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
-    options: { flowControl?: boolean; envProfile?: 'agent' | 'shell' } = {},
   ): string {
     const id = randomUUID()
-    // flowControl defaults to true (agents). Shell panes pass false so handlers
-    // relays their output directly (seq=0) without coalescing/ack.
-    if (options.flowControl === false) this.directIds.add(id)
     setImmediate(() => {
       this._send({
         type: 'spawn',
         id,
         cwd: existsSync(cwd) ? cwd : homedir(),
         cmd,
-        env: buildEnv(extraEnv, options.envProfile ?? 'agent'),
+        env: buildEnv(extraEnv),
         cols: initialSize.cols,
         rows: initialSize.rows,
       })
@@ -160,15 +150,7 @@ export class PtyManager extends EventEmitter {
   }
 
   createShell(cwd: string, initialSize?: { cols: number; rows: number }): string {
-    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize, {
-      flowControl: false,
-      envProfile: 'shell',
-    })
-  }
-
-  /** True for shell panes — their output must be relayed directly, not coalesced. */
-  isDirect(ptyId: string): boolean {
-    return this.directIds.has(ptyId)
+    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize)
   }
 
   createClaude(cwd: string): string {
@@ -221,15 +203,11 @@ export class PtyManager extends EventEmitter {
   }
 
   destroy(): void {
-    this.directIds.clear()
     this.worker.kill()
   }
 }
 
-function buildEnv(
-  extraVars?: Record<string, string>,
-  profile: 'agent' | 'shell' = 'agent',
-): Record<string, string> {
+function buildEnv(extraVars?: Record<string, string>): Record<string, string> {
   const env = { ...process.env } as Record<string, string>
 
   delete env['ELECTRON_RUN_AS_NODE']
@@ -241,20 +219,17 @@ function buildEnv(
   env['COLORTERM'] = 'truecolor'
 
   // Claude Code keys its embedded-terminal rendering path on TERM_PROGRAM=vscode.
-  // Shell integration (shellIntegration.ps1) also gates on it, so both profiles
-  // need it. Changing this value breaks Claude's xterm.js rendering mode.
+  // Changing this value causes Claude to fall back to a rendering mode that does
+  // not behave correctly inside xterm.js.
   env['TERM_PROGRAM'] = 'vscode'
 
-  if (profile === 'agent') {
-    // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
-    // works correctly inside our ConPTY. The DISABLE_* flags suppress alternate-
-    // screen switching and mouse capture, both of which break in xterm.js. These
-    // are scoped to agent panes so plain shell panes get a clean environment.
-    env['CLAUDECODE'] = '1'
-    env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'] = '1'
-    env['CLAUDE_CODE_DISABLE_MOUSE'] = '1'
-    env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
-  }
+  // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
+  // works correctly inside our ConPTY. The DISABLE_* flags suppress alternate-
+  // screen switching and mouse capture, both of which break in xterm.js.
+  env['CLAUDECODE'] = '1'
+  env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'] = '1'
+  env['CLAUDE_CODE_DISABLE_MOUSE'] = '1'
+  env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
 
   if (process.platform === 'win32') {
     const appData = process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming')

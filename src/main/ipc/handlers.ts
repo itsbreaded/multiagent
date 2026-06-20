@@ -10,6 +10,7 @@ import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import type { PtyReadyEvent } from '../pty/PtyManager'
+import { ShellPtyHost } from '../pty/ShellPtyHost'
 import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
@@ -114,6 +115,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const codexScanner = new CodexSessionScanner()
   const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index)
   const ptyManager = new PtyManager()
+  const shellPtyHost = new ShellPtyHost()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
   const lastPtyCwd = new Map<string, string>()
   const coalesceBuffer = new Map<string, CoalesceEntry>()
@@ -410,16 +412,21 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   const contentTimer = setInterval(() => { void pollSessions() }, 5000)
 
-  // PTY data -> renderer. The host is shared; the data-flow *policy* differs:
-  // shell panes (ptyManager.isDirect) get a straight seq=0 relay to xterm, while
+  // PTY data -> renderer. Plain shell panes use direct host-to-xterm writes;
   // agent panes keep coalescing + ack flow-control for high-volume CLI output.
-  // CWD parsing (OSC 633 / OSC 7) is identical for both.
   ptyManager.on('data', (ptyId: string, data: string) => {
-    if (ptyManager.isDirect(ptyId)) {
-      sendDirectPtyOutput(ptyId, data)
-    } else {
-      enqueuePtyOutput(ptyId, data)
+    enqueuePtyOutput(ptyId, data)
+    if (data.includes('\x1b]7;') || data.includes('\x1b]633;P;Cwd=')) {
+      const cwd = parseShellIntegrationCwd(data) ?? parseOsc7(data)
+      if (cwd && lastPtyCwd.get(ptyId) !== cwd) {
+        lastPtyCwd.set(ptyId, cwd)
+        windowManager.sendToWindowForPty(ptyId, 'pty:cwd', ptyId, cwd)
+      }
     }
+  })
+
+  shellPtyHost.on('data', (ptyId: string, data: string) => {
+    sendDirectPtyOutput(ptyId, data)
     if (data.includes('\x1b]7;') || data.includes('\x1b]633;P;Cwd=')) {
       const cwd = parseShellIntegrationCwd(data) ?? parseOsc7(data)
       if (cwd && lastPtyCwd.get(ptyId) !== cwd) {
@@ -439,13 +446,21 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     windowManager.sendToWindowForPty(event.id, 'pty:cwd', event.id, event.cwd)
   })
 
+  shellPtyHost.on('ready', (event: PtyReadyEvent) => {
+    lastPtyCwd.set(event.id, event.cwd)
+    windowManager.sendToWindowForPty(event.id, 'pty:ready', event.id, {
+      pid: event.pid,
+      cwd: event.cwd,
+      windowsPty: event.windowsPty,
+    })
+    windowManager.sendToWindowForPty(event.id, 'pty:cwd', event.id, event.cwd)
+  })
+
   ptyManager.on('exit', (ptyId: string, exitCode: number, signal?: number) => {
-    const direct = ptyManager.isDirect(ptyId)
     flushCoalesceEntry(ptyId)
     if (exitCode !== 0) {
       const exitText = `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`
-      if (direct) sendDirectPtyOutput(ptyId, exitText)
-      else enqueuePtyPayload(ptyId, exitText)
+      enqueuePtyPayload(ptyId, exitText)
     }
     forceDrainPtyOutput(ptyId)
     windowManager.sendToWindowForPty(ptyId, 'pty:exit', ptyId, exitCode, signal)
@@ -454,11 +469,18 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     cleanupPtyFlow(ptyId)
   })
 
-  ptyManager.on('error', (ptyId: string, error: Error) => {
-    console.error('[PtyManager] error:', ptyId, error)
-    const errorText = `\r\n\x1b[31m[terminal error: ${error.message}]\x1b[0m\r\n`
-    if (ptyManager.isDirect(ptyId)) sendDirectPtyOutput(ptyId, errorText)
-    else enqueuePtyOutput(ptyId, errorText)
+  shellPtyHost.on('exit', (ptyId: string, exitCode: number, signal?: number) => {
+    if (exitCode !== 0) {
+      sendDirectPtyOutput(ptyId, `\r\n\x1b[33m[process exited with code ${exitCode}]\x1b[0m\r\n`)
+    }
+    windowManager.sendToWindowForPty(ptyId, 'pty:exit', ptyId, exitCode, signal)
+    windowManager.unroutePty(ptyId)
+    lastPtyCwd.delete(ptyId)
+  })
+
+  shellPtyHost.on('error', (ptyId: string, error: Error) => {
+    console.error('[ShellPtyHost] error:', ptyId, error)
+    sendDirectPtyOutput(ptyId, `\r\n\x1b[31m[terminal error: ${error.message}]\x1b[0m\r\n`)
   })
 
   // --- IPC handlers ---
@@ -537,7 +559,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       cols: typeof cols === 'number' && cols > 0 ? Math.floor(cols) : 80,
       rows: typeof rows === 'number' && rows > 0 ? Math.floor(rows) : 24,
     }
-    const ptyId = ptyManager.createShell(cwd, initialSize)
+    const ptyId = shellPtyHost.create(cwd, initialSize)
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     windowManager.routePty(ptyId, senderWin.webContents.id)
     reroutePtyFlow(ptyId)
@@ -546,13 +568,17 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('pty:get-ready', (e, ptyId: string) => {
     if (!windowManager.ownsPty(ptyId, e.sender.id)) return null
-    const event = ptyManager.getReadyEvent(ptyId)
+    const event = shellPtyHost.getReadyEvent(ptyId) ?? ptyManager.getReadyEvent(ptyId)
     return event
       ? { pid: event.pid, cwd: event.cwd, windowsPty: event.windowsPty }
       : null
   })
 
   ipcMain.on('pty:write', (_e, ptyId: string, data: string) => {
+    if (shellPtyHost.has(ptyId)) {
+      shellPtyHost.write(ptyId, data)
+      return
+    }
     spawner.notePtyWrite(ptyId, data)
     ptyManager.write(ptyId, data)
   })
@@ -576,7 +602,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   ipcMain.on('pty:resize', (_e, ptyId: string, cols: number, rows: number) => {
-    // flush/drain are no-ops for direct shell PTYs (no coalesce buffer/flow state).
+    if (shellPtyHost.has(ptyId)) {
+      shellPtyHost.resize(ptyId, cols, rows)
+      return
+    }
     flushCoalesceEntry(ptyId)
     forceDrainPtyOutput(ptyId)
     ptyManager.resize(ptyId, cols, rows)
@@ -585,6 +614,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ipcMain.handle('pty:kill', (_e, ptyId: string) => {
     windowManager.unroutePty(ptyId)
     lastPtyCwd.delete(ptyId)
+    if (shellPtyHost.has(ptyId)) {
+      shellPtyHost.kill(ptyId)
+      return
+    }
     cleanupPtyFlow(ptyId)
     return ptyManager.kill(ptyId)
   })
@@ -1126,6 +1159,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       for (const ptyId of Array.from(ptyFlow.keys())) cleanupPtyFlow(ptyId)
       index.close()
       spawner.dispose()
+      shellPtyHost.destroy()
       ptyManager.destroy()
     },
     registerWindowHandlers,
