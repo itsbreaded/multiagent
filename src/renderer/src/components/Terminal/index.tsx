@@ -6,10 +6,12 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf, PtyReadyMetadata } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
+import { useSessionsStore } from '../../store/sessions'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
+import { DirPicker } from '../DirPicker'
 
 const XTERM_THEME = {
   background: '#0e1011',
@@ -61,6 +63,8 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   const resumeAgentPane = usePanesStore((s) => s.resumeAgentPane)
   const startNewAgentInPane = usePanesStore((s) => s.startNewAgentInPane)
   const closePane = usePanesStore((s) => s.closePane)
+  const applyCwdRepair = usePanesStore((s) => s.applyCwdRepair)
+  const repairSessionCwd = useSessionsStore((s) => s.repairSessionCwd)
 
   // If a live xterm already exists for this pane (e.g. we're remounting after a
   // layout change), start in 'ready' so the terminal content is shown immediately
@@ -71,6 +75,9 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   })
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
+  const [repairPickerOpen, setRepairPickerOpen] = useState(false)
+  const [repairError, setRepairError] = useState<string | null>(null)
+  const [repairing, setRepairing] = useState(false)
 
   // Keep ptyIdRef in sync so context menu paste can always find the current ptyId
   useEffect(() => { ptyIdRef.current = pane.ptyId ?? null }, [pane.ptyId])
@@ -106,6 +113,27 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     }).catch(() => {})
     setContextMenu(null)
   }, [])
+
+  const repairAndResume = useCallback(async (newCwd: string): Promise<void> => {
+    if (!pane.sessionId || repairing) return
+    setRepairing(true)
+    setRepairError(null)
+    try {
+      const result = await repairSessionCwd(pane.cwd, newCwd)
+      if (!result.ok) {
+        setRepairError(result.error ?? 'Directory repair failed')
+        return
+      }
+      if (result.mapping) applyCwdRepair(result.mapping)
+      setRepairPickerOpen(false)
+      setRepairError(null)
+      await resumeAgentPane(pane.id)
+    } catch {
+      setRepairError('Directory repair failed')
+    } finally {
+      setRepairing(false)
+    }
+  }, [applyCwdRepair, pane.cwd, pane.id, pane.sessionId, repairSessionCwd, repairing, resumeAgentPane])
 
   // Effect 1: attach the xterm instance for this pane.
   // Uses a registry so the instance (and its scrollback buffer) survives React
@@ -511,11 +539,33 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       {status === 'error' && errorMsg && (
         <div style={{
           position: 'absolute', top: 8, left: 8, right: 8,
-          padding: '4px 8px', backgroundColor: '#1e1010',
+          padding: '6px 8px', backgroundColor: '#1e1010',
           border: '1px solid #3a1010', borderRadius: 4,
           fontSize: 11, color: '#f87171', zIndex: 2,
+          display: 'flex', alignItems: 'center', gap: 8,
         }}>
-          {errorMsg}
+          <span style={{ flex: 1 }}>{errorMsg}</span>
+          {pane.paneType === 'agent' && pane.sessionId && (
+            <button
+              data-window-drag-exempt="true"
+              onClick={() => {
+                setRepairError(null)
+                setRepairPickerOpen(true)
+              }}
+              style={{
+                backgroundColor: '#24272a',
+                border: '1px solid #3a3f44',
+                color: '#d4d4d4',
+                borderRadius: 4,
+                padding: '4px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              Repair directory
+            </button>
+          )}
         </div>
       )}
       {disconnected && (
@@ -617,6 +667,26 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
                   Resume session
                 </button>
               )}
+              {pane.sessionId && (
+                <button
+                  data-window-drag-exempt="true"
+                  onClick={() => {
+                    setRepairError(null)
+                    setRepairPickerOpen(true)
+                  }}
+                  style={{
+                    backgroundColor: '#24272a',
+                    border: '1px solid #3a3f44',
+                    color: '#d4d4d4',
+                    borderRadius: 4,
+                    padding: '7px 12px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Repair directory
+                </button>
+              )}
               <button
                 data-window-drag-exempt="true"
                 onClick={() => startNewAgentInPane(pane.id)}
@@ -651,6 +721,22 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
             </div>
           </div>
         </div>
+      )}
+      {repairPickerOpen && (
+        <DirPicker
+          title="Repair project directory"
+          description="Choose the current folder for this project. The pane will resume after repair."
+          initial={pane.cwd}
+          confirmLabel={repairing ? 'Repairing...' : 'Repair and resume'}
+          skipLabel="Cancel"
+          error={repairError}
+          onConfirm={(dir) => { void repairAndResume(dir) }}
+          onSkip={() => {
+            if (repairing) return
+            setRepairError(null)
+            setRepairPickerOpen(false)
+          }}
+        />
       )}
       <div
         ref={containerRef}

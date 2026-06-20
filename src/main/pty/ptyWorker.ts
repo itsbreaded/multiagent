@@ -14,7 +14,7 @@ import { basename } from 'path'
 import { defaultShell } from './shell'
 
 type WorkerMessage =
-  | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
+  | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number; allowCwdFallback?: boolean }
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
   | { type: 'kill'; id: string }
@@ -41,7 +41,12 @@ process.on('message', (msg: WorkerMessage) => {
     case 'spawn': {
       const shell = msg.cmd[0] ?? defaultShell()
       const args = msg.cmd.slice(1)
-      const safeCwd = existsSync(msg.cwd) ? msg.cwd : homedir()
+      const cwdExists = existsSync(msg.cwd)
+      if (!cwdExists && !msg.allowCwdFallback) {
+        send({ type: 'error', id: msg.id, message: `Working directory does not exist: ${msg.cwd}` })
+        break
+      }
+      const safeCwd = cwdExists ? msg.cwd : homedir()
       const name = process.platform === 'win32' ? basename(shell) : 'xterm-256color'
 
       try {

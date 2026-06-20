@@ -49,7 +49,15 @@ export interface Session {
 export interface SessionRepairCwdResult {
   ok: boolean
   sessions: Session[]
+  mapping?: CwdRepairMapping
+  layoutUpdated?: boolean
+  layoutAffectedCount?: number
   error?: string
+}
+
+export interface CwdRepairMapping {
+  oldCwd: string
+  newCwd: string
 }
 
 export interface SessionSearchRequest {
@@ -181,6 +189,7 @@ export interface IPCChannels {
   // --- Sessions ---
   // Main pushes full session list whenever it changes
   'sessions:updated': (sessions: Session[]) => void
+  'layout:cwd-repaired': (mapping: CwdRepairMapping) => void
 
   // Renderer invokes summary search (FTS5 over metadata)
   'sessions:search': (query: string) => Session[]
@@ -380,6 +389,7 @@ export type InvokeChannels =
 
 export type EventChannels =
   | 'sessions:updated'
+  | 'layout:cwd-repaired'
   | 'pty:data'
   | 'pty:ready'
   | 'pty:exit'

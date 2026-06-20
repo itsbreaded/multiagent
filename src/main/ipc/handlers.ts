@@ -14,7 +14,7 @@ import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, McpSettings, PaneTransferPayload, SessionSearchRequest, Tab } from '../../shared/types'
+import type { AgentKind, CwdRepairMapping, McpSettings, PaneTransferPayload, SessionSearchRequest, Tab } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
@@ -319,13 +319,24 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     } catch {
       return { ok: false, sessions: [], error: 'The selected directory could not be read' }
     }
-    const updated = index.repairCwd(trimmedOld, trimmedNew)
+    const mapping = { oldCwd: path.resolve(trimmedOld), newCwd: path.resolve(trimmedNew) } satisfies CwdRepairMapping
+    const layoutRepair = repairLayoutCwds(layoutPath, mapping)
+    const updated = index.repairCwd(mapping.oldCwd, mapping.newCwd)
     if (updated.length > 0) {
       const all = index.getAll()
       lastSessionsJson = JSON.stringify(all)
       windowManager.broadcastAll('sessions:updated', all)
     }
-    return { ok: true, sessions: updated }
+    if (layoutRepair.changed || updated.length > 0) {
+      windowManager.broadcastAll('layout:cwd-repaired', mapping)
+    }
+    return {
+      ok: true,
+      sessions: updated,
+      mapping,
+      layoutUpdated: layoutRepair.changed,
+      layoutAffectedCount: layoutRepair.count,
+    }
   })
 
   ipcMain.handle('sessions:refresh', async () => {
@@ -954,4 +965,99 @@ function normalizeTabsForLayout(tabs: unknown): unknown {
     if (!tab || typeof tab !== 'object') return tab
     return { ...(tab as Record<string, unknown>), detached: false }
   })
+}
+
+function repairLayoutCwds(layoutPath: string, mapping: CwdRepairMapping): { changed: boolean; count: number } {
+  if (!fs.existsSync(layoutPath)) return { changed: false, count: 0 }
+
+  let layout: unknown
+  try {
+    layout = JSON.parse(fs.readFileSync(layoutPath, 'utf8'))
+  } catch (err) {
+    console.error('[MultiAgent] repairLayoutCwds: failed to read layout:', err)
+    return { changed: false, count: 0 }
+  }
+
+  const result = rewriteLayoutCwds(layout, mapping)
+  if (!result.changed) return { changed: false, count: 0 }
+
+  try {
+    const backupPath = `${layoutPath}.bak.${timestampForFilename()}`
+    fs.copyFileSync(layoutPath, backupPath)
+    writeJsonAtomic(layoutPath, layout)
+  } catch (err) {
+    console.error('[MultiAgent] repairLayoutCwds: failed to write layout:', err)
+    return { changed: false, count: 0 }
+  }
+
+  return { changed: true, count: result.count }
+}
+
+function rewriteLayoutCwds(layout: unknown, mapping: CwdRepairMapping): { changed: boolean; count: number } {
+  if (!layout || typeof layout !== 'object') return { changed: false, count: 0 }
+  const tabs = (layout as { tabs?: unknown }).tabs
+  if (!Array.isArray(tabs)) return { changed: false, count: 0 }
+
+  let count = 0
+  for (const tab of tabs) {
+    if (!tab || typeof tab !== 'object') continue
+    count += rewritePathProperty(tab as Record<string, unknown>, 'defaultCwd', mapping)
+    const rootNode = (tab as { rootNode?: unknown }).rootNode
+    if (rootNode) count += rewriteNodeCwds(rootNode, mapping)
+  }
+  return { changed: count > 0, count }
+}
+
+function rewriteNodeCwds(node: unknown, mapping: CwdRepairMapping): number {
+  if (!node || typeof node !== 'object') return 0
+  const record = node as Record<string, unknown>
+  if (record['type'] === 'leaf') {
+    return (
+      rewritePathProperty(record, 'cwd', mapping) +
+      rewritePathProperty(record, 'sessionDetectionCwd', mapping)
+    )
+  }
+  if (record['type'] === 'split') {
+    return rewriteNodeCwds(record['first'], mapping) + rewriteNodeCwds(record['second'], mapping)
+  }
+  return 0
+}
+
+function rewritePathProperty(record: Record<string, unknown>, key: string, mapping: CwdRepairMapping): number {
+  const value = record[key]
+  if (typeof value !== 'string') return 0
+  const rewritten = replaceCwdPrefix(value, mapping)
+  if (rewritten === value) return 0
+  record[key] = rewritten
+  return 1
+}
+
+function replaceCwdPrefix(value: string, mapping: CwdRepairMapping): string {
+  const oldRoot = path.resolve(mapping.oldCwd)
+  const newRoot = path.resolve(mapping.newCwd)
+  const candidate = path.resolve(value)
+  const oldKey = comparablePath(oldRoot)
+  const candidateKey = comparablePath(candidate)
+  if (candidateKey === oldKey) return newRoot
+
+  const sep = path.sep
+  if (!candidateKey.startsWith(oldKey.endsWith(sep) ? oldKey : `${oldKey}${sep}`)) return value
+  let suffix = candidate.slice(oldRoot.length)
+  while (suffix.startsWith(path.sep) || suffix.startsWith('/') || suffix.startsWith('\\')) suffix = suffix.slice(1)
+  return path.join(newRoot, suffix)
+}
+
+function comparablePath(value: string): string {
+  const normalized = path.normalize(value)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`
+  fs.writeFileSync(tmpPath, JSON.stringify(value))
+  fs.renameSync(tmpPath, filePath)
+}
+
+function timestampForFilename(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-')
 }

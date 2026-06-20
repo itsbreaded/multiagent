@@ -28,7 +28,7 @@ export interface PtyReadyEvent {
 }
 
 type WorkerMessage =
-  | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number }
+  | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number; allowCwdFallback: boolean }
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
   | { type: 'kill'; id: string }
@@ -123,17 +123,24 @@ export class PtyManager extends EventEmitter {
     extraEnv?: Record<string, string>,
     initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
     envProfile: 'agent' | 'shell' = 'agent',
+    allowCwdFallback = envProfile === 'shell',
   ): string {
     const id = randomUUID()
     setImmediate(() => {
+      const cwdExists = existsSync(cwd)
+      if (!cwdExists && !allowCwdFallback) {
+        this.emit('error', id, new Error(`Working directory does not exist: ${cwd}`))
+        return
+      }
       this._send({
         type: 'spawn',
         id,
-        cwd: existsSync(cwd) ? cwd : homedir(),
+        cwd: cwdExists ? cwd : homedir(),
         cmd,
         env: buildEnv(extraEnv, envProfile),
         cols: initialSize.cols,
         rows: initialSize.rows,
+        allowCwdFallback,
       })
     })
     return id

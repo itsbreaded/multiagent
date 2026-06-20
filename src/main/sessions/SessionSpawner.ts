@@ -1,6 +1,5 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import * as os from 'os'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type { PtyManager } from '../pty/PtyManager'
@@ -59,9 +58,7 @@ export class SessionSpawner {
   async spawnNew(agentKind: AgentKind, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string; sessionId: string | null; detectionStartedAt: number }> {
     const targetWin = senderWin ?? this.mainWindow
     const startedAt = Date.now()
-    // createDeferred falls back to homedir() when cwd doesn't exist; match that here
-    // so Codex detection agrees with what the agent will record in its JSONL.
-    const actualCwd = fs.existsSync(cwd) ? cwd : os.homedir()
+    assertUsableAgentCwd(cwd)
     const sessionId = agentKind === 'claude' ? randomUUID() : null
     const codexBaseline = agentKind === 'codex' ? await snapshotCodexSessionPaths() : undefined
     const ptyId = this.ptyManager.createDeferred(
@@ -70,7 +67,7 @@ export class SessionSpawner {
       agentEnv(agentKind)
     )
     if (agentKind === 'codex') {
-      this._registerCodexDetection(ptyId, actualCwd, startedAt, targetWin, 'new', codexBaseline)
+      this._registerCodexDetection(ptyId, cwd, startedAt, targetWin, 'new', codexBaseline)
     }
     return { ptyId, sessionId, detectionStartedAt: startedAt }
   }
@@ -78,6 +75,7 @@ export class SessionSpawner {
   async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string, senderWin?: BrowserWindow): Promise<{ ptyId: string }> {
     const targetWin = senderWin ?? this.mainWindow
     const startedAt = Date.now()
+    assertUsableAgentCwd(cwd)
     const codexBaseline = agentKind === 'codex' ? await snapshotCodexSessionPaths() : undefined
     const ptyId = this.ptyManager.createDeferred(
       cwd,
@@ -327,6 +325,15 @@ function skipEscapeSequence(data: string, start: number): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function assertUsableAgentCwd(cwd: string): void {
+  if (!cwd || !fs.existsSync(cwd)) {
+    throw new Error(`Working directory does not exist: ${cwd}`)
+  }
+  if (!fs.statSync(cwd).isDirectory()) {
+    throw new Error(`Working directory is not a directory: ${cwd}`)
+  }
 }
 
 function shellArg(value: string): string {

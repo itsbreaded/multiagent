@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentKind, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
+import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
@@ -119,6 +119,79 @@ function updateLeaf(node: PaneNode, leafId: string, patch: Partial<PaneLeaf>): P
   }
 }
 
+function updateCwdsInTree(node: PaneNode, mapping: CwdRepairMapping): { node: PaneNode; changed: boolean } {
+  if (node.type === 'leaf') {
+    const cwd = replaceCwdPrefix(node.cwd, mapping)
+    const sessionDetectionCwd = node.sessionDetectionCwd
+      ? replaceCwdPrefix(node.sessionDetectionCwd, mapping)
+      : undefined
+    const changed = cwd !== node.cwd || sessionDetectionCwd !== node.sessionDetectionCwd
+    return {
+      node: changed ? { ...node, cwd, sessionDetectionCwd } : node,
+      changed,
+    }
+  }
+  const first = updateCwdsInTree(node.first, mapping)
+  const second = updateCwdsInTree(node.second, mapping)
+  if (!first.changed && !second.changed) return { node, changed: false }
+  return { node: { ...node, first: first.node, second: second.node }, changed: true }
+}
+
+function replaceCwdPrefix(value: string, mapping: CwdRepairMapping): string {
+  const oldRoot = normalizeRepairPath(mapping.oldCwd)
+  const newRoot = normalizeRepairPath(mapping.newCwd)
+  const candidate = normalizeRepairPath(value)
+  const oldKey = comparableRepairPath(oldRoot)
+  const candidateKey = comparableRepairPath(candidate)
+  if (candidateKey === oldKey) return newRoot
+
+  const sep = repairSeparator(oldRoot)
+  const oldPrefix = oldKey.endsWith(sep) ? oldKey : `${oldKey}${sep}`
+  if (!candidateKey.startsWith(oldPrefix)) return value
+  const suffix = candidate.slice(oldRoot.length)
+  return joinRepairPath(newRoot, suffix)
+}
+
+function normalizeRepairPath(value: string): string {
+  const windows = isWindowsPath(value)
+  const sep = windows ? '\\' : '/'
+  const normalized = value.replace(/[\\/]+/g, sep)
+  const prefix = windows && /^[A-Za-z]:/.test(normalized) ? normalized.slice(0, 2) : normalized.startsWith(sep) ? sep : ''
+  const rest = prefix ? normalized.slice(prefix.length) : normalized
+  const parts: string[] = []
+  for (const part of rest.split(sep)) {
+    if (!part || part === '.') continue
+    if (part === '..' && parts.length > 0 && parts[parts.length - 1] !== '..') {
+      parts.pop()
+    } else if (part !== '..' || !prefix) {
+      parts.push(part)
+    }
+  }
+  const joined = parts.join(sep)
+  if (prefix === sep) return `${sep}${joined}`
+  return joined ? `${prefix}${prefix && prefix !== sep ? sep : ''}${joined}` : prefix || '.'
+}
+
+function comparableRepairPath(value: string): string {
+  return isWindowsPath(value) ? value.toLowerCase() : value
+}
+
+function repairSeparator(value: string): '\\' | '/' {
+  return isWindowsPath(value) ? '\\' : '/'
+}
+
+function isWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:/.test(value) || value.includes('\\')
+}
+
+function joinRepairPath(root: string, suffix: string): string {
+  const sep = repairSeparator(root)
+  let cleanSuffix = suffix.replace(/[\\/]+/g, sep)
+  while (cleanSuffix.startsWith(sep)) cleanSuffix = cleanSuffix.slice(1)
+  if (!cleanSuffix) return root
+  return root.endsWith(sep) ? `${root}${cleanSuffix}` : `${root}${sep}${cleanSuffix}`
+}
+
 /** Collect all leaf ids in tree order */
 function collectLeafIds(node: PaneNode): string[] {
   if (node.type === 'leaf') return [node.id]
@@ -155,6 +228,13 @@ function rememberShellSpawnMode(mode: ShellSpawnMode): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('multiagent:lastShellSpawnMode', mode)
   }
+}
+
+function agentIpcErrorMessage(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  const cwdIndex = raw.indexOf('Working directory')
+  if (cwdIndex >= 0) return `${raw.slice(cwdIndex)}. Repair the project directory from Session Browser.`
+  return raw || fallback
 }
 
 function markSessionDetectionPending(leaf: PaneLeaf, startedAt = Date.now()): PaneLeaf {
@@ -257,7 +337,7 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
         ) {
           usePanesStore.getState().updatePane(paneId, { ptyId: result.ptyId, resumeError: undefined })
         }
-      } catch {
+      } catch (err) {
         const current = usePanesStore.getState().findPaneInAnyTab(paneId)
         if (
           current?.paneType === 'agent' &&
@@ -265,7 +345,9 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
           current.sessionId === sessionId &&
           !current.ptyId
         ) {
-          usePanesStore.getState().updatePane(paneId, { resumeError: 'Session resume failed' })
+          usePanesStore.getState().updatePane(paneId, {
+            resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
+          })
         }
       } finally {
         if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
@@ -368,6 +450,7 @@ interface PanesStore {
   setSessionId: (paneId: string, sessionId: string) => void
   updatePane: (paneId: string, patch: Partial<PaneLeaf>) => void
   markPtyExited: (ptyId: string, exitCode: number | null, signal?: number) => void
+  applyCwdRepair: (mapping: CwdRepairMapping) => void
 
   // Session / PTY actions (Phase 2)
   resumeSession: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
@@ -969,10 +1052,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (Object.keys(patch).length > 0) get().updatePane(newLeaf.id, patch)
       } catch (err) {
         console.error('session:new IPC failed', err)
+        const message = agentIpcErrorMessage(err, 'Session detection failed to start')
         get().updatePane(newLeaf.id, {
           sessionDetectionState: 'failed',
-          sessionDetectionError: 'Session detection failed to start',
-          resumeError: 'Session detection failed to start',
+          sessionDetectionError: message,
+          resumeError: message,
         })
       }
     }
@@ -1120,6 +1204,26 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
+  applyCwdRepair: (mapping) => {
+    set((s) => {
+      let changed = false
+      const tabs = s.tabs.map((tab) => {
+        const defaultCwd = tab.defaultCwd ? replaceCwdPrefix(tab.defaultCwd, mapping) : undefined
+        const defaultChanged = defaultCwd !== tab.defaultCwd
+        if (!tab.rootNode) {
+          if (!defaultChanged) return tab
+          changed = true
+          return { ...tab, defaultCwd }
+        }
+        const root = updateCwdsInTree(tab.rootNode, mapping)
+        if (!defaultChanged && !root.changed) return tab
+        changed = true
+        return { ...tab, defaultCwd, rootNode: root.node }
+      })
+      return changed ? { tabs } : s
+    })
+  },
+
   setLastAgentKind: (agentKind) => {
     rememberAgent(agentKind)
     set({ lastAgentKind: agentKind })
@@ -1163,7 +1267,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         }
       } catch (err) {
         console.error('session:resume IPC failed', err)
-        get().updatePane(leaf.id, { resumeError: 'Session resume failed' })
+        get().updatePane(leaf.id, { resumeError: agentIpcErrorMessage(err, 'Session resume failed') })
       } finally {
         if (targetTabId) markTabHydrated(targetTabId)
       }
@@ -1189,7 +1293,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
       } catch (err) {
         console.error('session:resume IPC failed', err)
-        get().updatePane(leaf.id, { resumeError: 'Session resume failed' })
+        get().updatePane(leaf.id, { resumeError: agentIpcErrorMessage(err, 'Session resume failed') })
       } finally {
         markTabHydrated(tab.id)
       }
@@ -1232,7 +1336,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     } catch (err) {
       console.error('session:resume IPC failed', err)
       get().updatePane(paneId, {
-        resumeError: 'Session resume failed',
+        resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
         agentDisconnected: pane.agentDisconnected,
       })
     }
@@ -1271,10 +1375,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       get().updatePane(paneId, patch)
     } catch (err) {
       console.error('session:new IPC failed', err)
+      const message = agentIpcErrorMessage(err, 'Session detection failed to start')
       get().updatePane(paneId, {
         sessionDetectionState: 'failed',
-        sessionDetectionError: 'Session detection failed to start',
-        resumeError: 'Session detection failed to start',
+        sessionDetectionError: message,
+        resumeError: message,
         agentDisconnected: pane.agentDisconnected,
       })
     }
@@ -1316,10 +1421,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (Object.keys(patch).length > 0) get().updatePane(leaf.id, patch)
       } catch (err) {
         console.error('session:new IPC failed', err)
+        const message = agentIpcErrorMessage(err, 'Session detection failed to start')
         get().updatePane(leaf.id, {
           sessionDetectionState: 'failed',
-          sessionDetectionError: 'Session detection failed to start',
-          resumeError: 'Session detection failed to start',
+          sessionDetectionError: message,
+          resumeError: message,
         })
       }
     }
@@ -1759,6 +1865,16 @@ if (typeof window !== 'undefined' && window.ipc) {
       })
       break
     }
+  })
+
+  window.ipc.on('layout:cwd-repaired', (mapping: unknown) => {
+    if (
+      !mapping ||
+      typeof mapping !== 'object' ||
+      typeof (mapping as CwdRepairMapping).oldCwd !== 'string' ||
+      typeof (mapping as CwdRepairMapping).newCwd !== 'string'
+    ) return
+    usePanesStore.getState().applyCwdRepair(mapping as CwdRepairMapping)
   })
 
   // Main tells this window to release a tab (it moved to another window).
