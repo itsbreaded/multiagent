@@ -1,5 +1,27 @@
 # 009 - Moved Directory Session Repair
 
+## Status: DONE (session-scoped)
+
+Shipped a **session-centric** subset of the design below. Implemented:
+
+- Detection via `Session.cwdExists`; severed rows marked in Session Browser + sidebar.
+- "Repair directory" UI (native picker) in `SessionBrowser` and `SessionRow`.
+- `sessions:repair-cwd` IPC → `SessionIndex.repairCwd`: atomic SQLite transaction updating
+  `cwd`/`projectName`/`filePath` plus a `session_cwd_overrides` row applied in `upsert()` so
+  the 5s scanner cannot undo the repair (replaces the proposed `directory-repairs.json`).
+- Phase 4 Claude project dir copy/merge with `.bak.<ts>` for differing targets; Codex
+  `filePath` untouched.
+- Resume guarded: resume disabled on severed sessions; `hydrateTabRuntime` validates the
+  transcript before spawn.
+
+**Deferred to spec 015** (`layout-pane-cwd-repair-and-no-homedir-fallback`):
+
+- Layout-level repair: `layout.json` pane/tab cwd rewrite + `layout.json.bak`.
+- Removing the agent `homedir()` fallback for startup-restored panes with a missing cwd.
+- Dry-run preview count; project-fingerprint / basename-mismatch warnings.
+
+The original full design follows for reference.
+
 ## Problem
 
 Saved panes and indexed Claude/Codex sessions store absolute `cwd` values. If a project folder is renamed, moved, or restored at a new path, startup can still show the old panes, but runtime behavior is degraded:
