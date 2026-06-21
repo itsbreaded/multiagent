@@ -261,7 +261,6 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
           initial={activeTab?.defaultCwd ?? pane.cwd}
           confirmLabel="Split"
           skipLabel="Cancel"
-          autoBrowse
           onConfirm={(dir) => {
             const { direction, choice } = dirPickerForSplit
             splitPane(pane.id, direction, choice.paneType, dir, choice.agentKind)

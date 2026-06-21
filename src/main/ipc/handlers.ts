@@ -11,6 +11,7 @@ import { SessionSpawner, setAgentProviderSettings } from '../sessions/SessionSpa
 import { PtyManager } from '../pty/PtyManager'
 import type { PtyReadyEvent } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
+import { getRecentDirs, addRecentDir } from '../recentDirs'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
@@ -428,6 +429,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ipcMain.handle('shell:open-vscode', (_e, cwd: string) => {
     shell.openExternal(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
   })
+
+  ipcMain.handle('dirs:recent-get', () => getRecentDirs())
+  ipcMain.handle('dirs:recent-add', (_e, dir: string) => addRecentDir(dir))
 
   ipcMain.handle('dialog:pick-directory', async (e, title?: string, defaultPath?: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow

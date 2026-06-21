@@ -245,7 +245,6 @@ export function PaneGrid(): JSX.Element {
               initial={cwdForNew}
               confirmLabel="Start"
               skipLabel="Cancel"
-              autoBrowse
               onConfirm={(dir) => {
                 if (dirPickerFor !== 'shell') newSession(dir, 'vertical', dirPickerFor)
                 else addShellPane(dir)

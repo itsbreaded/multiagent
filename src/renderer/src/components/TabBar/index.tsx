@@ -1199,7 +1199,6 @@ export function TabBar(): JSX.Element {
             initial={dirPickerTab?.defaultCwd ?? ''}
             confirmLabel="Change"
             skipLabel="Cancel"
-            autoBrowse
             onConfirm={(dir) => { setTabDefaultCwd(dirPickerState, dir); setDirPickerState(null) }}
             onSkip={() => setDirPickerState(null)}
           />

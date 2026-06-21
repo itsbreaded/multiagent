@@ -301,7 +301,6 @@ export function TabSections(): JSX.Element {
           initial={dirPickerTab?.defaultCwd ?? ''}
           confirmLabel="Change"
           skipLabel="Cancel"
-          autoBrowse
           onConfirm={(dir) => { setTabDefaultCwd(dirPickerTabId, dir); setDirPickerTabId(null) }}
           onSkip={() => setDirPickerTabId(null)}
         />
@@ -330,7 +329,6 @@ export function TabSections(): JSX.Element {
           initial={projectCwd(dirPickerSpawnTab)}
           confirmLabel="Start"
           skipLabel="Cancel"
-          autoBrowse
           onConfirm={(dir) => {
             const { tabId, choice, direction } = dirPickerSpawn
             const tab = tabs.find((t) => t.id === tabId)

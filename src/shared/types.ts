@@ -316,6 +316,10 @@ export interface IPCChannels {
   // --- Dialogs ---
   'dialog:pick-directory': (title?: string, defaultPath?: string) => string | null
 
+  // --- Recent directories ---
+  'dirs:recent-get': () => string[]
+  'dirs:recent-add': (dir: string) => void
+
   // --- Layout persistence ---
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
   'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
@@ -422,6 +426,8 @@ export type InvokeChannels =
   | 'layout:save'
   | 'layout:load'
   | 'dialog:pick-directory'
+  | 'dirs:recent-get'
+  | 'dirs:recent-add'
   | 'mcp:get-status'
   | 'mcp:get-settings'
   | 'mcp:save-settings'
