@@ -1,14 +1,18 @@
 import { create } from 'zustand'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
 import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
+import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
-export type SettingsSection = 'appearance' | 'hotkeys' | 'general' | 'mcp' | 'providers'
+export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers'
+export type { GpuAccelerationPref }
 
 const SETTINGS_KEY = 'multiagent:settings'
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 250_000
 export const MIN_TERMINAL_SCROLLBACK_LINES = 1_000
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000
+export const MIN_CONTRAST_RATIO = 1
+export const MAX_CONTRAST_RATIO = 21
 
 const DEFAULT_MCP_SETTINGS: McpSettings = {
   builtinBrowserEnabled: true,
@@ -36,6 +40,16 @@ interface SettingsState {
   setShowGitBranchBadges: (value: boolean) => void
   tabOverflowMode: 'scroll' | 'wrap'
   setTabOverflowMode: (mode: 'scroll' | 'wrap') => void
+  // Terminal renderer settings (apply on next pane mount)
+  optimizedTerminalRenderer: boolean
+  setOptimizedTerminalRenderer: (value: boolean) => void
+  terminalGpuAcceleration: GpuAccelerationPref
+  setTerminalGpuAcceleration: (value: GpuAccelerationPref) => void
+  // Terminal display options (hot-apply to live panes)
+  terminalMinimumContrastRatio: number
+  setTerminalMinimumContrastRatio: (value: number) => void
+  terminalRescaleOverlappingGlyphs: boolean
+  setTerminalRescaleOverlappingGlyphs: (value: boolean) => void
   terminalScrollbackLines: number
   setTerminalScrollbackLines: (value: number) => void
   hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>>
@@ -50,17 +64,43 @@ interface SettingsState {
   hydrateAgentProviders: (settings: AgentProviderSettings) => void
 }
 
-type Persisted = Pick<SettingsState, 'showGitBranchBadges' | 'tabOverflowMode' | 'terminalScrollbackLines' | 'hotkeyOverrides' | 'mcpSettings' | 'agentProviders'>
+type Persisted = Pick<SettingsState,
+  | 'showGitBranchBadges'
+  | 'tabOverflowMode'
+  | 'optimizedTerminalRenderer'
+  | 'terminalGpuAcceleration'
+  | 'terminalMinimumContrastRatio'
+  | 'terminalRescaleOverlappingGlyphs'
+  | 'terminalScrollbackLines'
+  | 'hotkeyOverrides'
+  | 'mcpSettings'
+  | 'agentProviders'
+>
 
 function defaultSettings(): Persisted {
   return {
     showGitBranchBadges: true,
     tabOverflowMode: 'scroll',
+    optimizedTerminalRenderer: true,
+    terminalGpuAcceleration: 'auto',
+    terminalMinimumContrastRatio: 1,
+    terminalRescaleOverlappingGlyphs: true,
     terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
     hotkeyOverrides: {},
     mcpSettings: DEFAULT_MCP_SETTINGS,
     agentProviders: defaultAgentProviderSettings(),
   }
+}
+
+export function normalizeContrastRatio(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return 1
+  return Math.min(MAX_CONTRAST_RATIO, Math.max(MIN_CONTRAST_RATIO, Math.round(n)))
+}
+
+function coerceGpuAcceleration(value: unknown): GpuAccelerationPref {
+  if (value === 'auto' || value === 'on' || value === 'off') return value
+  return 'auto'
 }
 
 export function normalizeTerminalScrollbackLines(value: unknown): number {
@@ -83,6 +123,10 @@ function loadSettings(): Persisted {
     return {
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
       tabOverflowMode: parsed.tabOverflowMode === 'wrap' ? 'wrap' : 'scroll',
+      optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
+      terminalGpuAcceleration: coerceGpuAcceleration(parsed.terminalGpuAcceleration),
+      terminalMinimumContrastRatio: normalizeContrastRatio(parsed.terminalMinimumContrastRatio),
+      terminalRescaleOverlappingGlyphs: parsed.terminalRescaleOverlappingGlyphs !== false,
       terminalScrollbackLines: normalizeTerminalScrollbackLines(parsed.terminalScrollbackLines),
       hotkeyOverrides: (parsed.hotkeyOverrides as Partial<Record<HotkeyId, HotkeyOverride>>) ?? {},
       mcpSettings: {
@@ -103,6 +147,10 @@ function saveSettings(state: Persisted): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     showGitBranchBadges: state.showGitBranchBadges,
     tabOverflowMode: state.tabOverflowMode,
+    optimizedTerminalRenderer: state.optimizedTerminalRenderer,
+    terminalGpuAcceleration: state.terminalGpuAcceleration,
+    terminalMinimumContrastRatio: state.terminalMinimumContrastRatio,
+    terminalRescaleOverlappingGlyphs: state.terminalRescaleOverlappingGlyphs,
     terminalScrollbackLines: state.terminalScrollbackLines,
     hotkeyOverrides: state.hotkeyOverrides,
     mcpSettings: state.mcpSettings,
@@ -115,51 +163,66 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setShowGitBranchBadges: (value) => {
     set({ showGitBranchBadges: value })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
   },
 
   setTabOverflowMode: (mode) => {
     set({ tabOverflowMode: mode })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: mode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
+  },
+
+  setOptimizedTerminalRenderer: (value) => {
+    set({ optimizedTerminalRenderer: value })
+    saveSettings(get())
+  },
+
+  setTerminalGpuAcceleration: (value) => {
+    set({ terminalGpuAcceleration: value })
+    saveSettings(get())
+  },
+
+  setTerminalMinimumContrastRatio: (value) => {
+    const terminalMinimumContrastRatio = normalizeContrastRatio(value)
+    set({ terminalMinimumContrastRatio })
+    xtermRegistry.applyTerminalOptions({ minimumContrastRatio: terminalMinimumContrastRatio })
+    saveSettings(get())
+  },
+
+  setTerminalRescaleOverlappingGlyphs: (value) => {
+    set({ terminalRescaleOverlappingGlyphs: value })
+    xtermRegistry.applyTerminalOptions({ rescaleOverlappingGlyphs: value })
+    saveSettings(get())
   },
 
   setTerminalScrollbackLines: (value) => {
     const terminalScrollbackLines = normalizeTerminalScrollbackLines(value)
     set({ terminalScrollbackLines })
     xtermRegistry.setScrollbackLines(terminalScrollbackLines)
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
   },
 
   setHotkeyOverride: (id, override) => {
     const hotkeyOverrides = { ...get().hotkeyOverrides, [id]: override }
     set({ hotkeyOverrides })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
   },
 
   resetHotkeyOverride: (id) => {
     const hotkeyOverrides = { ...get().hotkeyOverrides }
     delete hotkeyOverrides[id]
     set({ hotkeyOverrides })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
   },
 
   resetAllHotkeyOverrides: () => {
     const hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>> = {}
     set({ hotkeyOverrides })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
   },
 
   setMcpSettings: (mcpSettings) => {
     set({ mcpSettings })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings, agentProviders: s.agentProviders })
-    // Sync to main process
+    saveSettings(get())
     window.ipc.invoke('mcp:save-settings', mcpSettings).catch((err) => {
       console.error('[Settings] Failed to sync MCP settings to main:', err)
     })
@@ -167,14 +230,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   hydrateMcpSettings: (mcpSettings) => {
     set({ mcpSettings })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings, agentProviders: s.agentProviders })
+    saveSettings(get())
   },
 
   setAgentProviders: (agentProviders) => {
     set({ agentProviders })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders })
+    saveSettings(get())
     window.ipc.invoke('settings:save-agent-providers', agentProviders).catch((err) => {
       console.error('[Settings] Failed to sync agent provider settings to main:', err)
     })
@@ -182,7 +243,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   hydrateAgentProviders: (agentProviders) => {
     set({ agentProviders })
-    const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders })
+    saveSettings(get())
   },
 }))

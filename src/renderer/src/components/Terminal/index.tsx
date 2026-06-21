@@ -11,6 +11,8 @@ import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store
 import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
+import { applyBackend } from '../../terminal/rendering/backends'
+import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
 
 const XTERM_THEME = {
@@ -142,11 +144,12 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   useEffect(() => {
     if (!containerRef.current) return
 
-    const createXterm = (): { xterm: XTerm; fitAddon: FitAddon } => {
+    const createXterm = (): { xterm: XTerm; fitAddon: FitAddon; backendHandle: { dispose(): void } } => {
       const theme = pane.paneType === 'agent'
         ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
         : XTERM_THEME
 
+      const storeState = useSettingsStore.getState()
       const xterm = new XTerm({
         allowProposedApi: true,
         theme,
@@ -154,9 +157,12 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         fontSize: 13,
         lineHeight: 1.3,
         cursorBlink: pane.paneType !== 'agent',
-        scrollback: useSettingsStore.getState().terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES,
+        scrollback: storeState.terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES,
         scrollOnEraseInDisplay: true,
         allowTransparency: false,
+        customGlyphs: true,
+        minimumContrastRatio: storeState.terminalMinimumContrastRatio,
+        rescaleOverlappingGlyphs: storeState.terminalRescaleOverlappingGlyphs,
         windowOptions: {
           getWinSizePixels: true,
           getCellSizePixels: true,
@@ -169,21 +175,36 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       xterm.loadAddon(new WebLinksAddon((_event, uri) => {
         window.ipc.invoke('shell:open-external', uri).catch(() => {})
       }))
-      try {
-        const webglAddon = new WebglAddon()
-        webglAddon.onContextLoss(() => {
-          try { webglAddon.dispose() } catch { /* ignore */ }
-        })
-        xterm.loadAddon(webglAddon)
-      } catch { /* fall back to xterm's DOM renderer */ }
-      return { xterm, fitAddon }
+
+      const backendHandle = (() => {
+        if (storeState.optimizedTerminalRenderer) {
+          const { handle } = applyBackend(xterm, storeState.terminalGpuAcceleration, getCapabilities())
+          return handle
+        }
+        // Legacy path: unconditional WebGL attempt with try/catch fallback
+        try {
+          const webglAddon = new WebglAddon()
+          webglAddon.onContextLoss(() => {
+            try { webglAddon.dispose() } catch { /* ignore */ }
+          })
+          xterm.loadAddon(webglAddon)
+          return { dispose() { try { webglAddon.dispose() } catch { /* ignore */ } } }
+        } catch {
+          return { dispose() {} }
+        }
+      })()
+
+      return { xterm, fitAddon, backendHandle }
     }
 
     // Both shell and agent panes use the registry so the xterm instance (and its
     // scrollback) survives remounts. The registry defers xterm.open() until the
     // wrapper is attached to a live container (see xtermRegistry.attach), which is
     // what made the old "direct open" shell path unnecessary.
-    const entry = xtermRegistry.getOrCreate(pane.id, createXterm)
+    const entry = xtermRegistry.getOrCreate(pane.id, () => {
+      const result = createXterm()
+      return { xterm: result.xterm, fitAddon: result.fitAddon, backendHandle: result.backendHandle }
+    })
     // Attach the wrapper div (which xterm opened into) to our container.
     xtermRegistry.attach(pane.id, containerRef.current)
 
@@ -566,7 +587,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
               Repair directory
             </button>
           )}
-          {pane.paneType === 'agent' && pane.sessionDetectionState === 'failed' && (
+          {pane.paneType === 'agent' && (
             <button
               data-window-drag-exempt="true"
               onClick={() => startNewAgentInPane(pane.id)}

@@ -577,6 +577,15 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     setAgentProviderSettings(settings)
   })
 
+  // --- GPU feature status ---
+  ipcMain.handle('gpu:feature-status', () => {
+    const status = app.getGPUFeatureStatus()
+    const featureStatus = status as unknown as Record<string, string>
+    const softwareValues = new Set(['software_only', 'disabled_software', 'unavailable_software'])
+    const softwareOnly = Object.values(featureStatus).some((v) => softwareValues.has(v))
+    return { softwareOnly, featureStatus }
+  })
+
   // --- Multi-window IPC ---
 
   ipcMain.handle('window:get-id', (e) => {

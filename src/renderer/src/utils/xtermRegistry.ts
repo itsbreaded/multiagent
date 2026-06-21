@@ -1,5 +1,6 @@
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import type { BackendHandle } from '../terminal/rendering/backends'
 
 export interface TerminalEntry {
   xterm: XTerm
@@ -9,6 +10,13 @@ export interface TerminalEntry {
   // Set to true once the PTY data subscription is active.
   // Used to skip the "connecting" overlay on remounts caused by layout changes.
   connected: boolean
+  // Disposable handle returned by the active renderer backend.
+  backendHandle?: BackendHandle
+}
+
+export interface TerminalDisplayOptions {
+  minimumContrastRatio?: number
+  rescaleOverlappingGlyphs?: boolean
 }
 
 const registry = new Map<string, TerminalEntry>()
@@ -34,17 +42,17 @@ export function getEntry(paneId: string): TerminalEntry | undefined {
 /** Get the existing entry for paneId, or create one via factory and open xterm into a wrapper div. */
 export function getOrCreate(
   paneId: string,
-  factory: () => { xterm: XTerm; fitAddon: FitAddon },
+  factory: () => { xterm: XTerm; fitAddon: FitAddon; backendHandle?: BackendHandle },
 ): TerminalEntry {
   const existing = registry.get(paneId)
   if (existing) return existing
 
-  const { xterm, fitAddon } = factory()
+  const { xterm, fitAddon, backendHandle } = factory()
   const wrapper = document.createElement('div')
   wrapper.style.cssText = 'position:absolute;inset:0'
   getOffscreen().appendChild(wrapper)
 
-  const entry: TerminalEntry = { xterm, fitAddon, wrapper, opened: false, connected: false }
+  const entry: TerminalEntry = { xterm, fitAddon, wrapper, opened: false, connected: false, backendHandle }
   registry.set(paneId, entry)
   return entry
 }
@@ -92,11 +100,24 @@ export function setScrollbackLines(lines: number): void {
   }
 }
 
+/** Hot-apply cheap xterm display options to every live instance. */
+export function applyTerminalOptions(opts: TerminalDisplayOptions): void {
+  for (const entry of registry.values()) {
+    if (opts.minimumContrastRatio !== undefined) {
+      entry.xterm.options.minimumContrastRatio = opts.minimumContrastRatio
+    }
+    if (opts.rescaleOverlappingGlyphs !== undefined) {
+      entry.xterm.options.rescaleOverlappingGlyphs = opts.rescaleOverlappingGlyphs
+    }
+  }
+}
+
 /** Permanently dispose the xterm instance and remove it from the registry. */
 export function dispose(paneId: string): void {
   const entry = registry.get(paneId)
   if (!entry) return
   registry.delete(paneId)
+  try { entry.backendHandle?.dispose() } catch { /* ignore */ }
   try { entry.xterm.dispose() } catch { /* ignore */ }
   entry.wrapper.remove()
 }

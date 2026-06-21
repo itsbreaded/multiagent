@@ -4,10 +4,15 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK_LINES,
   MAX_TERMINAL_SCROLLBACK_LINES,
   MIN_TERMINAL_SCROLLBACK_LINES,
+  MIN_CONTRAST_RATIO,
+  MAX_CONTRAST_RATIO,
   normalizeTerminalScrollbackLines,
+  normalizeContrastRatio,
   useSettingsStore,
   type SettingsSection,
+  type GpuAccelerationPref,
 } from '../../store/settings'
+import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { ui } from '../../styles/theme'
 import {
   DEFAULT_HOTKEYS,
@@ -37,6 +42,14 @@ export function SettingsPanel(): JSX.Element {
   const setShowGitBranchBadges = useSettingsStore((s) => s.setShowGitBranchBadges)
   const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
   const setTabOverflowMode = useSettingsStore((s) => s.setTabOverflowMode)
+  const optimizedTerminalRenderer = useSettingsStore((s) => s.optimizedTerminalRenderer)
+  const setOptimizedTerminalRenderer = useSettingsStore((s) => s.setOptimizedTerminalRenderer)
+  const terminalGpuAcceleration = useSettingsStore((s) => s.terminalGpuAcceleration)
+  const setTerminalGpuAcceleration = useSettingsStore((s) => s.setTerminalGpuAcceleration)
+  const terminalMinimumContrastRatio = useSettingsStore((s) => s.terminalMinimumContrastRatio)
+  const setTerminalMinimumContrastRatio = useSettingsStore((s) => s.setTerminalMinimumContrastRatio)
+  const terminalRescaleOverlappingGlyphs = useSettingsStore((s) => s.terminalRescaleOverlappingGlyphs)
+  const setTerminalRescaleOverlappingGlyphs = useSettingsStore((s) => s.setTerminalRescaleOverlappingGlyphs)
   const terminalScrollbackLines = useSettingsStore((s) => s.terminalScrollbackLines)
   const setTerminalScrollbackLines = useSettingsStore((s) => s.setTerminalScrollbackLines)
   const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
@@ -53,7 +66,17 @@ export function SettingsPanel(): JSX.Element {
   const [recording, setRecording] = useState<HotkeyId | null>(null)
   const [conflictLabel, setConflictLabel] = useState<string | null>(null)
   const [scrollbackDraft, setScrollbackDraft] = useState(String(terminalScrollbackLines))
+  const [contrastDraft, setContrastDraft] = useState(String(terminalMinimumContrastRatio))
   const mouseDownOnOverlay = useRef(false)
+
+  // Lazily read diagnostics only when Terminal section is active to avoid any probe
+  // being triggered before the section opens.
+  const [caps, setCaps] = useState<ReturnType<typeof getCapabilities> | null>(null)
+  useEffect(() => {
+    if (activeSection === 'terminal' && !caps) {
+      setCaps(getCapabilities())
+    }
+  }, [activeSection, caps])
 
   const agentProviders = useSettingsStore((s) => s.agentProviders)
   const customizedCount = Object.keys(hotkeyOverrides).length
@@ -65,9 +88,9 @@ export function SettingsPanel(): JSX.Element {
   const sections = useMemo(() => [
     { id: 'appearance' as const,   label: 'Appearance',   count: 2 },
     { id: 'hotkeys' as const,      label: 'Hotkeys',      count: customizedCount },
+    { id: 'terminal' as const,     label: 'Terminal',     count: 0 },
     { id: 'mcp' as const,          label: 'MCP',          count: 0, experimental: true },
     { id: 'providers' as const,    label: 'Providers',    count: activeProviderCount },
-    { id: 'general' as const,      label: 'General',      count: 1 },
   ], [customizedCount, activeProviderCount])
 
   // Listen for key recording
@@ -127,16 +150,31 @@ export function SettingsPanel(): JSX.Element {
     setScrollbackDraft(String(terminalScrollbackLines))
   }, [terminalScrollbackLines])
 
+  useEffect(() => {
+    setContrastDraft(String(terminalMinimumContrastRatio))
+  }, [terminalMinimumContrastRatio])
+
   function commitScrollbackDraft(): void {
     const normalized = normalizeTerminalScrollbackLines(scrollbackDraft.replaceAll(',', ''))
     setTerminalScrollbackLines(normalized)
     setScrollbackDraft(String(normalized))
   }
 
+  function commitContrastDraft(): void {
+    const normalized = normalizeContrastRatio(contrastDraft)
+    setTerminalMinimumContrastRatio(normalized)
+    setContrastDraft(String(normalized))
+  }
+
   const normalizedQuery = query.trim().toLowerCase()
   const showBranchSetting = !normalizedQuery || 'git branch badges tabs panes'.includes(normalizedQuery)
   const showOverflowSetting = !normalizedQuery || 'tab overflow scroll wrap rows'.includes(normalizedQuery)
+  const showOptimizedRendererSetting = !normalizedQuery || 'optimized terminal renderer feature flag webgl dom'.includes(normalizedQuery)
+  const showGpuAccelSetting = !normalizedQuery || 'gpu acceleration webgl renderer auto on off'.includes(normalizedQuery)
+  const showContrastSetting = !normalizedQuery || 'minimum contrast ratio color accuracy'.includes(normalizedQuery)
+  const showRescaleSetting = !normalizedQuery || 'rescale overlapping glyphs wide ambiguous'.includes(normalizedQuery)
   const showScrollbackSetting = !normalizedQuery || 'terminal scrollback lines history memory buffer maximum'.includes(normalizedQuery)
+  const anyTerminalSetting = showOptimizedRendererSetting || showGpuAccelSetting || showContrastSetting || showRescaleSetting || showScrollbackSetting
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
@@ -433,19 +471,125 @@ export function SettingsPanel(): JSX.Element {
               </>
             )}
 
-            {/* MCP section */}
-            {activeSection === 'mcp' && <McpSection />}
-
-            {/* Providers section */}
-            {activeSection === 'providers' && <AgentProvidersSection />}
-
-            {/* General section */}
-            {activeSection === 'general' && (
+            {/* Terminal section */}
+            {activeSection === 'terminal' && (
               <>
-                <SectionLabel>General</SectionLabel>
-                {showScrollbackSetting ? (
+                <SectionLabel>Renderer</SectionLabel>
+                {showOptimizedRendererSetting && (
                   <SettingRow
-                    title="Terminal scrollback lines"
+                    title="Optimized renderer"
+                    description="Use the environment-aware backend registry. Disable to revert to legacy unconditional WebGL behavior. Applies to new panes."
+                  >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={optimizedTerminalRenderer}
+                        onChange={(e) => setOptimizedTerminalRenderer(e.target.checked)}
+                      />
+                      Enabled
+                    </label>
+                  </SettingRow>
+                )}
+                {showGpuAccelSetting && (
+                  <SettingRow
+                    title="GPU acceleration"
+                    description="auto avoids software-rendered WebGL (the CPU spike trap). on always attempts WebGL. off always uses the DOM renderer. Applies to new panes."
+                  >
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {(['auto', 'on', 'off'] as GpuAccelerationPref[]).map((mode) => {
+                        const isActive = terminalGpuAcceleration === mode
+                        return (
+                          <button
+                            key={mode}
+                            onClick={() => setTerminalGpuAcceleration(mode)}
+                            style={{
+                              padding: '4px 12px',
+                              background: isActive ? ui.color.control : 'none',
+                              border: `1px solid ${isActive ? ui.color.accent : ui.color.border}`,
+                              borderRadius: ui.radius.sm,
+                              color: isActive ? ui.color.text : ui.color.textMuted,
+                              fontSize: 12,
+                              cursor: 'pointer',
+                              fontWeight: isActive ? 500 : 400,
+                            }}
+                          >
+                            {mode}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </SettingRow>
+                )}
+
+                {/* Diagnostics readout */}
+                {caps && (
+                  <div style={{
+                    margin: '4px 0 8px',
+                    padding: '8px 12px',
+                    background: '#0e0f11',
+                    border: '1px solid #222326',
+                    borderRadius: 5,
+                    fontSize: 11,
+                    color: '#6b7280',
+                    lineHeight: 1.6,
+                  }}>
+                    <div><span style={{ color: '#4a4b4e', marginRight: 8 }}>GPU renderer</span>{caps.gpuRenderer ?? '(unavailable)'}</div>
+                    <div>
+                      <span style={{ color: '#4a4b4e', marginRight: 8 }}>Software rendering</span>
+                      <span style={{ color: caps.softwareRendering ? '#fbbf24' : '#4ade80' }}>
+                        {caps.softwareRendering ? 'yes — auto resolves to DOM' : 'no'}
+                      </span>
+                    </div>
+                    <div><span style={{ color: '#4a4b4e', marginRight: 8 }}>WebGL2</span>{caps.webgl ? 'available' : 'unavailable'}</div>
+                  </div>
+                )}
+
+                <div style={{ marginTop: 8 }}><SectionLabel>Display</SectionLabel></div>
+                {showContrastSetting && (
+                  <SettingRow
+                    title="Minimum contrast ratio"
+                    description={`1 = no color adjustment (preserves exact agent colors). Range ${MIN_CONTRAST_RATIO}–${MAX_CONTRAST_RATIO}. Applies immediately.`}
+                  >
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={contrastDraft}
+                      onChange={(e) => setContrastDraft(e.target.value)}
+                      onBlur={commitContrastDraft}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); commitContrastDraft(); e.currentTarget.blur() }
+                      }}
+                      style={{
+                        width: 60,
+                        backgroundColor: '#0e0f11',
+                        border: '1px solid #3a3b3e',
+                        borderRadius: 4,
+                        color: '#d4d4d4',
+                        fontSize: 12,
+                        padding: '5px 7px',
+                        textAlign: 'right',
+                      }}
+                    />
+                  </SettingRow>
+                )}
+                {showRescaleSetting && (
+                  <SettingRow
+                    title="Rescale overlapping glyphs"
+                    description="Shrink wide or ambiguous-width characters so they don't bleed into adjacent cells. WebGL renderer only — no effect on DOM renderer."
+                  >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={terminalRescaleOverlappingGlyphs}
+                        onChange={(e) => setTerminalRescaleOverlappingGlyphs(e.target.checked)}
+                      />
+                      Enabled
+                    </label>
+                  </SettingRow>
+                )}
+                {showScrollbackSetting && (
+                  <SettingRow
+                    title="Scrollback lines"
                     description="Maximum retained terminal history. Applies immediately; lowering this can trim existing scrollback."
                   >
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
@@ -476,11 +620,7 @@ export function SettingsPanel(): JSX.Element {
                         }}
                       />
                       <div style={{ display: 'flex', gap: 6 }}>
-                        {[
-                          50_000,
-                          100_000,
-                          DEFAULT_TERMINAL_SCROLLBACK_LINES,
-                        ].map((value) => (
+                        {[50_000, 100_000, DEFAULT_TERMINAL_SCROLLBACK_LINES].map((value) => (
                           <button
                             key={value}
                             onClick={() => {
@@ -503,11 +643,18 @@ export function SettingsPanel(): JSX.Element {
                       </div>
                     </div>
                   </SettingRow>
-                ) : (
-                  <EmptyMessage>No general settings match your search.</EmptyMessage>
+                )}
+                {!anyTerminalSetting && (
+                  <EmptyMessage>No terminal settings match your search.</EmptyMessage>
                 )}
               </>
             )}
+
+            {/* MCP section */}
+            {activeSection === 'mcp' && <McpSection />}
+
+            {/* Providers section */}
+            {activeSection === 'providers' && <AgentProvidersSection />}
           </div>
         </main>
       </div>

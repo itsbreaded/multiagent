@@ -341,6 +341,11 @@ export interface IPCChannels {
   'settings:get-agent-providers': () => AgentProviderSettings
   'settings:save-agent-providers': (settings: AgentProviderSettings) => void
 
+  // --- GPU / renderer diagnostics ---
+  // Renderer asks main for Chromium's GPU feature status. Used to corroborate
+  // the renderer-side WebGL probe (primary signal); never on the critical path.
+  'gpu:feature-status': () => { softwareOnly: boolean; featureStatus: Record<string, string> }
+
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
   'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
@@ -434,6 +439,7 @@ export type InvokeChannels =
   | 'mcp:probe-stdio'
   | 'settings:get-agent-providers'
   | 'settings:save-agent-providers'
+  | 'gpu:feature-status'
   | 'window:get-id'
   | 'window:get-init-data'
   | 'window:get-all-bounds'

@@ -89,12 +89,12 @@ const COMMANDS: Command[] = [
     run: (ctx) => { ctx.openSettings('providers') },
   },
   {
-    id: 'settings.open.general',
-    title: 'Settings: General',
+    id: 'settings.open.terminal',
+    title: 'Settings: Terminal',
     category: 'General',
-    keywords: ['preferences', 'config', 'scrollback', 'terminal', 'history'],
+    keywords: ['preferences', 'config', 'gpu', 'webgl', 'renderer', 'acceleration', 'performance', 'contrast', 'glyphs', 'scrolling', 'scrollback', 'history'],
     enabled: (ctx) => !ctx.isDetachedWindow,
-    run: (ctx) => { ctx.openSettings('general') },
+    run: (ctx) => { ctx.openSettings('terminal') },
   },
 
   // ── Panes ─────────────────────────────────────────────────────────────────

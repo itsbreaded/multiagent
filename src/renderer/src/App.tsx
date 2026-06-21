@@ -12,6 +12,7 @@ import { usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { decodePaneDragPayload, PANE_DRAG_MIME } from './utils/paneDrag'
+import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
 import type { Tab } from '../../shared/types'
 
 function useGlobalKeyboard() {
@@ -107,6 +108,16 @@ export default function App(): JSX.Element {
       setVsCodeAvailable(available as boolean)
     }).catch(() => {})
   }, [setVsCodeAvailable])
+
+  // Kick off async GPU feature-status probe. Refines the renderer-side WebGL
+  // capability probe (primary signal) with Chromium's GPU status. Never on the
+  // critical path of pane creation — only used for diagnostics readout.
+  useEffect(() => {
+    window.ipc.invoke('gpu:feature-status').then((result) => {
+      const r = result as { softwareOnly: boolean } | null
+      if (r) mergeGpuFeatureStatus(r.softwareOnly)
+    }).catch(() => {})
+  }, [])
 
   // Fetch this window's ID from main so the tab bar can use it for drag-out.
   const setWindowId = usePanesStore((s) => s.setWindowId)
