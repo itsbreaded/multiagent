@@ -174,7 +174,7 @@ export function CommandPalette(): JSX.Element {
           />
         </div>
 
-        <div style={{ maxHeight: 440, overflowY: 'auto' }}>
+        <div className="dark-scrollbar" style={{ maxHeight: 440, overflowY: 'auto' }}>
           {[...grouped.entries()].map(([category, cmds]) => {
             if (cmds.length === 0) return null
             return (

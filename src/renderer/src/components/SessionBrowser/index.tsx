@@ -219,7 +219,7 @@ export function SessionBrowser(): JSX.Element {
             {mode === 'deep' && deepSearching && (
               <div style={{ padding: '0 8px 4px', fontSize: 10, color: '#4a4b4e' }}>Searching…</div>
             )}
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div className="dark-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
               {projects.map((proj) => (
                 <button
                   key={proj}
@@ -252,7 +252,7 @@ export function SessionBrowser(): JSX.Element {
           </div>
 
           {/* Right: content */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
+          <div className="dark-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
             {mode === 'summary' ? (
               <SummaryPane
                 grouped={summaryGrouped}
