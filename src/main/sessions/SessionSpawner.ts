@@ -3,10 +3,16 @@ import * as path from 'path'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type { PtyManager } from '../pty/PtyManager'
-import type { AgentKind } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings } from '../../shared/types'
 import { codexSessionsDir, listCodexSessionFilePaths, readCodexSessionMeta } from './CodexSessionScanner'
 import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentMcpSettings } from '../mcp/McpInjector'
 import { defaultShell } from '../pty/shell'
+
+let _agentProviderSettings: AgentProviderSettings | null = null
+
+export function setAgentProviderSettings(settings: AgentProviderSettings): void {
+  _agentProviderSettings = settings
+}
 
 const SESSION_DETECTION_TIMEOUT_MS = 30 * 60_000
 const SESSION_DETECTION_GRACE_MS = 5_000
@@ -348,12 +354,41 @@ function agentLaunchCommand(command: string): string[] {
   return [defaultShell(), '-lc', command]
 }
 
-function agentEnv(agentKind: AgentKind): Record<string, string> | undefined {
-  if (agentKind !== 'claude') return undefined
-  return {
-    CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1',
-    CLAUDE_CODE_NO_FLICKER: '1',
+function agentEnv(agentKind: AgentKind): Record<string, string> {
+  const vars: Record<string, string> = {}
+
+  if (agentKind === 'claude') {
+    vars['CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL'] = '1'
+    vars['CLAUDE_CODE_NO_FLICKER'] = '1'
+    const cfg = _agentProviderSettings?.claude
+    if (cfg?.enabled && cfg.preset !== 'native') {
+      if (cfg.baseUrl)       vars['ANTHROPIC_BASE_URL'] = cfg.baseUrl
+      if (cfg.authToken)     vars['ANTHROPIC_AUTH_TOKEN'] = cfg.authToken
+      if (cfg.model)         vars['ANTHROPIC_MODEL'] = cfg.model
+      if (cfg.opusModel)     vars['ANTHROPIC_DEFAULT_OPUS_MODEL'] = cfg.opusModel
+      if (cfg.sonnetModel)   vars['ANTHROPIC_DEFAULT_SONNET_MODEL'] = cfg.sonnetModel
+      if (cfg.haikuModel)    vars['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = cfg.haikuModel
+      if (cfg.subagentModel) vars['CLAUDE_CODE_SUBAGENT_MODEL'] = cfg.subagentModel
+      if (cfg.effortLevel)   vars['CLAUDE_CODE_EFFORT_LEVEL'] = cfg.effortLevel
+      // Signal buildEnv to remove the native ANTHROPIC_API_KEY when using an alternative provider
+      vars['ANTHROPIC_API_KEY'] = ''
+    }
+    for (const e of cfg?.extraEnvVars ?? []) {
+      if (e.enabled && e.key.trim()) vars[e.key.trim()] = e.value
+    }
   }
+
+  if (agentKind === 'codex') {
+    const cfg = _agentProviderSettings?.codex
+    if (cfg?.enabled && cfg.preset !== 'native') {
+      if (cfg.envKey.trim() && cfg.apiKey) vars[cfg.envKey.trim()] = cfg.apiKey
+    }
+    for (const e of cfg?.extraEnvVars ?? []) {
+      if (e.enabled && e.key.trim()) vars[e.key.trim()] = e.value
+    }
+  }
+
+  return vars
 }
 
 function newSessionCommand(agentKind: AgentKind, sessionId?: string): string {
@@ -430,6 +465,18 @@ function codexCliArgs(): string {
         }
       }
     }
+  }
+
+  // Provider config: inject Codex -c overrides for model/provider/base_url/wire_api
+  const codexCfg = _agentProviderSettings?.codex
+  if (codexCfg?.enabled && codexCfg.preset !== 'native' && codexCfg.providerName.trim()) {
+    const n = codexCfg.providerName.trim()
+    args.push('-c', psSingleQuoted(`model_provider=${tomlLit(n)}`))
+    if (codexCfg.model)   args.push('-c', psSingleQuoted(`model=${tomlLit(codexCfg.model)}`))
+    if (codexCfg.baseUrl) args.push('-c', psSingleQuoted(`model_providers.${n}.base_url=${tomlLit(codexCfg.baseUrl)}`))
+    args.push('-c', psSingleQuoted(`model_providers.${n}.name=${tomlLit(n)}`))
+    if (codexCfg.envKey)  args.push('-c', psSingleQuoted(`model_providers.${n}.env_key=${tomlLit(codexCfg.envKey.trim())}`))
+    args.push('-c', psSingleQuoted(`model_providers.${n}.wire_api=${tomlLit(codexCfg.wireApi)}`))
   }
 
   return ` ${args.join(' ')}`

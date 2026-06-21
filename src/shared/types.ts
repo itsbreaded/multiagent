@@ -27,6 +27,41 @@ export interface EnvVarEntry {
   enabled: boolean
 }
 
+export type ClaudeProviderPreset = 'native' | 'deepseek' | 'alibaba' | 'custom'
+export type CodexProviderPreset  = 'native' | 'alibaba-token' | 'alibaba-payg' | 'custom'
+export type CodexWireApi = 'responses' | 'chat'
+
+export interface ClaudeProviderConfig {
+  enabled: boolean
+  preset: ClaudeProviderPreset
+  baseUrl: string                  // ANTHROPIC_BASE_URL
+  authToken: string                // ANTHROPIC_AUTH_TOKEN (masked in UI)
+  model: string                    // ANTHROPIC_MODEL
+  opusModel: string                // ANTHROPIC_DEFAULT_OPUS_MODEL
+  sonnetModel: string              // ANTHROPIC_DEFAULT_SONNET_MODEL
+  haikuModel: string               // ANTHROPIC_DEFAULT_HAIKU_MODEL
+  subagentModel: string            // CLAUDE_CODE_SUBAGENT_MODEL
+  effortLevel: string              // CLAUDE_CODE_EFFORT_LEVEL
+  extraEnvVars: EnvVarEntry[]
+}
+
+export interface CodexProviderConfig {
+  enabled: boolean
+  preset: CodexProviderPreset
+  providerName: string             // TOML section key
+  model: string
+  baseUrl: string
+  envKey: string                   // env_key in TOML (e.g. "OPENAI_API_KEY")
+  apiKey: string                   // injected as env var (masked in UI)
+  wireApi: CodexWireApi
+  extraEnvVars: EnvVarEntry[]
+}
+
+export interface AgentProviderSettings {
+  claude: ClaudeProviderConfig
+  codex: CodexProviderConfig
+}
+
 export interface McpStatus {
   port: number | null
   running: boolean
@@ -298,9 +333,9 @@ export interface IPCChannels {
   'mcp:save-settings': (settings: McpSettings) => void
   'mcp:probe-stdio': (command: string, args: string[], env?: Record<string, string>) => { tools: string[] }
 
-  // --- Environment variable overrides ---
-  'settings:get-env-vars': () => EnvVarEntry[]
-  'settings:save-env-vars': (entries: EnvVarEntry[]) => void
+  // --- Agent provider configuration ---
+  'settings:get-agent-providers': () => AgentProviderSettings
+  'settings:save-agent-providers': (settings: AgentProviderSettings) => void
 
   // --- Session detection ---
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
@@ -391,8 +426,8 @@ export type InvokeChannels =
   | 'mcp:get-settings'
   | 'mcp:save-settings'
   | 'mcp:probe-stdio'
-  | 'settings:get-env-vars'
-  | 'settings:save-env-vars'
+  | 'settings:get-agent-providers'
+  | 'settings:save-agent-providers'
   | 'window:get-id'
   | 'window:get-init-data'
   | 'window:get-all-bounds'

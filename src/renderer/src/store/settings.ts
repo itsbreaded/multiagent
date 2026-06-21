@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
-import type { EnvVarEntry, McpSettings } from '../../../shared/types'
+import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
 const SETTINGS_KEY = 'multiagent:settings'
@@ -11,6 +11,22 @@ export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000
 const DEFAULT_MCP_SETTINGS: McpSettings = {
   builtinBrowserEnabled: true,
   customServers: [],
+}
+
+function defaultAgentProviderSettings(): AgentProviderSettings {
+  return {
+    claude: {
+      enabled: false, preset: 'native',
+      baseUrl: '', authToken: '', model: '',
+      opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
+      extraEnvVars: [],
+    },
+    codex: {
+      enabled: false, preset: 'native',
+      providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '',
+      wireApi: 'responses', extraEnvVars: [],
+    },
+  }
 }
 
 interface SettingsState {
@@ -27,12 +43,12 @@ interface SettingsState {
   mcpSettings: McpSettings
   setMcpSettings: (settings: McpSettings) => void
   hydrateMcpSettings: (settings: McpSettings) => void
-  envVarOverrides: EnvVarEntry[]
-  setEnvVarOverrides: (entries: EnvVarEntry[]) => void
-  hydrateEnvVarOverrides: (entries: EnvVarEntry[]) => void
+  agentProviders: AgentProviderSettings
+  setAgentProviders: (settings: AgentProviderSettings) => void
+  hydrateAgentProviders: (settings: AgentProviderSettings) => void
 }
 
-type Persisted = Pick<SettingsState, 'showGitBranchBadges' | 'tabOverflowMode' | 'terminalScrollbackLines' | 'hotkeyOverrides' | 'mcpSettings' | 'envVarOverrides'>
+type Persisted = Pick<SettingsState, 'showGitBranchBadges' | 'tabOverflowMode' | 'terminalScrollbackLines' | 'hotkeyOverrides' | 'mcpSettings' | 'agentProviders'>
 
 function defaultSettings(): Persisted {
   return {
@@ -41,7 +57,7 @@ function defaultSettings(): Persisted {
     terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
     hotkeyOverrides: {},
     mcpSettings: DEFAULT_MCP_SETTINGS,
-    envVarOverrides: [],
+    agentProviders: defaultAgentProviderSettings(),
   }
 }
 
@@ -73,7 +89,7 @@ function loadSettings(): Persisted {
           ? (parsed.mcpSettings as McpSettings).customServers
           : [],
       },
-      envVarOverrides: Array.isArray(parsed.envVarOverrides) ? parsed.envVarOverrides : [],
+      agentProviders: (parsed.agentProviders as AgentProviderSettings | undefined) ?? defaultAgentProviderSettings(),
     }
   } catch {
     return defaultSettings()
@@ -88,7 +104,7 @@ function saveSettings(state: Persisted): void {
     terminalScrollbackLines: state.terminalScrollbackLines,
     hotkeyOverrides: state.hotkeyOverrides,
     mcpSettings: state.mcpSettings,
-    envVarOverrides: state.envVarOverrides,
+    agentProviders: state.agentProviders,
   }))
 }
 
@@ -98,13 +114,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setShowGitBranchBadges: (value) => {
     set({ showGitBranchBadges: value })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
   },
 
   setTabOverflowMode: (mode) => {
     set({ tabOverflowMode: mode })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: mode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: mode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
   },
 
   setTerminalScrollbackLines: (value) => {
@@ -112,14 +128,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ terminalScrollbackLines })
     xtermRegistry.setScrollbackLines(terminalScrollbackLines)
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
   },
 
   setHotkeyOverride: (id, override) => {
     const hotkeyOverrides = { ...get().hotkeyOverrides, [id]: override }
     set({ hotkeyOverrides })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
   },
 
   resetHotkeyOverride: (id) => {
@@ -127,20 +143,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     delete hotkeyOverrides[id]
     set({ hotkeyOverrides })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
   },
 
   resetAllHotkeyOverrides: () => {
     const hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>> = {}
     set({ hotkeyOverrides })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders: s.agentProviders })
   },
 
   setMcpSettings: (mcpSettings) => {
     set({ mcpSettings })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings, agentProviders: s.agentProviders })
     // Sync to main process
     window.ipc.invoke('mcp:save-settings', mcpSettings).catch((err) => {
       console.error('[Settings] Failed to sync MCP settings to main:', err)
@@ -150,22 +166,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hydrateMcpSettings: (mcpSettings) => {
     set({ mcpSettings })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings, envVarOverrides: s.envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings, agentProviders: s.agentProviders })
   },
 
-  setEnvVarOverrides: (envVarOverrides) => {
-    set({ envVarOverrides })
+  setAgentProviders: (agentProviders) => {
+    set({ agentProviders })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides })
-    // Sync enabled vars to main process
-    window.ipc.invoke('settings:save-env-vars', envVarOverrides).catch((err) => {
-      console.error('[Settings] Failed to sync env vars to main:', err)
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders })
+    window.ipc.invoke('settings:save-agent-providers', agentProviders).catch((err) => {
+      console.error('[Settings] Failed to sync agent provider settings to main:', err)
     })
   },
 
-  hydrateEnvVarOverrides: (envVarOverrides) => {
-    set({ envVarOverrides })
+  hydrateAgentProviders: (agentProviders) => {
+    set({ agentProviders })
     const s = get()
-    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, envVarOverrides })
+    saveSettings({ showGitBranchBadges: s.showGitBranchBadges, tabOverflowMode: s.tabOverflowMode, terminalScrollbackLines: s.terminalScrollbackLines, hotkeyOverrides: s.hotkeyOverrides, mcpSettings: s.mcpSettings, agentProviders })
   },
 }))

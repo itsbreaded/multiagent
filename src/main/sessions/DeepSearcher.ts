@@ -56,11 +56,11 @@ function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + '…' : text
 }
 
-function snippetAround(text: string, query: string, caseSensitive: boolean): string {
+function snippetAround(text: string, query: string, caseSensitive: boolean): string | null {
   const haystack = caseSensitive ? text : text.toLowerCase()
   const needle = caseSensitive ? query : query.toLowerCase()
   const idx = haystack.indexOf(needle)
-  if (idx === -1) return truncate(text, SNIPPET_MAX_LEN)
+  if (idx === -1) return null
   const start = Math.max(0, idx - 80)
   const end = Math.min(text.length, idx + needle.length + 80)
   return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
@@ -205,13 +205,13 @@ async function searchFile(
           timestamp = record.timestamp ?? null
           const { text, role: r } = extractClaudeText(record)
           role = r
-          snippet = text ? snippetAround(text, query, caseSensitive) : truncate(line, SNIPPET_MAX_LEN)
+          snippet = (text && snippetAround(text, query, caseSensitive)) ?? snippetAround(line, query, caseSensitive) ?? truncate(line, SNIPPET_MAX_LEN)
         } else {
           const record = JSON.parse(line) as CodexRecord
           timestamp = record.payload?.timestamp ?? record.timestamp ?? null
           const { text, role: r } = extractCodexText(record)
           role = r
-          snippet = text ? snippetAround(text, query, caseSensitive) : truncate(line, SNIPPET_MAX_LEN)
+          snippet = (text && snippetAround(text, query, caseSensitive)) ?? snippetAround(line, query, caseSensitive) ?? truncate(line, SNIPPET_MAX_LEN)
         }
 
         matches.push({ transcriptPath: filePath, lineNumber, timestamp, role, snippet })

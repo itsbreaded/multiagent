@@ -7,14 +7,14 @@ import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
-import { SessionSpawner } from '../sessions/SessionSpawner'
-import { PtyManager, setCustomEnvVars } from '../pty/PtyManager'
+import { SessionSpawner, setAgentProviderSettings } from '../sessions/SessionSpawner'
+import { PtyManager } from '../pty/PtyManager'
 import type { PtyReadyEvent } from '../pty/PtyManager'
 import { openExternalUrl } from '../external'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, CwdRepairMapping, EnvVarEntry, McpSettings, PaneTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, PaneTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
@@ -535,37 +535,42 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return { tools }
   })
 
-  // --- Environment variable overrides ---
-  const ENV_VARS_FILE = path.join(app.getPath('userData'), 'env-var-overrides.json')
+  // --- Agent provider settings ---
+  const AGENT_PROVIDER_FILE = path.join(app.getPath('userData'), 'agent-provider-settings.json')
 
-  function loadEnvVarOverrides(): EnvVarEntry[] {
-    try {
-      const raw = fs.readFileSync(ENV_VARS_FILE, 'utf-8')
-      const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
+  function defaultAgentProviderSettings(): AgentProviderSettings {
+    return {
+      claude: {
+        enabled: false, preset: 'native',
+        baseUrl: '', authToken: '', model: '',
+        opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
+        extraEnvVars: [],
+      },
+      codex: {
+        enabled: false, preset: 'native',
+        providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '',
+        wireApi: 'responses', extraEnvVars: [],
+      },
     }
   }
 
-  function applyEnvVarOverrides(entries: EnvVarEntry[]): void {
-    const active: Record<string, string> = {}
-    for (const entry of entries) {
-      if (entry.enabled && entry.key.trim()) {
-        active[entry.key.trim()] = entry.value
-      }
+  function loadAgentProviderSettings(): AgentProviderSettings {
+    try {
+      const raw = fs.readFileSync(AGENT_PROVIDER_FILE, 'utf-8')
+      return JSON.parse(raw) as AgentProviderSettings
+    } catch {
+      return defaultAgentProviderSettings()
     }
-    setCustomEnvVars(active)
   }
 
   // Load and apply on startup
-  applyEnvVarOverrides(loadEnvVarOverrides())
+  setAgentProviderSettings(loadAgentProviderSettings())
 
-  ipcMain.handle('settings:get-env-vars', () => loadEnvVarOverrides())
+  ipcMain.handle('settings:get-agent-providers', () => loadAgentProviderSettings())
 
-  ipcMain.handle('settings:save-env-vars', (_e, entries: EnvVarEntry[]) => {
-    fs.writeFileSync(ENV_VARS_FILE, JSON.stringify(entries, null, 2), 'utf-8')
-    applyEnvVarOverrides(entries)
+  ipcMain.handle('settings:save-agent-providers', (_e, settings: AgentProviderSettings) => {
+    fs.writeFileSync(AGENT_PROVIDER_FILE, JSON.stringify(settings, null, 2), 'utf-8')
+    setAgentProviderSettings(settings)
   })
 
   // --- Multi-window IPC ---
