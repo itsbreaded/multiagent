@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
+import type { SettingsSection } from './settings'
 
 let pendingRemoteFocusWindowId: number | null = null
 let pendingRemoteFocusTimer: ReturnType<typeof setTimeout> | null = null
@@ -435,6 +436,9 @@ interface PanesStore {
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
   settingsOpen: boolean
+  settingsInitialSection: SettingsSection | null
+  pendingRenamePaneId: string | null
+  dirPickerTabId: string | null
   vsCodeAvailable: boolean
   setVsCodeAvailable: (available: boolean) => void
   cwdGitBranches: Record<string, { status: 'loading' | 'ready'; branch: string | null }>
@@ -492,7 +496,11 @@ interface PanesStore {
   toggleSessionBrowser: () => void
   toggleCommandPalette: () => void
   toggleSettings: () => void
+  openSettings: (section?: SettingsSection) => void
   closeOverlays: () => void
+  setPendingRenamePaneId: (id: string | null) => void
+  openDirPickerForTab: (tabId: string) => void
+  closeDirPicker: () => void
 
   // Drag state (pane rearrangement)
   draggedPaneId: string | null
@@ -882,6 +890,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   sessionBrowserOpen: false,
   commandPaletteOpen: false,
   settingsOpen: false,
+  settingsInitialSection: null,
+  pendingRenamePaneId: null,
+  dirPickerTabId: null,
   vsCodeAvailable: false,
   setVsCodeAvailable: (available: boolean) => set({ vsCodeAvailable: available }),
   cwdGitBranches: {},
@@ -1810,7 +1821,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false, settingsOpen: false })),
   toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen, sessionBrowserOpen: false, settingsOpen: false })),
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, sessionBrowserOpen: false, commandPaletteOpen: false })),
+  openSettings: (section) => set({ settingsOpen: true, settingsInitialSection: section ?? null, sessionBrowserOpen: false, commandPaletteOpen: false }),
   closeOverlays: () => set({ sessionBrowserOpen: false, commandPaletteOpen: false, settingsOpen: false }),
+  setPendingRenamePaneId: (id) => set({ pendingRenamePaneId: id }),
+  openDirPickerForTab: (tabId) => set({ dirPickerTabId: tabId }),
+  closeDirPicker: () => set({ dirPickerTabId: null }),
 
   activeTab: () => {
     const s = get()

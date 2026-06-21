@@ -296,7 +296,7 @@ export function TabSections(): JSX.Element {
 
       {dirPickerTabId && (
         <DirPicker
-          title="Change default directory"
+          title="Change project directory"
           description="New sessions and shells in this tab will start here by default."
           initial={dirPickerTab?.defaultCwd ?? ''}
           confirmLabel="Change"
@@ -372,6 +372,8 @@ function PaneRow({
   const closePaneInTab = usePanesStore((s) => s.closePaneInTab)
   const movePaneToNewTab = usePanesStore((s) => s.movePaneToNewTab)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
+  const pendingRenamePaneId = usePanesStore((s) => s.pendingRenamePaneId)
+  const setPendingRenamePaneId = usePanesStore((s) => s.setPendingRenamePaneId)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
   const movePaneToSplit = usePanesStore((s) => s.movePaneToSplit)
@@ -388,6 +390,14 @@ function PaneRow({
   React.useEffect(() => {
     if (renaming) renameInputRef.current?.select()
   }, [renaming])
+
+  React.useEffect(() => {
+    if (pendingRenamePaneId === pane.id) {
+      setRenameValue(pane.customName ?? '')
+      setRenaming(true)
+      setPendingRenamePaneId(null)
+    }
+  }, [pendingRenamePaneId, pane.id, pane.customName, setPendingRenamePaneId])
 
   function startRename() {
     setRenameValue(pane.customName ?? '')
@@ -718,8 +728,8 @@ function TabContextMenu({
   const tab = tabs.find((t) => t.id === tabId)
   const isDetached = !!tab?.detached
   const defaultDirLabel = tab?.defaultCwd
-    ? `Change Default Directory  (${tab.defaultCwd.split(/[\\/]/).pop()})`
-    : 'Set Default Directory'
+    ? `Change Project Directory  (${tab.defaultCwd.split(/[\\/]/).pop()})`
+    : 'Set Project Directory'
 
   function btn(label: string, onClick: () => void, danger = false): JSX.Element {
     return (

@@ -7,6 +7,7 @@ import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
 import { SettingsPanel } from './components/SettingsPanel'
 import { SnapOverlay } from './components/SnapOverlay'
+import { DirPicker } from './components/DirPicker'
 import { usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
@@ -84,6 +85,9 @@ export default function App(): JSX.Element {
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
+  const dirPickerTabId = usePanesStore((s) => s.dirPickerTabId)
+  const closeDirPicker = usePanesStore((s) => s.closeDirPicker)
+  const setTabDefaultCwd = usePanesStore((s) => s.setTabDefaultCwd)
   const receiveTab = usePanesStore((s) => s.receiveTab)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
   const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
@@ -306,6 +310,17 @@ export default function App(): JSX.Element {
       {!isDetachedWindow && sessionBrowserOpen && <SessionBrowser />}
       {!isDetachedWindow && commandPaletteOpen && <CommandPalette />}
       {!isDetachedWindow && settingsOpen && <SettingsPanel />}
+      {!isDetachedWindow && dirPickerTabId && (
+        <DirPicker
+          title="Change project directory"
+          description="New sessions and shells in this tab will start here by default."
+          initial={tabs.find((t) => t.id === dirPickerTabId)?.defaultCwd ?? ''}
+          confirmLabel="Change"
+          skipLabel="Cancel"
+          onConfirm={(dir) => { setTabDefaultCwd(dirPickerTabId, dir); closeDirPicker() }}
+          onSkip={closeDirPicker}
+        />
+      )}
       <SnapOverlay />
     </div>
   )

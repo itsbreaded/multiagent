@@ -6,6 +6,7 @@ import {
   MIN_TERMINAL_SCROLLBACK_LINES,
   normalizeTerminalScrollbackLines,
   useSettingsStore,
+  type SettingsSection,
 } from '../../store/settings'
 import { ui } from '../../styles/theme'
 import {
@@ -17,8 +18,6 @@ import {
 } from '../../utils/hotkeys'
 import { McpSection } from './McpSection'
 import { AgentProvidersSection } from './AgentProvidersSection'
-
-type SettingsSection = 'appearance' | 'hotkeys' | 'general' | 'mcp' | 'providers'
 
 // Terminal-only shortcuts shown read-only for visibility
 const TERMINAL_SHORTCUTS = [
@@ -45,7 +44,11 @@ export function SettingsPanel(): JSX.Element {
   const resetHotkeyOverride = useSettingsStore((s) => s.resetHotkeyOverride)
   const resetAllHotkeyOverrides = useSettingsStore((s) => s.resetAllHotkeyOverrides)
 
-  const [activeSection, setActiveSection] = useState<SettingsSection>('appearance')
+  const [activeSection, setActiveSection] = useState<SettingsSection>(
+    // Read settingsInitialSection synchronously on mount so deep-linking from the
+    // command palette (openSettings('hotkeys')) lands on the right section immediately.
+    () => usePanesStore.getState().settingsInitialSection ?? 'appearance'
+  )
   const [query, setQuery] = useState('')
   const [recording, setRecording] = useState<HotkeyId | null>(null)
   const [conflictLabel, setConflictLabel] = useState<string | null>(null)
@@ -170,7 +173,10 @@ export function SettingsPanel(): JSX.Element {
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Sidebar nav */}
+        {/* Sidebar nav — INVARIANT: never filter this list by query.
+            All sections must stay visible while a search is active so users can
+            switch sections without clearing the query first. Only the content
+            pane (below) filters by query. */}
         <aside
           style={{
             width: 200,

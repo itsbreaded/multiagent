@@ -1,28 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { usePanesStore } from '../../store/panes'
-import { useSessions } from '../../hooks/useSessions'
-import type { Session } from '../../../../shared/types'
-import { formatRelativeTime } from '../../utils/time'
-import { HOTKEYS } from '../../utils/hotkeys'
-import type { AgentKind } from '../../../../shared/types'
+import { useSettingsStore } from '../../store/settings'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
-
-interface SessionEntry {
-  kind: 'session'
-  session: Session
-}
-
-interface ActionEntry {
-  kind: 'action'
-  label: string
-  shortcut?: string
-  icon: string
-  agentKind?: AgentKind
-  shellIcon?: boolean
-  run: () => void
-}
-
-type Entry = SessionEntry | ActionEntry
+import { getCommands, CATEGORY_ORDER, type Command, type CommandContext } from '../../commands/registry'
 
 export function CommandPalette(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
@@ -31,127 +11,113 @@ export function CommandPalette(): JSX.Element {
   const splitPane = usePanesStore((s) => s.splitPane)
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
-  const resumeSession = usePanesStore((s) => s.resumeSession)
+  const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
+  const openSettings = usePanesStore((s) => s.openSettings)
+  const closePane = usePanesStore((s) => s.closePane)
+  const zoomPane = usePanesStore((s) => s.zoomPane)
+  const unzoom = usePanesStore((s) => s.unzoom)
+  const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
+  const addTab = usePanesStore((s) => s.addTab)
+  const closeTab = usePanesStore((s) => s.closeTab)
+  const duplicateTab = usePanesStore((s) => s.duplicateTab)
+  const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
+  const setPendingRenamePaneId = usePanesStore((s) => s.setPendingRenamePaneId)
+  const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
+  const openDirPickerForTab = usePanesStore((s) => s.openDirPickerForTab)
+  const activeTabId = usePanesStore((s) => s.activeTabId)
+  const tabs = usePanesStore((s) => s.tabs)
+  const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
+  const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
+  const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
 
-  const { sessions, search } = useSessions()
   const [query, setQuery] = useState('')
   const [selectedIdx, setSelectedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
   const mouseDownOnOverlay = useRef(false)
+  const entryRefs = useRef<Map<number, HTMLDivElement>>(new Map())
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
-  const actions: ActionEntry[] = useMemo(() => [
-    {
-      kind: 'action',
-      label: 'New Claude session',
-      icon: '',
-      agentKind: 'claude',
-      run: () => {
-        const pane = getFocusedPane()
-        newSession(pane?.cwd ?? window.homeDir ?? 'C:\\', 'vertical', 'claude')
-        closeOverlays()
-      },
-    },
-    {
-      kind: 'action',
-      label: 'New Codex session',
-      icon: '',
-      agentKind: 'codex',
-      run: () => {
-        const pane = getFocusedPane()
-        newSession(pane?.cwd ?? window.homeDir ?? 'C:\\', 'vertical', 'codex')
-        closeOverlays()
-      },
-    },
-    {
-      kind: 'action',
-      label: 'New shell pane',
-      icon: '',
-      shellIcon: true,
-      run: () => {
-        const pane = getFocusedPane()
-        addShellPane(pane?.cwd ?? window.homeDir ?? 'C:\\')
-        closeOverlays()
-      },
-    },
-    {
-      kind: 'action',
-      label: 'Split pane vertical',
-      shortcut: HOTKEYS.splitVertical.display,
-      icon: '|',
-      run: () => {
-        const pane = getFocusedPane()
-        if (pane) splitPane(pane.id, 'vertical')
-        closeOverlays()
-      },
-    },
-    {
-      kind: 'action',
-      label: 'Split pane horizontal',
-      shortcut: HOTKEYS.splitHorizontal.display,
-      icon: '-',
-      run: () => {
-        const pane = getFocusedPane()
-        if (pane) splitPane(pane.id, 'horizontal')
-        closeOverlays()
-      },
-    },
-    {
-      kind: 'action',
-      label: 'Toggle sidebar',
-      shortcut: HOTKEYS.toggleSidebar.display,
-      icon: '≡',
-      run: () => { toggleSidebar(); closeOverlays() },
-    },
-  ], [addShellPane, closeOverlays, splitPane, getFocusedPane, toggleSidebar, newSession])
+  const focusedPane = getFocusedPane()
+  const activeTab = tabs.find((t) => t.id === activeTabId)
 
-  const filteredSessions: Session[] = query ? search(query) : sessions.slice(0, 6)
-  const filteredActions: ActionEntry[] = query
-    ? actions.filter((a) => a.label.toLowerCase().includes(query.toLowerCase()))
-    : actions
+  const ctx: CommandContext = {
+    getFocusedPane,
+    activeTabId,
+    activeTabDefaultCwd: activeTab?.defaultCwd,
+    cwd: focusedPane?.cwd ?? window.homeDir ?? 'C:\\',
+    isDetachedWindow,
+    tabCount: tabs.length,
+    vsCodeAvailable,
+    closeOverlays,
+    newSession,
+    addShellPane,
+    splitPane,
+    zoomedPaneId,
+    closePane,
+    zoomPane,
+    unzoom,
+    addTab,
+    closeTab,
+    duplicateTab,
+    toggleSidebar,
+    toggleSessionBrowser,
+    openSettings,
+    setPaneCustomName,
+    setPendingRenamePaneId,
+    setPendingRenameTabId,
+    openDirPickerForTab,
+    hotkeyOverrides,
+  }
 
-  const entries: Entry[] = [
-    ...filteredSessions.map((s): SessionEntry => ({ kind: 'session', session: s })),
-    ...filteredActions,
-  ]
+  const normalizedQuery = query.trim().toLowerCase()
+
+  const allCommands = getCommands(ctx)
+  const filteredCommands: Command[] = normalizedQuery
+    ? allCommands.filter((c) =>
+        c.title.toLowerCase().includes(normalizedQuery) ||
+        c.category.toLowerCase().includes(normalizedQuery) ||
+        c.keywords?.some((k) => k.includes(normalizedQuery))
+      )
+    : allCommands
+
+  const commandIndexMap = new Map<string, number>()
+  filteredCommands.forEach((c, i) => commandIndexMap.set(c.id, i))
+
+  const grouped = new Map<string, Command[]>()
+  for (const cat of CATEGORY_ORDER) grouped.set(cat, [])
+  for (const cmd of filteredCommands) {
+    if (!grouped.has(cmd.category)) grouped.set(cmd.category, [])
+    grouped.get(cmd.category)!.push(cmd)
+  }
+
+  const totalEntries = filteredCommands.length
 
   useEffect(() => {
     setSelectedIdx(0)
+    entryRefs.current.clear()
   }, [query])
 
-  function handleKeyDown(e: React.KeyboardEvent) {
+  function handleKeyDown(e: React.KeyboardEvent): void {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSelectedIdx((i) => Math.min(i + 1, entries.length - 1))
+      setSelectedIdx((i) => Math.min(i + 1, totalEntries - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setSelectedIdx((i) => Math.max(i - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const entry = entries[selectedIdx]
-      if (entry) executeEntry(entry)
+      const cmd = filteredCommands[selectedIdx]
+      if (cmd) void cmd.run(ctx)
     } else if (e.key === 'Escape') {
       closeOverlays()
     }
   }
 
-  function executeEntry(entry: Entry) {
-    if (entry.kind === 'action') {
-      entry.run()
-    } else {
-      resumeSession(entry.session.agentKind, entry.session.sessionId, entry.session.cwd)
-      closeOverlays()
-    }
-  }
-
-  // Scroll selected item into view
   useEffect(() => {
-    const el = listRef.current?.children[selectedIdx] as HTMLElement | undefined
-    el?.scrollIntoView({ block: 'nearest' })
+    entryRefs.current.get(selectedIdx)?.scrollIntoView({ block: 'nearest' })
   }, [selectedIdx])
 
   return (
@@ -182,7 +148,6 @@ export function CommandPalette(): JSX.Element {
           boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
         }}
       >
-        {/* Search input */}
         <div
           style={{
             display: 'flex',
@@ -196,7 +161,7 @@ export function CommandPalette(): JSX.Element {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search sessions or commands..."
+            placeholder="Search commands…"
             style={{
               flex: 1,
               background: 'none',
@@ -209,107 +174,67 @@ export function CommandPalette(): JSX.Element {
           />
         </div>
 
-        {/* Results */}
-        <div ref={listRef} style={{ maxHeight: 360, overflowY: 'auto' }}>
-          {filteredSessions.length > 0 && (
-            <>
-              <SectionLabel>Sessions</SectionLabel>
-              {filteredSessions.map((s, i) => {
-                const idx = i
-                return (
-                  <EntryRow
-                    key={`${s.agentKind}:${s.sessionId}`}
-                    isSelected={selectedIdx === idx}
-                    onClick={() => executeEntry({ kind: 'session', session: s })}
-                    onHover={() => setSelectedIdx(idx)}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#d4d4d4' }}>
-                        <AgentIcon agentKind={s.agentKind} size={14} />
-                        {s.projectName.split('/').pop()}
-                      </span>
-                      <span style={{ fontSize: 11, color: '#4a4b4e' }}>
-                        {formatRelativeTime(s.lastActivity)} ago
-                      </span>
-                    </div>
-                    {s.firstMessage && (
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: '#6b7280',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          maxWidth: '100%',
-                        }}
-                      >
-                        {s.firstMessage}
-                      </div>
-                    )}
-                  </EntryRow>
-                )
-              })}
-            </>
-          )}
-
-          {filteredActions.length > 0 && (
-            <>
-              <SectionLabel>Commands</SectionLabel>
-              {filteredActions.map((a, i) => {
-                const idx = filteredSessions.length + i
-                return (
-                  <EntryRow
-                    key={a.label}
-                    isSelected={selectedIdx === idx}
-                    onClick={() => a.run()}
-                    onHover={() => setSelectedIdx(idx)}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          color: '#6b7280',
-                          fontFamily: 'monospace',
-                          width: 16,
-                          height: 16,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        {a.agentKind ? <AgentIcon agentKind={a.agentKind} size={16} /> : a.shellIcon ? <ShellIcon size={16} /> : a.icon}
-                      </span>
-                      <span style={{ fontSize: 13, color: '#d4d4d4', flex: 1 }}>{a.label}</span>
-                      {a.shortcut && (
+        <div style={{ maxHeight: 440, overflowY: 'auto' }}>
+          {[...grouped.entries()].map(([category, cmds]) => {
+            if (cmds.length === 0) return null
+            return (
+              <React.Fragment key={category}>
+                <SectionLabel>{category}</SectionLabel>
+                {cmds.map((cmd) => {
+                  const idx = commandIndexMap.get(cmd.id)!
+                  const shortcut = cmd.shortcut?.(ctx)
+                  return (
+                    <EntryRow
+                      key={cmd.id}
+                      isSelected={selectedIdx === idx}
+                      onClick={() => void cmd.run(ctx)}
+                      onHover={() => setSelectedIdx(idx)}
+                      elRef={(el) => { if (el) entryRefs.current.set(idx, el); else entryRefs.current.delete(idx) }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span
                           style={{
-                            fontSize: 10,
-                            color: '#4a4b4e',
-                            backgroundColor: '#141517',
-                            border: '1px solid #2a2b2e',
-                            borderRadius: 3,
-                            padding: '1px 5px',
+                            fontSize: 12,
+                            color: '#6b7280',
+                            fontFamily: 'monospace',
+                            width: 16,
+                            height: 16,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
                           }}
                         >
-                          {a.shortcut}
+                          {cmd.agentKind
+                            ? <AgentIcon agentKind={cmd.agentKind} size={16} />
+                            : cmd.shellIcon
+                              ? <ShellIcon size={16} />
+                              : '›'}
                         </span>
-                      )}
-                    </div>
-                  </EntryRow>
-                )
-              })}
-            </>
-          )}
+                        <span style={{ fontSize: 13, color: '#d4d4d4', flex: 1 }}>{cmd.title}</span>
+                        {shortcut && (
+                          <span
+                            style={{
+                              fontSize: 10,
+                              color: '#4a4b4e',
+                              backgroundColor: '#141517',
+                              border: '1px solid #2a2b2e',
+                              borderRadius: 3,
+                              padding: '1px 5px',
+                            }}
+                          >
+                            {shortcut}
+                          </span>
+                        )}
+                      </div>
+                    </EntryRow>
+                  )
+                })}
+              </React.Fragment>
+            )
+          })}
 
-          {entries.length === 0 && (
-            <div
-              style={{
-                padding: '24px 16px',
-                textAlign: 'center',
-                color: '#4a4b4e',
-                fontSize: 12,
-              }}
-            >
+          {totalEntries === 0 && (
+            <div style={{ padding: '24px 16px', textAlign: 'center', color: '#4a4b4e', fontSize: 12 }}>
               No results
             </div>
           )}
@@ -340,15 +265,18 @@ function EntryRow({
   isSelected,
   onClick,
   onHover,
+  elRef,
   children,
 }: {
   isSelected: boolean
   onClick: () => void
   onHover: () => void
+  elRef?: (el: HTMLDivElement | null) => void
   children: React.ReactNode
 }): JSX.Element {
   return (
     <div
+      ref={elRef}
       onClick={onClick}
       onMouseEnter={onHover}
       style={{

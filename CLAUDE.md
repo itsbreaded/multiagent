@@ -101,6 +101,18 @@ When one UI has multiple presentation modes, keep the shared pieces structurally
 
 All non-terminal scrollable renderer surfaces should use the shared `dark-scrollbar` class from `src/renderer/src/assets/main.css`. Terminal scrollbars are styled separately through `.xterm .xterm-viewport`. When adding a reusable component that owns an internal scroll container, expose a className hook instead of forcing callers to accept an unstyled native scrollbar.
 
+### Command Registry
+
+The command palette reads from a declarative registry at `src/renderer/src/commands/registry.ts`. Commands are **not** auto-discovered — every palette-reachable action must be explicitly added there. Key rules:
+
+- **New settings sections**: adding a section to `SettingsPanel` requires a corresponding `settings.open.<section>` entry in the registry.
+- **New store actions**: any new pane/tab/view/window action that should be keyboard-reachable needs a new `Command` entry.
+- **New context data**: if a command needs a store getter or action not yet in `CommandContext`, extend that interface and wire it in `CommandPalette/index.tsx`.
+- `shortcut` functions call `buildHotkeys(hotkeyOverrides)` at render time so shortcut chips always reflect the user's current bindings.
+- `enabled` functions are evaluated on every render so context-sensitive hiding (no focused pane, single tab, detached window, VS Code not installed, etc.) is live.
+- Sessions do not appear in the command palette; session discovery goes through the Session Browser (`Ctrl+Shift+O`) and the sidebar Recent section.
+- The palette uses `window.prompt()` for inline rename inputs (Rename Pane). This is an Electron native dialog — acceptable for v1, replace with a custom overlay if it becomes a UX pain point.
+
 ### Session Indexing
 
 `SessionIndex` wraps better-sqlite3 with FTS5 for full-text search over session transcripts. `TranscriptScanner` reads `~/.claude/projects/**/*.jsonl` and `CodexSessionScanner` reads `~/.codex/sessions/**/*.jsonl`; both extract metadata into the same index. Sessions are polled every 5 seconds and pushed to the renderer on change. Closing an agent pane with a known `sessionId` also triggers an immediate `sessions:refresh` scan so the session can move from the live pane list to Recent without waiting for the next poll.

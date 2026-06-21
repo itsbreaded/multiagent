@@ -3,6 +3,8 @@ import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
 import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
+export type SettingsSection = 'appearance' | 'hotkeys' | 'general' | 'mcp' | 'providers'
+
 const SETTINGS_KEY = 'multiagent:settings'
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 250_000
 export const MIN_TERMINAL_SCROLLBACK_LINES = 1_000
