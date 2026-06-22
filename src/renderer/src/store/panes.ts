@@ -532,6 +532,7 @@ interface PanesStore {
   clearSwapDrag: () => void
   movePaneToTab: (sourcePaneId: string, targetTabId: string) => void
   movePaneToNewTab: (paneId: string) => void
+  reorderTab: (tabId: string, beforeTabId: string | null) => void
 
   // Getters
   activeTab: () => Tab | undefined
@@ -1019,11 +1020,19 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   renameTab: (tabId, label) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id === tabId ? { ...t, customLabel: label.trim() || undefined } : t
-      ),
-    }))
+    set((s) => {
+      const trimmed = label.trim()
+      if (!trimmed) {
+        const tab = s.tabs.find(t => t.id === tabId)
+        if (tab && !tab.rootNode) {
+          const regen = nextDefaultTabLabel(s.tabs.filter(t => t.id !== tabId))
+          return { tabs: s.tabs.map(t => t.id === tabId ? { ...t, customLabel: regen } : t) }
+        }
+      }
+      return {
+        tabs: s.tabs.map((t) => t.id === tabId ? { ...t, customLabel: trimmed || undefined } : t),
+      }
+    })
   },
 
   duplicateTab: (tabId) => {
@@ -1753,6 +1762,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         activeTabId: targetTabId,
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [targetTabId]),
         zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
+        // Clear after the drop has already been consumed — safe here, cannot cancel the operation.
+        draggedPaneId: null,
         sidebarSectionOpen: {
           ...s.sidebarSectionOpen,
           [tabSidebarSectionId(targetTabId)]: true,
@@ -1835,6 +1846,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         activeTabId: targetTabId,
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [targetTabId]),
         zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
+        // Clear after the drop has already been consumed — safe here, cannot cancel the operation.
+        draggedPaneId: null,
         sidebarSectionOpen: {
           ...s.sidebarSectionOpen,
           [tabSidebarSectionId(targetTabId)]: true,
@@ -1864,7 +1877,27 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const updatedTabs = s.tabs.map((t, i) =>
         i === tabIdx ? { ...t, rootNode: newRoot, focusedPaneId: sourcePaneId } : t
       )
-      return { ...s, tabs: updatedTabs }
+      return { ...s, tabs: updatedTabs, draggedPaneId: null }
+    })
+  },
+
+  reorderTab: (tabId, beforeTabId) => {
+    if (tabId === beforeTabId) return
+    set((s) => {
+      const from = s.tabs.findIndex((t) => t.id === tabId)
+      if (from === -1) return s
+      const next = [...s.tabs]
+      const [moved] = next.splice(from, 1)
+      if (beforeTabId === null) {
+        // Insert after the last local (non-detached) tab, not at absolute end —
+        // otherwise a local tab could land after detached entries in the array.
+        const lastLocalIdx = next.reduce((last, t, i) => (!t.detached ? i : last), -1)
+        next.splice(lastLocalIdx + 1, 0, moved)
+      } else {
+        const toIdx = next.findIndex((t) => t.id === beforeTabId)
+        next.splice(toIdx === -1 ? next.length : toIdx, 0, moved)
+      }
+      return { tabs: next }
     })
   },
 

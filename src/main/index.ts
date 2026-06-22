@@ -157,7 +157,7 @@ async function createWindow(): Promise<void> {
   }
 }
 
-const gotTheLock = app.requestSingleInstanceLock()
+const gotTheLock = process.env.MULTIAGENT_ALLOW_MULTI_INSTANCE ? true : app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {

@@ -17,4 +17,5 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Starting dev server...
+set MULTIAGENT_ALLOW_MULTI_INSTANCE=1
 call npm run dev

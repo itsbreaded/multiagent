@@ -17,6 +17,7 @@ import threeDotIcon from '../../assets/threedot.png'
 import addBoxIcon from '../../assets/addbox.png'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
+const TAB_REORDER_MIME = 'application/x-multiagent-tab-reorder'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -45,6 +46,7 @@ export function TabSections(): JSX.Element {
   // intentionally excluded so that OS focus changes immediately de-highlight the old window.
   const effectiveActiveWindowId = pendingFocusTarget?.windowId ?? activeWindowId
   const localWindowActive = effectiveActiveWindowId === null || effectiveActiveWindowId === windowId
+  const reorderTab = usePanesStore((s) => s.reorderTab)
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
 
@@ -57,6 +59,8 @@ export function TabSections(): JSX.Element {
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [dropTabId, setDropTabId] = useState<string | null>(null)
+  // undefined = no reorder drag; null = insert at end; string = insert before that tab id
+  const [reorderInsertBeforeId, setReorderInsertBeforeId] = useState<string | null | undefined>(undefined)
 
   const dirPickerTab = dirPickerTabId ? tabs.find((t) => t.id === dirPickerTabId) : null
   const spawnMenuTab = spawnMenu ? tabs.find((t) => t.id === spawnMenu.tabId) : null
@@ -111,6 +115,35 @@ export function TabSections(): JSX.Element {
 
   return (
     <>
+      {/* Container catches TAB_REORDER_MIME drops that land on section content or gaps,
+          using the last insertion position set by onHeaderDragOver. */}
+      <div
+        onDragEnter={(e) => {
+          if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+            e.preventDefault()
+          }
+        }}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+            e.preventDefault()
+          }
+        }}
+        onDrop={(e) => {
+          if (!e.dataTransfer.types.includes(TAB_REORDER_MIME) || reorderInsertBeforeId === undefined) return
+          e.preventDefault()
+          e.stopPropagation()
+          try {
+            const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
+            reorderTab(sourceTabId, reorderInsertBeforeId)
+          } catch {}
+          setReorderInsertBeforeId(undefined)
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setReorderInsertBeforeId(undefined)
+          }
+        }}
+      >
       {tabs.map((tab) => {
         const label = tabLabels.get(tab.id) ?? 'Tab'
         const leaves = tab.rootNode ? collectLeaves(tab.rootNode) : []
@@ -211,6 +244,9 @@ export function TabSections(): JSX.Element {
           )
         }
 
+        const localTabs = tabs.filter((t) => !t.detached)
+        const localTabIdx = localTabs.findIndex((t) => t.id === tab.id)
+        const isLastLocalTab = localTabIdx === localTabs.length - 1
         return (
           <SidebarSection
             key={tab.id}
@@ -229,6 +265,14 @@ export function TabSections(): JSX.Element {
             onRenameChange={setRenameValue}
             onRenameCommit={commitRename}
             onRenameCancel={() => setRenamingTabId(null)}
+            headerDraggable={!isRenaming}
+            onHeaderDragStart={(e) => {
+              e.dataTransfer.setData(TAB_REORDER_MIME, JSON.stringify({ tabId: tab.id }))
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onHeaderDragEnd={() => {
+              setReorderInsertBeforeId(undefined)
+            }}
             headerActions={
               <SidebarHoverActions
                 menuTitle="Tab menu"
@@ -243,7 +287,22 @@ export function TabSections(): JSX.Element {
               />
             }
             headerDropActive={dropTabId === tab.id}
+            headerInsertTop={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === tab.id}
+            headerInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastLocalTab}
             onHeaderDragOver={(e) => {
+              // Project reorder — MIME-type check prevents collision with pane drops
+              if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+                e.preventDefault()
+                e.stopPropagation()
+                const rect = e.currentTarget.getBoundingClientRect()
+                if (e.clientY - rect.top < rect.height / 2) {
+                  setReorderInsertBeforeId(tab.id)
+                } else {
+                  setReorderInsertBeforeId(localTabs[localTabIdx + 1]?.id ?? null)
+                }
+                return
+              }
+              // Pane drop
               if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
               e.preventDefault()
               e.stopPropagation()
@@ -253,6 +312,18 @@ export function TabSections(): JSX.Element {
               if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
             }}
             onHeaderDrop={(e) => {
+              // Project reorder
+              if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+                e.preventDefault()
+                e.stopPropagation()
+                try {
+                  const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
+                  reorderTab(sourceTabId, reorderInsertBeforeId ?? null)
+                } catch {}
+                setReorderInsertBeforeId(undefined)
+                return
+              }
+              // Pane drop
               const payload = decodePaneDragPayload(e.dataTransfer)
               if (!draggedPaneId && !payload) return
               e.preventDefault()
@@ -280,6 +351,7 @@ export function TabSections(): JSX.Element {
           </SidebarSection>
         )
       })}
+      </div>
 
       {tabMenu && (
         <TabContextMenu

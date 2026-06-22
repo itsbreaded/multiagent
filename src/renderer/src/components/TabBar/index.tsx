@@ -470,6 +470,7 @@ export function TabBar(): JSX.Element {
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
+  const reorderTab = usePanesStore((s) => s.reorderTab)
   const receiveTab = usePanesStore((s) => s.receiveTab)
   const detachTab = usePanesStore((s) => s.detachTab)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
@@ -622,7 +623,8 @@ export function TabBar(): JSX.Element {
   }, [renamingTabId])
 
   const startRename = useCallback((tabId: string) => {
-    setRenameValue(labels.get(tabId) ?? '')
+    const tab = usePanesStore.getState().tabs.find(t => t.id === tabId)
+    setRenameValue(tab?.customLabel ?? labels.get(tabId) ?? '')
     setRenamingTabId(tabId)
   }, [labels])
 
@@ -956,25 +958,14 @@ export function TabBar(): JSX.Element {
 
                 droppedInsideRef.current = true
 
-                if (draggedPaneId) {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  movePaneToTab(draggedPaneId, tab.id)
-                  clearPaneDragHover()
-                  return
-                }
-                const from = dragIndex.current
+                // Tab reorder: use tab IDs (not filtered indices) to avoid off-by-one bugs
+                // with detached tabs. MIME-type paths above already handled pane drops.
+                const draggedTabId = draggingTabRef.current?.id
                 const side = dragSideRef.current
-                const targetTabId = tab.id
-                if (from !== null && from !== idx) {
-                  usePanesStore.setState((s) => {
-                    const next = [...s.tabs]
-                    const [moved] = next.splice(from, 1)
-                    const newTargetIdx = next.findIndex((t) => t.id === targetTabId)
-                    const insertAt = side === 'right' ? newTargetIdx + 1 : newTargetIdx
-                    next.splice(Math.max(0, insertAt), 0, moved)
-                    return { tabs: next }
-                  })
+                const localTabs = tabs.filter((t) => !t.detached)
+                const beforeTabId = side === 'left' ? tab.id : (localTabs[idx + 1]?.id ?? null)
+                if (draggedTabId && draggedTabId !== tab.id) {
+                  reorderTab(draggedTabId, beforeTabId)
                 }
                 dragIndex.current = null
                 dragSideRef.current = null

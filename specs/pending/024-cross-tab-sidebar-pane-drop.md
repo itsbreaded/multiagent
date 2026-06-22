@@ -133,6 +133,93 @@ same-window-only acceptable for now?
 - Same-tab pane-row drops: work correctly (spec 021).
 - Pane-header right-drag same-tab swap: works correctly (spec 022).
 
+---
+
+## Related regression: tab-bar reorder hijacked by stale `draggedPaneId` (added 2026-06-22)
+
+A separate audit (prompted by "dragging a tab onto another tab moves panes instead of
+reordering") found a second regression from the same specs 021/022 drag machinery. It is
+**documented here because it shares this spec's root infrastructure**, but the fix is owned
+by **spec 025** (project/tab reorder), not by this spec — see "Where the fix lives" below.
+
+### Symptom
+
+Drag tab A in the **top tab bar** and drop it on tab B. Instead of tab A reordering to B's
+position, a pane from a *previous* drag is moved into tab B (the tab bar behaves as if a
+pane is being dropped). Reported as "it moves some of the panes into the other tab instead
+of just reordering the tab."
+
+### Root cause — stale `draggedPaneId`
+
+`draggedPaneId` (Zustand) is the same-window signal that "a pane drag is in flight." It is
+set in `PaneHeader` (`⠿` handle `onDragStart` → `setDraggedPane(pane.id)`) and in the
+sidebar `PaneRow`, and is supposed to be cleared by the source element's `onDragEnd`.
+
+The **left-drag-to-split** gesture breaks that contract:
+
+1. `PaneHeader` handle `onDragStart` calls `setDraggedPane(pane.id)` and `beginNativeDrag()`.
+2. The drag drops on `PaneSplitDropTarget.onDrop` → `movePaneToSplit(...)`, which
+   restructures the pane tree. That **remounts the `PaneHeader`**, so the source
+   `<span draggable>`'s React `onDragEnd` (which would call `setDraggedPane(null)`) is
+   attached to an unmounted node and **never fires**.
+3. `beginNativeDrag`'s window-level capture `dragend`/`drop` listeners **deliberately do not
+   clear `draggedPaneId`** (the comment at `PaneHeader/index.tsx:65` explains clearing it in
+   the capture phase, before the drop target's `onDrop`, re-renders the target out of its
+   accepting state and cancels the split). They only remove the `pane-dragging` CSS class.
+
+Net effect: after any successful drag-to-split, `draggedPaneId` stays non-null indefinitely
+(until the next pane drag that *does* fire its `onDragEnd` cleanly — e.g. a sidebar `PaneRow`
+drag, which is not remounted by `swapPanes`, so it self-heals).
+
+`TabBar` then mis-routes tab drags because it branches on this persistent flag:
+
+- `TabBar/index.tsx:853` — `onDragOver`: `if (draggedPaneId) { …treat as pane drop… }`
+- `TabBar/index.tsx:959` — `onDrop`: `if (draggedPaneId) { movePaneToTab(draggedPaneId, tab.id); return }`
+
+With a stale `draggedPaneId`, a genuine tab drag (which carries `TAB_DRAG_MIME`, **not**
+`PANE_DRAG_MIME`) is treated as a pane move.
+
+### Why this is a `draggedPaneId`-lifecycle problem, not a tab-bar logic problem
+
+The tab bar *should* support "drag a pane onto a tab to move it there" (cross-window pane
+drops rely on it). The defect is that it trusts the persistent `draggedPaneId` flag instead
+of the **authoritative in-flight signal**: `e.dataTransfer.types`. During a real tab drag the
+dataTransfer contains `TAB_DRAG_MIME` and not `PANE_DRAG_MIME`; during a real pane drag it
+contains `PANE_DRAG_MIME`. The MIME types cannot go stale because they live on the drag event.
+
+### Does this bug "extend to" spec 024?
+
+**It shares the root cause but not the surface.** This spec's `PaneRow` drop guards
+(`TabSections.tsx:426`, `:439`) also key off `draggedPaneId`, but they additionally require
+`draggedPaneId === pane.id` to skip self and route through `swapPanes`, which is same-tab-only
+and silently no-ops on a stale/foreign id — so this spec's surface is not *corrupted* by the
+staleness the way the tab bar is. The common lesson for both specs:
+
+> Drag-target surfaces should discriminate the drag kind from `e.dataTransfer.types`
+> (authoritative for the in-flight drag), and `draggedPaneId` must be cleared reliably even
+> when the source element is remounted mid-drag.
+
+### Where the fix lives
+
+- **Spec 025** owns the tab-bar reorder fix (it is the same "reorder the project/tab list"
+  operation the sidebar-project-reorder feature needs) plus the durable `draggedPaneId`
+  cleanup. See spec 025 for the `reorderTab` store action, the MIME-type discrimination, and
+  the stale-flag cleanup.
+- **This spec (024)** stays scoped to the *semantics of cross-tab pane-row drops* (Q1–Q5).
+  When 024 is implemented, reuse the MIME-type discrimination and clean `draggedPaneId`
+  lifecycle from 025 rather than re-introducing a `draggedPaneId`-only guard.
+
+### Secondary tab-bar defect found in the same audit (also owned by spec 025)
+
+`TabBar` maps `tabs.filter((t) => !t.detached)` with index `idx` and stores
+`dragIndex.current = idx` (a **filtered** index), but the reorder `setState` splices
+`s.tabs` — the **unfiltered** array (includes detached tabs) — at that index
+(`TabBar/index.tsx:966–978`). When detached tabs exist, the wrong tab is moved. The reorder
+is also done inline in the component rather than through a store action, so there is no single
+source of truth for "reorder the tab list." Spec 025's `reorderTab(tabId, …)` action fixes both.
+
+---
+
 ## Implementation — deferred pending Q1–Q5 answers
 
 Once the design questions above are answered, the implementation will likely touch:

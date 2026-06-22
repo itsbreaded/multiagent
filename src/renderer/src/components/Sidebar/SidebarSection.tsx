@@ -18,10 +18,15 @@ interface SidebarSectionProps {
   onRenameChange?: (v: string) => void
   onRenameCommit?: () => void
   onRenameCancel?: () => void
+  headerDraggable?: boolean
+  onHeaderDragStart?: React.DragEventHandler<HTMLDivElement>
+  onHeaderDragEnd?: React.DragEventHandler<HTMLDivElement>
   onHeaderDragOver?: React.DragEventHandler<HTMLDivElement>
   onHeaderDragLeave?: React.DragEventHandler<HTMLDivElement>
   onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
   headerDropActive?: boolean
+  headerInsertTop?: boolean
+  headerInsertBottom?: boolean
   titleSuffix?: React.ReactNode
   headerActionsAlways?: React.ReactNode
   headerActions?: React.ReactNode
@@ -45,10 +50,15 @@ export function SidebarSection({
   onRenameChange,
   onRenameCommit,
   onRenameCancel,
+  headerDraggable,
+  onHeaderDragStart,
+  onHeaderDragEnd,
   onHeaderDragOver,
   onHeaderDragLeave,
   onHeaderDrop,
   headerDropActive,
+  headerInsertTop,
+  headerInsertBottom,
   titleSuffix,
   headerActionsAlways,
   headerActions,
@@ -75,6 +85,9 @@ export function SidebarSection({
     <div style={{ flexShrink: 0, ...style }}>
       <div
         onContextMenu={onContextMenu}
+        draggable={headerDraggable}
+        onDragStart={onHeaderDragStart}
+        onDragEnd={onHeaderDragEnd}
         onDragOver={onHeaderDragOver}
         onDragLeave={onHeaderDragLeave}
         onDrop={onHeaderDrop}
@@ -85,6 +98,12 @@ export function SidebarSection({
           outline: headerDropActive ? border.accent : 'none',
           outlineOffset: -1,
           backgroundColor: headerDropActive ? ui.color.panelRaised : 'transparent',
+          // Inset box-shadow for insertion line (no layout shift, distinct from pane-drop outline)
+          boxShadow: headerInsertTop
+            ? `inset 0 2px 0 ${ui.color.accent}`
+            : headerInsertBottom
+            ? `inset 0 -2px 0 ${ui.color.accent}`
+            : 'none',
         }}
       >
         <button
