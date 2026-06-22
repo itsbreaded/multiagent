@@ -15,6 +15,9 @@
   "keywords": [],
   "author": "Chris Haniszewski",
   "license": "MIT",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "devDependencies": {
     "@electron-toolkit/eslint-config-ts": "^3.0.0",
     "@electron-toolkit/tsconfig": "^1.0.1",
