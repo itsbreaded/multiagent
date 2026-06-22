@@ -87,3 +87,10 @@ body {
 .sash-dragging .xterm canvas {
   pointer-events: none !important;
 }
+
+/* Pane drag (left-drag split / right-drag swap): show a closed-grip cursor everywhere
+   until release, overriding per-element cursors like the terminal's text cursor. */
+.pane-dragging,
+.pane-dragging * {
+  cursor: grabbing !important;
+}

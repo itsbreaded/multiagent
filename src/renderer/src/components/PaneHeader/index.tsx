@@ -33,6 +33,10 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
+  const startSwapDrag = usePanesStore((s) => s.startSwapDrag)
+  const setSwapDragTarget = usePanesStore((s) => s.setSwapDragTarget)
+  const clearSwapDrag = usePanesStore((s) => s.clearSwapDrag)
+  const swapPanes = usePanesStore((s) => s.swapPanes)
   const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
   const sessions = useSessionsStore((s) => s.sessions)
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
@@ -47,6 +51,79 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
 
   const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
   const [dirPickerForSplit, setDirPickerForSplit] = useState<{ direction: SplitDirection; choice: SpawnChoice } | null>(null)
+
+  // Right-button drag on the handle swaps panes (native HTML5 DnD is left-button only, so
+  // this is a manual pointer drag that runs alongside the left-drag-to-split gesture).
+  const swapCleanupRef = useRef<(() => void) | null>(null)
+  // Left-button native drag (split). Cleanup is driven from window-level listeners, not the
+  // source element's onDragEnd, because a successful split remounts this PaneHeader (the
+  // pane tree restructures) and the element's onDragEnd can be lost before it fires —
+  // which left the grabbing cursor / drag state stuck.
+  const nativeDragCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => { swapCleanupRef.current?.(); nativeDragCleanupRef.current?.() }, [])
+
+  function beginNativeDrag(): void {
+    nativeDragCleanupRef.current?.()
+    document.body.classList.add('pane-dragging')
+    // Class-only cleanup. Do NOT mutate the store here: this runs in the capture phase,
+    // BEFORE the drop target's React onDrop, and clearing draggedPaneId synchronously
+    // re-renders the target out of its drop-accepting state (Zustand/useSyncExternalStore),
+    // which silently cancels the split. draggedPaneId is cleared in onDragEnd (fires after
+    // the drop). `drop` (capture) survives source remount; `dragend` covers cancels.
+    const end = (): void => {
+      document.body.classList.remove('pane-dragging')
+      window.removeEventListener('dragend', end, true)
+      window.removeEventListener('drop', end, true)
+      nativeDragCleanupRef.current = null
+    }
+    window.addEventListener('dragend', end, true)
+    window.addEventListener('drop', end, true)
+    nativeDragCleanupRef.current = end
+  }
+
+  function beginSwapDrag(e: React.MouseEvent): void {
+    if (e.button !== 2) return
+    e.preventDefault()
+    e.stopPropagation()
+    swapCleanupRef.current?.()
+    const sourceId = pane.id
+    startSwapDrag(sourceId)
+    document.body.classList.add('pane-dragging')
+
+    const resolveTarget = (x: number, y: number): string | null => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null
+      const id = el?.closest('[data-pane-id]')?.getAttribute('data-pane-id') ?? null
+      return id && id !== sourceId ? id : null
+    }
+    const onMove = (ev: MouseEvent): void => setSwapDragTarget(resolveTarget(ev.clientX, ev.clientY))
+    const onUp = (ev: MouseEvent): void => {
+      const target = resolveTarget(ev.clientX, ev.clientY)
+      cleanup()
+      clearSwapDrag()
+      if (target) swapPanes(sourceId, target)
+    }
+    // Suppress the contextmenu that fires on right-button release; self-removes after firing.
+    // preventDefault() alone only kills the native OS menu — the event still reaches React's
+    // delegated handler on the root, so the Terminal's custom Copy/Paste menu would open.
+    // stopImmediatePropagation() in the window capture phase stops it before React sees it.
+    const onContextMenu = (ev: MouseEvent): void => {
+      ev.preventDefault()
+      ev.stopImmediatePropagation()
+      window.removeEventListener('contextmenu', onContextMenu, true)
+    }
+    const cleanup = (): void => {
+      window.removeEventListener('mousemove', onMove, true)
+      window.removeEventListener('mouseup', onUp, true)
+      // Defer removing the contextmenu suppressor so the trailing event is still caught.
+      setTimeout(() => window.removeEventListener('contextmenu', onContextMenu, true), 0)
+      document.body.classList.remove('pane-dragging')
+      swapCleanupRef.current = null
+    }
+    window.addEventListener('mousemove', onMove, true)
+    window.addEventListener('mouseup', onUp, true)
+    window.addEventListener('contextmenu', onContextMenu, true)
+    swapCleanupRef.current = cleanup
+  }
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
@@ -99,9 +176,11 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
             e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: activeTabId, sourceWindowId: windowId }))
           }
           setDraggedPane(pane.id)
+          beginNativeDrag()
         }}
-        onDragEnd={() => setDraggedPane(null)}
-        title="Drag to rearrange pane"
+        onDragEnd={() => { setDraggedPane(null); nativeDragCleanupRef.current?.() }}
+        onMouseDown={beginSwapDrag}
+        title="Left-drag to split · Right-drag to swap"
         style={{
           fontSize: 10,
           color: '#3a3b3e',

@@ -15,12 +15,15 @@ export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Elem
     return tab?.focusedPaneId ?? ''
   })
   const focusPane = usePanesStore((s) => s.focusPane)
+  const isSwapTarget = usePanesStore((s) => s.swapDrag?.targetId === pane.id)
   const isFocused = focusedPaneId === pane.id
 
   return (
     <div
+      data-pane-id={pane.id}
       onClick={() => focusPane(pane.id)}
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
@@ -33,6 +36,18 @@ export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Elem
     >
       <PaneHeader pane={pane} isFocused={isFocused} />
       <Terminal pane={pane} layoutKey={layoutKey} />
+      {isSwapTarget && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            backgroundColor: 'rgba(74, 222, 128, 0.12)',
+            border: '2px solid #4ade80',
+            zIndex: 60,
+          }}
+        />
+      )}
     </div>
   )
 }

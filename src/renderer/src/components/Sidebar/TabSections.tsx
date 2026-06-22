@@ -376,7 +376,7 @@ function PaneRow({
   const setPendingRenamePaneId = usePanesStore((s) => s.setPendingRenamePaneId)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
-  const movePaneToSplit = usePanesStore((s) => s.movePaneToSplit)
+  const swapPanes = usePanesStore((s) => s.swapPanes)
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const name = paneLabelText(pane, sessions)
@@ -421,27 +421,27 @@ function PaneRow({
           e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: tab.id, sourceWindowId }))
           setDraggedPane(pane.id)
         }}
-        onDragEnd={() => setDraggedPane(null)}
+        onDragEnd={() => { setDraggedPane(null); setDropActive(false) }}
         onDragOver={(e) => {
           if (!draggedPaneId || draggedPaneId === pane.id) return
           e.preventDefault()
           e.stopPropagation()
-          setDropActive(true)
           setHovered(true)
+          setDropActive(true)
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-            setDropActive(false)
             setHovered(false)
+            setDropActive(false)
           }
         }}
         onDrop={(e) => {
           if (!draggedPaneId || draggedPaneId === pane.id) return
           e.preventDefault()
           e.stopPropagation()
-          movePaneToSplit(draggedPaneId, pane.id, 'vertical', false)
-          setDropActive(false)
+          swapPanes(draggedPaneId, pane.id)
           setHovered(false)
+          setDropActive(false)
         }}
         onMouseDown={() => { if (!renaming) onMouseDownOverride?.() }}
         onClick={() => { if (!renaming) { if (onClickOverride) { onClickOverride() } else { focusPaneInTab(tab.id, pane.id) } } }}
@@ -461,7 +461,6 @@ function PaneRow({
           backgroundColor: isFocused ? ui.color.control : hovered ? ui.color.panelRaised : 'transparent',
           outline: dropActive ? border.accent : 'none',
           outlineOffset: -1,
-          boxShadow: dropActive ? `inset -3px 0 0 ${ui.color.accent}` : 'none',
           transition: 'background-color 0.1s',
           position: 'relative',
         }}

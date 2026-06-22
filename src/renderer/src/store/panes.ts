@@ -98,6 +98,25 @@ function removeLeaf(node: PaneNode, removeId: string): PaneNode | null {
   return { ...node, first: newFirst, second: newSecond }
 }
 
+/**
+ * Return a new tree with the two leaf nodes exchanged in their structural positions, in a
+ * single traversal pass. The split structure — every split node's id, direction, and
+ * ratio — is preserved byte-for-byte; only the two leaves trade slots. Each leaf keeps its
+ * own id/data, so live PTYs follow their panes.
+ */
+function swapLeaves(node: PaneNode, idA: string, idB: string, leafA: PaneLeaf, leafB: PaneLeaf): PaneNode {
+  if (node.type === 'leaf') {
+    if (node.id === idA) return leafB
+    if (node.id === idB) return leafA
+    return node
+  }
+  return {
+    ...node,
+    first: swapLeaves(node.first, idA, idB, leafA, leafB),
+    second: swapLeaves(node.second, idA, idB, leafA, leafB),
+  }
+}
+
 /** Update ratio on the split with the given id */
 function updateRatioInTree(node: PaneNode, splitId: string, ratio: number): PaneNode {
   if (node.type === 'leaf') return node
@@ -506,6 +525,11 @@ interface PanesStore {
   draggedPaneId: string | null
   setDraggedPane: (paneId: string | null) => void
   movePaneToSplit: (sourcePaneId: string, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean) => void
+  swapPanes: (sourcePaneId: string, targetPaneId: string) => void
+  swapDrag: { sourceId: string; targetId: string | null } | null
+  startSwapDrag: (sourceId: string) => void
+  setSwapDragTarget: (targetId: string | null) => void
+  clearSwapDrag: () => void
   movePaneToTab: (sourcePaneId: string, targetTabId: string) => void
   movePaneToNewTab: (paneId: string) => void
 
@@ -930,6 +954,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
   },
   draggedPaneId: null,
+  swapDrag: null,
   pendingRenameTabId: null,
   setPendingRenameTabId: (id) => set({ pendingRenameTabId: id }),
 
@@ -1626,6 +1651,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setDraggedPane: (paneId) => set({ draggedPaneId: paneId }),
+  startSwapDrag: (sourceId) => set({ swapDrag: { sourceId, targetId: null } }),
+  setSwapDragTarget: (targetId) =>
+    set((s) => (s.swapDrag ? { swapDrag: { ...s.swapDrag, targetId } } : s)),
+  clearSwapDrag: () => set({ swapDrag: null }),
 
   movePaneToNewTab: (paneId) => {
     let newTabId = ''
@@ -1813,6 +1842,30 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       }
     })
     if (moved && activatedTabId) hydrateTabRuntime(activatedTabId, true)
+  },
+
+  swapPanes: (sourcePaneId, targetPaneId) => {
+    if (sourcePaneId === targetPaneId) return
+    set((s) => {
+      const tabIdx = s.tabs.findIndex(
+        (t) => t.rootNode && findLeaf(t.rootNode, sourcePaneId) && findLeaf(t.rootNode, targetPaneId)
+      )
+      if (tabIdx === -1) return s
+      const root = s.tabs[tabIdx].rootNode!
+
+      // Exchange the two panes' positions. The split structure (ids/directions/ratios) is
+      // frozen and every other pane stays exactly where it is at the same size; only these
+      // two leaves trade slots. Each leaf keeps its id/ptyId/sessionId so PTYs follow.
+      const sourceLeaf = findLeaf(root, sourcePaneId)
+      const targetLeaf = findLeaf(root, targetPaneId)
+      if (!sourceLeaf || !targetLeaf) return s
+
+      const newRoot = swapLeaves(root, sourcePaneId, targetPaneId, sourceLeaf, targetLeaf)
+      const updatedTabs = s.tabs.map((t, i) =>
+        i === tabIdx ? { ...t, rootNode: newRoot, focusedPaneId: sourcePaneId } : t
+      )
+      return { ...s, tabs: updatedTabs }
+    })
   },
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
