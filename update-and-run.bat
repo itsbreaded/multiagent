@@ -3,9 +3,7 @@ cd /d "%~dp0"
 echo Pulling latest changes...
 git pull
 if %errorlevel% neq 0 (
-    echo Git pull failed.
-    pause
-    exit /b %errorlevel%
+    echo Git pull failed or no remote access - continuing with current code.
 )
 
 echo.
