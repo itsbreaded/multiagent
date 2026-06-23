@@ -73,13 +73,13 @@
       "**/better-sqlite3/**"
     ],
     "npmRebuild": false,
-    "publish": {
+    "publish": [{
       "provider": "github",
       "owner": "itsbreaded",
       "repo": "multiagent",
       "private": true,
-      "draft": false
-    },
+      "releaseType": "release"
+    }],
     "win": {
       "target": ["nsis", "dir"],
       "icon": "build/favicon.ico"

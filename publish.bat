@@ -7,6 +7,26 @@ if "%GH_TOKEN%"=="" (
     exit /b 1
 )
 
+for /f "tokens=2 delims=:, " %%v in ('findstr /r "\"version\"" package.json ^| findstr /v "electron\|node\|@"') do (
+    set VERSION=%%~v
+    goto :found
+)
+:found
+set VERSION=%VERSION:"=%
+
+echo Version: %VERSION%
+set TAG=v%VERSION%
+
+git tag %TAG% 2>nul
+if %errorlevel% neq 0 (
+    echo Tag %TAG% already exists, continuing...
+)
+
+git push origin %TAG%
+if %errorlevel% neq 0 (
+    echo WARNING: Could not push tag. It may already exist on remote.
+)
+
 echo Building and publishing release...
 call npm run release
 if %errorlevel% neq 0 (
@@ -16,5 +36,5 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo Done. Release published to GitHub.
+echo Done. Release %TAG% published to GitHub.
 timeout /t 3 /nobreak >nul
