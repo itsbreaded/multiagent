@@ -24,9 +24,24 @@ npm run dist       # build + package to dist\win-unpacked\ (requires Windows Dev
 ### Packaging Notes
 
 - `npm run dist` uses `electron-builder` with `npmRebuild: false` because postinstall already handles native module rebuilding.
-- Output goes to `dist\win-unpacked\` - copy that folder to other machines for personal distribution (no installer, no signing, no admin required).
+- Output: `dist\MultiAgent Setup X.Y.Z.exe` (NSIS installer, primary distribution artifact) and `dist\win-unpacked\` (portable, kept for dev inspection).
+- The NSIS installer does a per-user install to `%LOCALAPPDATA%\Programs\MultiAgent` — no admin rights needed.
 - `asarUnpack` is set for `**/*.node`, `**/node-pty/**`, and `**/better-sqlite3/**` so native modules are accessible outside the asar archive.
 - MCP templates under `src/main/mcp/templates/**/*` are included in packaged builds via `package.json` `build.files`. If templates move or new runtime templates are added, update the packaging list and verify they are present in `resources/app.asar`.
+
+### Auto-Update (GitHub Releases)
+
+The app uses `electron-updater` to check `github.com/itsbreaded/multiagent` releases. Updates are downloaded silently and shown as a slim banner below the titlebar.
+
+**Token at build time**: set `GH_UPDATE_TOKEN` in your environment (e.g. Windows system env vars or PowerShell profile) before running `npm run build` or `npm run dist`. It is baked into `out/main/index.js` at build time via `electron.vite.config.ts`. If unset, the updater is silently disabled. Never put the token in source files.
+
+**Publishing a release** (requires `gh auth login`):
+1. Bump `version` in `package.json`
+2. Run `publish.bat` — it pulls the `gh` CLI token automatically, builds, and uploads to GitHub releases
+
+`publish.bat` runs `npm run release` which calls `electron-builder --publish always`. The GitHub release and `latest.yml` metadata are created automatically. Do not hardcode any tokens in source files.
+
+**Update flow in the running app**: updater checks on startup (10s delay) and hourly. `updater:status` IPC events drive the `UpdateBanner` component in the renderer. The banner is suppressed in dev mode and in detached windows.
 
 ## Architecture
 

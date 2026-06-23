@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useUpdaterStore } from '../../store/updater'
 import { usePanesStore } from '../../store/panes'
 import {
   DEFAULT_TERMINAL_SCROLLBACK_LINES,
@@ -26,6 +27,7 @@ import { AgentProvidersSection } from './AgentProvidersSection'
 
 const MCP_KEYWORDS      = ['mcp', 'model context', 'protocol', 'server', 'browser']
 const PROVIDER_KEYWORDS = ['provider', 'agent', 'claude', 'codex', 'api', 'key', 'env', 'environment', 'variable']
+const UPDATE_KEYWORDS   = ['update', 'version', 'auto update', 'release', 'upgrade']
 
 // Terminal-only shortcuts shown read-only for visibility
 const TERMINAL_SHORTCUTS = [
@@ -81,6 +83,8 @@ export function SettingsPanel(): JSX.Element {
     }
   }, [activeSection, caps])
 
+  const autoUpdateEnabled = useSettingsStore((s) => s.autoUpdateEnabled)
+  const setAutoUpdateEnabled = useSettingsStore((s) => s.setAutoUpdateEnabled)
   const agentProviders = useSettingsStore((s) => s.agentProviders)
   const customizedCount = Object.keys(hotkeyOverrides).length
   const activeProviderCount =
@@ -94,6 +98,7 @@ export function SettingsPanel(): JSX.Element {
     { id: 'terminal' as const,     label: 'Terminal',     count: 0 },
     { id: 'mcp' as const,          label: 'MCP',          count: 0, experimental: true },
     { id: 'providers' as const,    label: 'Providers',    count: activeProviderCount },
+    { id: 'updates' as const,      label: 'Updates',      count: 0 },
   ], [customizedCount, activeProviderCount])
 
   // Listen for key recording
@@ -665,6 +670,14 @@ export function SettingsPanel(): JSX.Element {
 
                 {/* Providers section */}
                 {activeSection === 'providers' && <AgentProvidersSection />}
+
+                {/* Updates section */}
+                {activeSection === 'updates' && (
+                  <UpdatesSection
+                    autoUpdateEnabled={autoUpdateEnabled}
+                    setAutoUpdateEnabled={setAutoUpdateEnabled}
+                  />
+                )}
               </>
             ) : (
               <SearchResults
@@ -792,7 +805,8 @@ function SearchResults({
   const hasHotkeys    = visibleHotkeys.length > 0
   const hasMcp        = MCP_KEYWORDS.some(k => normalizedQuery.includes(k))
   const hasProviders  = PROVIDER_KEYWORDS.some(k => normalizedQuery.includes(k))
-  const hasAnything   = hasAppearance || hasHotkeys || anyTerminalSetting || hasMcp || hasProviders
+  const hasUpdates    = UPDATE_KEYWORDS.some(k => normalizedQuery.includes(k)) || normalizedQuery.includes('update')
+  const hasAnything   = hasAppearance || hasHotkeys || anyTerminalSetting || hasMcp || hasProviders || hasUpdates
 
   if (!hasAnything) return <EmptyMessage>No settings match your search.</EmptyMessage>
 
@@ -1058,6 +1072,13 @@ function SearchResults({
           onNavigate={() => onNavigate('providers')}
         />
       )}
+      {hasUpdates && (
+        <SettingNavCard
+          title="Updates"
+          description="Check for updates, view version info, and configure auto-update behavior."
+          onNavigate={() => onNavigate('updates')}
+        />
+      )}
     </>
   )
 }
@@ -1217,6 +1238,116 @@ function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element 
 function EmptyMessage({ children }: { children: React.ReactNode }): JSX.Element {
   return (
     <div style={{ color: '#4a4b4e', fontSize: 12, padding: '14px' }}>{children}</div>
+  )
+}
+
+function UpdatesSection({
+  autoUpdateEnabled,
+  setAutoUpdateEnabled,
+}: {
+  autoUpdateEnabled: boolean
+  setAutoUpdateEnabled: (v: boolean) => void
+}): JSX.Element {
+  const [version, setVersion] = useState<string>('')
+  const [checking, setChecking] = useState(false)
+  const [updaterEnabled, setUpdaterEnabled] = useState<boolean | null>(null)
+  const updaterStatus = useUpdaterStore((s) => s.status)
+
+  useEffect(() => {
+    window.ipc.invoke('updater:get-version').then((v) => {
+      if (typeof v === 'string') setVersion(v)
+    }).catch(() => {})
+    window.ipc.invoke('updater:is-enabled').then((enabled) => {
+      setUpdaterEnabled(!!enabled)
+    }).catch(() => { setUpdaterEnabled(false) })
+  }, [])
+
+  function checkNow(): void {
+    if (!updaterEnabled) return
+    setChecking(true)
+    window.ipc.invoke('updater:check').catch(() => {}).finally(() => {
+      setChecking(false)
+    })
+  }
+
+  function statusLabel(): string {
+    if (!updaterEnabled) return ''
+    if (checking) return 'Checking…'
+    if (!updaterStatus) return ''
+    if (updaterStatus.state === 'up-to-date') return 'Up to date'
+    if (updaterStatus.state === 'available') return `Update available: v${updaterStatus.version}`
+    if (updaterStatus.state === 'downloading') return `Downloading… ${updaterStatus.percent}%`
+    if (updaterStatus.state === 'ready') return `Ready to install: v${updaterStatus.version}`
+    if (updaterStatus.state === 'error') return 'Update check failed'
+    return ''
+  }
+
+  const label = statusLabel()
+  const isAvailable = updaterStatus?.state === 'available' || updaterStatus?.state === 'ready'
+  const buttonDisabled = checking || !updaterEnabled
+
+  return (
+    <>
+      <SectionLabel>Updates</SectionLabel>
+      <div style={{
+        padding: '10px 12px',
+        marginBottom: 4,
+        border: '1px solid #2a2b2e',
+        borderRadius: 6,
+        backgroundColor: '#141517',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ color: '#d4d4d4', fontSize: 13 }}>Current version</div>
+            <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>
+              {version ? `v${version}` : '—'}
+              {label && (
+                <span style={{ marginLeft: 10, color: isAvailable ? '#4ade80' : '#6b7280' }}>
+                  {label}
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={checkNow}
+            disabled={buttonDisabled}
+            title={!updaterEnabled ? 'Only available in installed builds' : undefined}
+            style={{
+              padding: '4px 12px',
+              background: 'none',
+              border: '1px solid #3a3b3e',
+              borderRadius: 4,
+              color: buttonDisabled ? '#4a4b4e' : '#6b7280',
+              fontSize: 12,
+              cursor: buttonDisabled ? 'default' : 'pointer',
+            }}
+          >
+            {checking ? 'Checking…' : 'Check for updates'}
+          </button>
+        </div>
+        {updaterEnabled === false && (
+          <div style={{ color: '#4a4b4e', fontSize: 11 }}>
+            Update token not set — rebuild with GH_UPDATE_TOKEN configured to enable updates.
+          </div>
+        )}
+      </div>
+      <SettingRow
+        title="Auto-update"
+        description="Automatically download updates in the background. When disabled, you will be notified and can download manually."
+      >
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={autoUpdateEnabled}
+            onChange={(e) => setAutoUpdateEnabled(e.target.checked)}
+          />
+          Enabled
+        </label>
+      </SettingRow>
+    </>
   )
 }
 

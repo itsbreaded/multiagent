@@ -1,6 +1,6 @@
 {
   "name": "multiagent",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Multiagent",
   "main": "out/main/index.js",
   "scripts": {
@@ -9,7 +9,10 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc -b --noEmit",
     "pack": "electron-builder --dir",
-    "dist": "electron-vite build && electron-builder",
+    "dist": "electron-vite build && electron-builder --win nsis dir",
+    "dist:dir": "electron-vite build && electron-builder --win dir",
+    "dist:nsis": "electron-vite build && electron-builder --win nsis",
+    "release": "electron-vite build && electron-builder --win nsis --publish always",
     "postinstall": "electron-rebuild -f -o better-sqlite3"
   },
   "keywords": [],
@@ -47,6 +50,7 @@
     "better-sqlite3": "^12.10.0",
     "chokidar": "^5.0.0",
     "clsx": "^2.1.1",
+    "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -69,9 +73,21 @@
       "**/better-sqlite3/**"
     ],
     "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "owner": "itsbreaded",
+      "repo": "multiagent",
+      "private": true,
+      "draft": false
+    },
     "win": {
-      "target": "dir",
+      "target": ["nsis", "dir"],
       "icon": "build/favicon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
     },
     "mac": {
       "target": "dmg",

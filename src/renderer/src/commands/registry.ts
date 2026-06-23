@@ -96,6 +96,14 @@ const COMMANDS: Command[] = [
     enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('terminal') },
   },
+  {
+    id: 'settings.open.updates',
+    title: 'Settings: Updates',
+    category: 'General',
+    keywords: ['preferences', 'config', 'version', 'update', 'auto update', 'release', 'upgrade'],
+    enabled: (ctx) => !ctx.isDetachedWindow,
+    run: (ctx) => { ctx.openSettings('updates') },
+  },
 
   // ── Panes ─────────────────────────────────────────────────────────────────
   {

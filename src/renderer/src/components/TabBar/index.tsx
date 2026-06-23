@@ -720,7 +720,7 @@ export function TabBar(): JSX.Element {
         // In wrap mode the root is transparent — each child carries its own background so the
         // left chrome area does not visually grow beyond the first row.
         backgroundColor: tabOverflowMode === 'wrap' ? 'transparent' : (isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background),
-        borderBottom: border.default,
+        borderBottom: tabOverflowMode === 'wrap' ? border.default : undefined,
         display: 'flex',
         alignItems: tabOverflowMode === 'wrap' ? 'flex-start' : 'center',
         flexShrink: 0,

@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
+import { initUpdater } from './updater'
 import { BrowserViewManager } from './browser/BrowserViewManager'
 import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
@@ -155,6 +156,8 @@ async function createWindow(): Promise<void> {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  initUpdater(mainWindow)
 }
 
 const gotTheLock = process.env.MULTIAGENT_ALLOW_MULTI_INSTANCE ? true : app.requestSingleInstanceLock()
@@ -173,9 +176,15 @@ if (!gotTheLock) {
     // Set app user model id for windows
     electronApp.setAppUserModelId('com.multiagent.app')
 
-    // Default open or close DevTools by F12 in dev and ignore CommandOrControl + R in production
+    // F12 opens DevTools in both dev and packaged builds
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)
+      window.webContents.on('before-input-event', (event, input) => {
+        if (input.key === 'F12') {
+          window.webContents.toggleDevTools()
+          event.preventDefault()
+        }
+      })
     })
 
     await createWindow()

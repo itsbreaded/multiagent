@@ -4,7 +4,7 @@ import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
 import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
 
-export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers'
+export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers' | 'updates'
 export type { GpuAccelerationPref }
 
 const SETTINGS_KEY = 'multiagent:settings'
@@ -52,6 +52,8 @@ interface SettingsState {
   setTerminalRescaleOverlappingGlyphs: (value: boolean) => void
   terminalScrollbackLines: number
   setTerminalScrollbackLines: (value: number) => void
+  autoUpdateEnabled: boolean
+  setAutoUpdateEnabled: (value: boolean) => void
   hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>>
   setHotkeyOverride: (id: HotkeyId, override: HotkeyOverride) => void
   resetHotkeyOverride: (id: HotkeyId) => void
@@ -65,6 +67,7 @@ interface SettingsState {
 }
 
 type Persisted = Pick<SettingsState,
+  | 'autoUpdateEnabled'
   | 'showGitBranchBadges'
   | 'tabOverflowMode'
   | 'optimizedTerminalRenderer'
@@ -79,6 +82,7 @@ type Persisted = Pick<SettingsState,
 
 function defaultSettings(): Persisted {
   return {
+    autoUpdateEnabled: false,
     showGitBranchBadges: true,
     tabOverflowMode: 'scroll',
     optimizedTerminalRenderer: true,
@@ -121,6 +125,7 @@ function loadSettings(): Persisted {
     if (!raw) return defaultSettings()
     const parsed = JSON.parse(raw) as Partial<Persisted>
     return {
+      autoUpdateEnabled: parsed.autoUpdateEnabled === true,
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
       tabOverflowMode: parsed.tabOverflowMode === 'wrap' ? 'wrap' : 'scroll',
       optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
@@ -145,6 +150,7 @@ function loadSettings(): Persisted {
 function saveSettings(state: Persisted): void {
   if (typeof localStorage === 'undefined') return
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+    autoUpdateEnabled: state.autoUpdateEnabled,
     showGitBranchBadges: state.showGitBranchBadges,
     tabOverflowMode: state.tabOverflowMode,
     optimizedTerminalRenderer: state.optimizedTerminalRenderer,
@@ -160,6 +166,11 @@ function saveSettings(state: Persisted): void {
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   ...loadSettings(),
+
+  setAutoUpdateEnabled: (value) => {
+    set({ autoUpdateEnabled: value })
+    saveSettings(get())
+  },
 
   setShowGitBranchBadges: (value) => {
     set({ showGitBranchBadges: value })

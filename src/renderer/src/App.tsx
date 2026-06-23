@@ -8,8 +8,10 @@ import { CommandPalette } from './components/CommandPalette'
 import { SettingsPanel } from './components/SettingsPanel'
 import { SnapOverlay } from './components/SnapOverlay'
 import { DirPicker } from './components/DirPicker'
+import { UpdateBanner } from './components/UpdateBanner'
 import { usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
+import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { decodePaneDragPayload, PANE_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
@@ -280,6 +282,7 @@ export default function App(): JSX.Element {
           {/* Right column */}
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             <AppChrome />
+            {!isDetachedWindow && <UpdateBanner />}
             <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <PaneGrid />
             </div>
@@ -288,6 +291,7 @@ export default function App(): JSX.Element {
       ) : (
         <>
           <AppChrome />
+          {!isDetachedWindow && <UpdateBanner />}
 
           {/* Main content row */}
           <div
@@ -297,6 +301,7 @@ export default function App(): JSX.Element {
               minHeight: 0,
               minWidth: 0,
               overflow: 'hidden',
+              borderTop: border.default,
             }}
           >
             <Sidebar />

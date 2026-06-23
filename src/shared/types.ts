@@ -1,3 +1,11 @@
+// Auto-updater status pushed from main to renderer
+export type UpdaterStatus =
+  | { state: 'available'; version: string }
+  | { state: 'downloading'; percent: number }
+  | { state: 'ready'; version: string }
+  | { state: 'up-to-date' }
+  | { state: 'error' }
+
 // Session status
 export type SessionStatus = 'live-attached' | 'resumable'
 
@@ -424,6 +432,15 @@ export interface IPCChannels {
   // Detached window asks main to reattach (move) one of its own tabs back to the primary window
   'tab:reattach-home': (tabId: string) => boolean
 
+  // --- Auto-updater ---
+  'updater:status': (status: UpdaterStatus) => void
+  'updater:install': () => void
+  'updater:check': () => void
+  'updater:get-version': () => string
+  'updater:is-enabled': () => boolean
+  'updater:set-enabled': (enabled: boolean) => void
+  'updater:download': () => void
+
   // Renderer asks main to focus the window owning a tab AND activate a specific pane
   'window:focus-pane': (tabId: string, paneId: string) => boolean
   // Renderer asks main to spawn in the window owning a detached tab
@@ -469,6 +486,9 @@ export type InvokeChannels =
   | 'settings:get-agent-providers'
   | 'settings:save-agent-providers'
   | 'gpu:feature-status'
+  | 'updater:check'
+  | 'updater:get-version'
+  | 'updater:is-enabled'
   | 'window:get-id'
   | 'window:get-init-data'
   | 'window:get-all-bounds'
@@ -523,6 +543,7 @@ export type EventChannels =
   // Shutdown layout collection: main requests state snapshots for a final authoritative save
   | 'layout:request-state'
   | 'layout:collect-detached-state'
+  | 'updater:status'
 
 export type SendChannels =
   | 'pty:write'
@@ -540,6 +561,9 @@ export type SendChannels =
   // Shutdown layout collection responses
   | 'layout:state-response'
   | 'layout:detached-state-response'
+  | 'updater:install'
+  | 'updater:set-enabled'
+  | 'updater:download'
 
 export interface IpcBridge {
   invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
