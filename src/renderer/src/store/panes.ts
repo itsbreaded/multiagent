@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
+import { PANE_DRAG_MIME } from '../utils/paneDrag'
 import type { SettingsSection } from './settings'
 
 let pendingRemoteFocusWindowId: number | null = null
@@ -442,7 +443,7 @@ interface PanesStore {
   returnTab: (tabId: string) => void
   removeTabLocally: (tabId: string) => void
   syncDetachedTabs: (windowId: number, tabs: Tab[], activeTabId?: string) => void
-  addPaneToTab: (pane: PaneLeaf, tabId: string) => void
+  addPaneToTab: (pane: PaneLeaf, tabId: string) => boolean
   removePaneKeepTab: (paneId: string) => void
   findPaneInAnyTab: (paneId: string) => PaneLeaf | undefined
   detachedWindowTabIds: Record<string, string[]>
@@ -524,8 +525,13 @@ interface PanesStore {
   // Drag state (pane rearrangement)
   draggedPaneId: string | null
   setDraggedPane: (paneId: string | null) => void
+  // True while ANY pane drag (including cross-window, where draggedPaneId is null in this
+  // renderer) is over this window. Set by document-level drag listeners so the always-mounted
+  // sidebar split overlay can enable pointer events without the cross-window bootstrap deadlock.
+  paneDragActive: boolean
   movePaneToSplit: (sourcePaneId: string, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean) => void
   swapPanes: (sourcePaneId: string, targetPaneId: string) => void
+  swapPanesAcrossTabs: (sourcePaneId: string, targetPaneId: string) => void
   swapDrag: { sourceId: string; targetId: string | null } | null
   startSwapDrag: (sourceId: string) => void
   setSwapDragTarget: (targetId: string | null) => void
@@ -533,6 +539,12 @@ interface PanesStore {
   movePaneToTab: (sourcePaneId: string, targetTabId: string) => void
   movePaneToNewTab: (paneId: string) => void
   reorderTab: (tabId: string, beforeTabId: string | null) => void
+  removePaneById: (paneId: string) => void
+  // Return true only if the pane was actually inserted/replaced. Cross-window transfer relies on
+  // this: the source pane is removed only after a confirmed insert, so a no-op (self-drop, or a
+  // target that vanished mid-drag) must NOT ack — otherwise the source is removed and the pane lost.
+  insertPaneAtSplit: (pane: PaneLeaf, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean) => boolean
+  replacePaneById: (paneId: string, replacement: PaneLeaf) => boolean
 
   // Getters
   activeTab: () => Tab | undefined
@@ -875,15 +887,18 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   addPaneToTab: (pane, tabId) => {
+    let found = false
     set((s) => ({
       tabs: s.tabs.map((t) => {
         if (t.id !== tabId) return t
+        found = true
         if (!t.rootNode) return { ...t, rootNode: pane, focusedPaneId: pane.id }
         return { ...t, rootNode: makeSplit('vertical', t.rootNode, pane), focusedPaneId: pane.id }
       }),
       hydratedTabIds: s.hydratedTabIds[tabId] ? removeHydratedTabs(s.hydratedTabIds, [tabId]) : s.hydratedTabIds,
     }))
-    hydrateTabRuntime(tabId, true)
+    if (found) hydrateTabRuntime(tabId, true)
+    return found
   },
 
   removePaneKeepTab: (paneId) => {
@@ -955,6 +970,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
   },
   draggedPaneId: null,
+  paneDragActive: false,
   swapDrag: null,
   pendingRenameTabId: null,
   setPendingRenameTabId: (id) => set({ pendingRenameTabId: id }),
@@ -1881,6 +1897,56 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
+  swapPanesAcrossTabs: (sourcePaneId, targetPaneId) => {
+    if (sourcePaneId === targetPaneId) return
+    set((s) => {
+      let sourceTabIdx = -1
+      let sourceLeaf: PaneLeaf | null = null
+      let targetTabIdx = -1
+      let targetLeaf: PaneLeaf | null = null
+      for (let i = 0; i < s.tabs.length; i++) {
+        const root = s.tabs[i].rootNode
+        if (!root) continue
+        if (!sourceLeaf) {
+          const leaf = findLeaf(root, sourcePaneId)
+          if (leaf) { sourceTabIdx = i; sourceLeaf = leaf }
+        }
+        if (!targetLeaf) {
+          const leaf = findLeaf(root, targetPaneId)
+          if (leaf) { targetTabIdx = i; targetLeaf = leaf }
+        }
+        if (sourceLeaf && targetLeaf) break
+      }
+      if (sourceTabIdx === -1 || targetTabIdx === -1 || !sourceLeaf || !targetLeaf) return s
+
+      if (sourceTabIdx === targetTabIdx) {
+        const root = s.tabs[sourceTabIdx].rootNode!
+        const newRoot = swapLeaves(root, sourcePaneId, targetPaneId, sourceLeaf, targetLeaf)
+        return { ...s, tabs: s.tabs.map((t, i) =>
+          i === sourceTabIdx ? { ...t, rootNode: newRoot, focusedPaneId: sourcePaneId } : t
+        ), draggedPaneId: null }
+      }
+
+      // Replace source leaf's slot with target leaf, and target leaf's slot with source leaf.
+      // replaceNode matches by node id, so each leaf's own id is used as the replacement key.
+      const newSourceRoot = replaceNode(s.tabs[sourceTabIdx].rootNode!, sourcePaneId, targetLeaf)
+      const newTargetRoot = replaceNode(s.tabs[targetTabIdx].rootNode!, targetPaneId, sourceLeaf)
+
+      const updatedTabs = s.tabs.map((t, i) => {
+        if (i === sourceTabIdx) {
+          const newFocus = t.focusedPaneId === sourcePaneId ? targetLeaf!.id : t.focusedPaneId
+          return { ...t, rootNode: newSourceRoot, focusedPaneId: newFocus }
+        }
+        if (i === targetTabIdx) {
+          const newFocus = t.focusedPaneId === targetPaneId ? sourceLeaf!.id : t.focusedPaneId
+          return { ...t, rootNode: newTargetRoot, focusedPaneId: newFocus }
+        }
+        return t
+      })
+      return { ...s, tabs: updatedTabs, draggedPaneId: null }
+    })
+  },
+
   reorderTab: (tabId, beforeTabId) => {
     if (tabId === beforeTabId) return
     set((s) => {
@@ -1899,6 +1965,80 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       }
       return { tabs: next }
     })
+  },
+
+  removePaneById: (paneId) => {
+    // Move-not-close: detach the leaf from its tab tree without killing the PTY or xterm.
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (!t.rootNode || !findLeaf(t.rootNode, paneId)) return t
+        const newRoot = removeLeaf(t.rootNode, paneId)
+        if (!newRoot) return { ...t, rootNode: undefined, focusedPaneId: '' }
+        const leafIds = collectLeafIds(newRoot)
+        return {
+          ...t,
+          rootNode: newRoot,
+          focusedPaneId: t.focusedPaneId === paneId ? (leafIds[0] ?? '') : t.focusedPaneId,
+        }
+      }),
+    }))
+  },
+
+  insertPaneAtSplit: (pane, targetPaneId, direction, sourceBefore) => {
+    if (pane.id === targetPaneId) return false  // defensive: never split a pane against itself
+    let activatedTabId = ''
+    set((s) => {
+      let targetTabIdx = -1
+      for (let i = 0; i < s.tabs.length; i++) {
+        if (s.tabs[i].rootNode && findLeaf(s.tabs[i].rootNode!, targetPaneId)) {
+          targetTabIdx = i; break
+        }
+      }
+      if (targetTabIdx === -1) return s
+      const updatedTabs = s.tabs.map((tab, idx) => {
+        if (idx !== targetTabIdx || !tab.rootNode) return tab
+        const targetLeaf = findLeaf(tab.rootNode, targetPaneId)
+        if (!targetLeaf) return tab
+        const newSplit = sourceBefore
+          ? makeSplit(direction, pane, targetLeaf)
+          : makeSplit(direction, targetLeaf, pane)
+        return {
+          ...tab,
+          rootNode: replaceNode(tab.rootNode, targetPaneId, newSplit),
+          focusedPaneId: pane.id,
+        }
+      })
+      activatedTabId = s.tabs[targetTabIdx].id
+      return {
+        tabs: updatedTabs,
+        activeTabId: activatedTabId,
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [activatedTabId]),
+        sidebarSectionOpen: {
+          ...s.sidebarSectionOpen,
+          [tabSidebarSectionId(activatedTabId)]: true,
+        },
+        localFocusArmed: true,
+      }
+    })
+    if (activatedTabId) hydrateTabRuntime(activatedTabId, true)
+    return activatedTabId !== ''
+  },
+
+  replacePaneById: (paneId, replacement) => {
+    let found = false
+    set((s) => ({
+      tabs: s.tabs.map((t) => {
+        if (!t.rootNode || !findLeaf(t.rootNode, paneId)) return t
+        found = true
+        const newRoot = replaceNode(t.rootNode, paneId, replacement)
+        return {
+          ...t,
+          rootNode: newRoot,
+          focusedPaneId: t.focusedPaneId === paneId ? replacement.id : t.focusedPaneId,
+        }
+      }),
+    }))
+    return found
   },
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -2219,8 +2359,10 @@ if (typeof window !== 'undefined' && window.ipc) {
     if (typeof paneJson !== 'string' || typeof targetTabId !== 'string') return
     try {
       const pane = JSON.parse(paneJson) as PaneLeaf
-      usePanesStore.getState().addPaneToTab(pane, targetTabId)
-      if (typeof transferId === 'string') {
+      const ok = usePanesStore.getState().addPaneToTab(pane, targetTabId)
+      // Ack only if the target tab existed and the pane was added. If it no-ops (tab vanished
+      // mid-drag), staying silent makes main time out and discard instead of removing the source.
+      if (ok && typeof transferId === 'string') {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             window.ipc.send('pane:received-applied', transferId)
@@ -2245,6 +2387,66 @@ if (typeof window !== 'undefined' && window.ipc) {
   window.ipc.on('pane:move-remote', (paneId: unknown, targetTabId: unknown) => {
     if (typeof paneId !== 'string' || typeof targetTabId !== 'string') return
     usePanesStore.getState().movePaneToTab(paneId, targetTabId)
+  })
+
+  // Track whether a pane drag is currently over this window. Document-level listeners fire
+  // regardless of any element's pointer-events, so this works for cross-window drags (where
+  // draggedPaneId is null in this renderer). The always-mounted sidebar split overlay reads
+  // this to enable pointer events; without it, an overlay with pointerEvents:none can never
+  // receive onDragEnter and the cross-window split silently no-ops.
+  const setPaneDragActive = (active: boolean): void => {
+    if (usePanesStore.getState().paneDragActive !== active) usePanesStore.setState({ paneDragActive: active })
+  }
+  window.addEventListener('dragover', (e: DragEvent) => {
+    if (e.dataTransfer?.types?.includes(PANE_DRAG_MIME)) setPaneDragActive(true)
+  }, true)
+  window.addEventListener('drop', () => setPaneDragActive(false), true)
+  window.addEventListener('dragend', () => setPaneDragActive(false), true)
+
+  window.ipc.on('renderer:remove-pane', (paneId: unknown) => {
+    if (typeof paneId !== 'string') return
+    usePanesStore.getState().removePaneById(paneId)
+  })
+
+  window.ipc.on('renderer:insert-at-split', (paneJson: unknown, targetPaneId: unknown, direction: unknown, sourceBefore: unknown, transferId: unknown) => {
+    if (
+      typeof paneJson !== 'string' ||
+      typeof targetPaneId !== 'string' ||
+      (direction !== 'horizontal' && direction !== 'vertical') ||
+      typeof sourceBefore !== 'boolean'
+    ) return
+    let ok = false
+    try {
+      const pane = JSON.parse(paneJson) as PaneLeaf
+      ok = usePanesStore.getState().insertPaneAtSplit(pane, targetPaneId, direction, sourceBefore)
+    } catch { return }
+    // Ack only on a real insert. A no-op insert (self-drop, or target vanished mid-drag) must not
+    // ack — otherwise main proceeds to remove the source pane and it is lost.
+    if (ok && typeof transferId === 'string') {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.ipc.send('renderer:insert-at-split-applied', transferId)
+        })
+      })
+    }
+  })
+
+  window.ipc.on('renderer:replace-pane', (paneId: unknown, replacementJson: unknown, transferId: unknown) => {
+    if (typeof paneId !== 'string' || typeof replacementJson !== 'string') return
+    let ok = false
+    try {
+      const replacement = JSON.parse(replacementJson) as PaneLeaf
+      ok = usePanesStore.getState().replacePaneById(paneId, replacement)
+    } catch { return }
+    // Ack only on a real replace, so a swap where one side's pane vanished does not half-apply:
+    // the unacked side triggers the main-side rollback of the side that did apply.
+    if (ok && typeof transferId === 'string') {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.ipc.send('renderer:replace-pane-applied', transferId)
+        })
+      })
+    }
   })
 }
 

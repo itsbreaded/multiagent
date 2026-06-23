@@ -89,6 +89,8 @@ User-level focus transitions must be atomic. Do not compose primitive actions su
 
 PTY routing must not move ahead of renderer ownership. For cross-window pane or tab movement, the destination should commit and ack before main reroutes PTYs, and the source should not delete its last good copy until the transfer is committed or rollback is possible. This is especially important for `tab:absorb`: a release timeout after the source has already removed the tab can lose the tab from all windows and orphan its PTYs.
 
+A cross-window transfer ack must reflect that the destination *actually applied* the change, not merely that it received the message. Destination store actions used by transfers (`addPaneToTab`, `insertPaneAtSplit`, `replacePaneById`) return a success boolean, and their renderer listeners send the `*-applied` ack only when that boolean is true. A no-op apply (self-drop, or a target tab/pane that vanished mid-drag) must stay silent so main times out and discards/rolls back instead of removing the source pane — otherwise the source is deleted after a no-op insert and the pane is lost (spec 024). Guard self-drops (`sourcePaneId === targetPaneId`) at the drop site, at the IPC handler, and in the store action; the local-only path's `movePaneToSplit` guard does not cover the cross-window IPC path.
+
 Detached sync and focus messages should be versioned or generation-checked. Stale `tab:state-sync` or focus acks must not reclaim moved tabs or focus a window that no longer owns the tab.
 
 ### UI Consistency

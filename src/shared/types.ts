@@ -198,6 +198,25 @@ export interface PaneTransferPayload {
   targetWindowId?: number
 }
 
+export interface PaneSplitTransferPayload {
+  pane: PaneLeaf
+  sourceTabId: string
+  sourceWindowId: number
+  targetPaneId: string
+  direction: SplitDirection
+  sourceBefore: boolean
+  targetWindowId: number
+}
+
+export interface PaneSwapTransferPayload {
+  sourcePane: PaneLeaf
+  sourceTabId: string
+  sourceWindowId: number
+  targetPane: PaneLeaf
+  targetTabId: string
+  targetWindowId: number
+}
+
 export interface SpawnInTabPayload {
   paneType: PaneType
   agentKind?: AgentKind
@@ -383,6 +402,10 @@ export interface IPCChannels {
   'tab:state-sync': (payload: TabStateSyncPayload) => void
   // Renderer asks main to move a pane (with its PTY) to a tab in another window
   'pane:transfer': (payload: PaneTransferPayload) => boolean
+  // Renderer asks main to move a pane to a directional split in another window/tab
+  'pane:split-transfer': (payload: PaneSplitTransferPayload) => boolean
+  // Renderer asks main to swap two panes across windows
+  'pane:swap-transfer': (payload: PaneSwapTransferPayload) => boolean
   // Main tells target window a pane is arriving
   'pane:received': (paneJson: string, targetTabId: string, transferId?: string) => void
   'pane:remove-remote': (paneId: string) => void
@@ -390,6 +413,12 @@ export interface IPCChannels {
   // because the transfer never committed (ack timeout / window destroyed). Avoids a dead pane.
   'pane:transfer-rolledback': (paneId: string) => void
   'pane:move-remote': (paneId: string, targetTabId: string) => void
+  // Main tells a window to remove a pane leaf (move, not close — PTY stays alive)
+  'renderer:remove-pane': (paneId: string) => void
+  // Main tells target window to insert a pane next to targetPaneId at the given split direction
+  'renderer:insert-at-split': (paneJson: string, targetPaneId: string, direction: SplitDirection, sourceBefore: boolean, transferId?: string) => void
+  // Main tells a window to replace a pane leaf (for cross-window swap)
+  'renderer:replace-pane': (paneId: string, replacementJson: string, transferId?: string) => void
   // Renderer asks main to bring a detached tab back to this window
   'tab:bring-home': (tabId: string) => boolean
   // Detached window asks main to reattach (move) one of its own tabs back to the primary window
@@ -458,6 +487,8 @@ export type InvokeChannels =
   | 'tab:reattach-home'
   | 'window:focus-pane'
   | 'tab:spawn-in-project'
+  | 'pane:split-transfer'
+  | 'pane:swap-transfer'
 
 export type EventChannels =
   | 'sessions:updated'
@@ -479,6 +510,9 @@ export type EventChannels =
   | 'pane:remove-remote'
   | 'pane:transfer-rolledback'
   | 'pane:move-remote'
+  | 'renderer:remove-pane'
+  | 'renderer:insert-at-split'
+  | 'renderer:replace-pane'
   | 'tab:spawn-in-project-remote'
   | 'pane:focus-remote'
   // Immediate focus-change notification (bypasses the debounced tab:state-sync)
@@ -501,6 +535,8 @@ export type SendChannels =
   | 'pane:received-applied'
   | 'pane:focus-remote-applied'
   | 'tab:spawn-in-project-applied'
+  | 'renderer:insert-at-split-applied'
+  | 'renderer:replace-pane-applied'
   // Shutdown layout collection responses
   | 'layout:state-response'
   | 'layout:detached-state-response'

@@ -15,6 +15,7 @@ import { AgentIcon, ShellIcon } from '../AgentIcon'
 import closeIcon from '../../assets/close.png'
 import threeDotIcon from '../../assets/threedot.png'
 import addBoxIcon from '../../assets/addbox.png'
+import { PaneSplitDropTarget } from '../PaneGrid/PaneSplitDropTarget'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 const TAB_REORDER_MIME = 'application/x-multiagent-tab-reorder'
@@ -434,7 +435,6 @@ function PaneRow({
   onClickOverride?: () => void
 }): JSX.Element {
   const [hovered, setHovered] = useState(false)
-  const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
@@ -448,7 +448,12 @@ function PaneRow({
   const setPendingRenamePaneId = usePanesStore((s) => s.setPendingRenamePaneId)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const setDraggedPane = usePanesStore((s) => s.setDraggedPane)
-  const swapPanes = usePanesStore((s) => s.swapPanes)
+  const swapDrag = usePanesStore((s) => s.swapDrag)
+  const startSwapDrag = usePanesStore((s) => s.startSwapDrag)
+  const setSwapDragTarget = usePanesStore((s) => s.setSwapDragTarget)
+  const clearSwapDrag = usePanesStore((s) => s.clearSwapDrag)
+  const swapPanesAcrossTabs = usePanesStore((s) => s.swapPanesAcrossTabs)
+  const windowId = usePanesStore((s) => s.windowId)
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const name = paneLabelText(pane, sessions)
@@ -458,6 +463,7 @@ function PaneRow({
   const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges, isFocused)
   const branch = showGitBranchBadges ? displayGitBranch(cwdBranch) ?? displayGitBranch(session?.gitBranch) : null
   const isOnlyPane = !tab.rootNode || collectLeaves(tab.rootNode).length <= 1
+  const isSwapTarget = swapDrag?.targetId === pane.id
 
   React.useEffect(() => {
     if (renaming) renameInputRef.current?.select()
@@ -484,6 +490,7 @@ function PaneRow({
   return (
     <>
       <div
+        data-pane-id={pane.id}
         draggable={!renaming && sourceWindowId !== undefined}
         onDragStart={(e) => {
           if (renaming || sourceWindowId === undefined) return
@@ -492,30 +499,125 @@ function PaneRow({
           e.dataTransfer.setData('text/plain', pane.id)
           e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: tab.id, sourceWindowId }))
           setDraggedPane(pane.id)
+          // Capture-phase cleanup so draggedPaneId clears even when the source pane unmounts
+          // before onDragEnd fires (spec-025 lesson — mirrors pane header beginNativeDrag)
+          const cleanup = (): void => {
+            setDraggedPane(null)
+            window.removeEventListener('drop', cleanup, true)
+            window.removeEventListener('dragend', cleanup, true)
+          }
+          window.addEventListener('drop', cleanup, true)
+          window.addEventListener('dragend', cleanup, true)
         }}
-        onDragEnd={() => { setDraggedPane(null); setDropActive(false) }}
+        onDragEnd={() => { setDraggedPane(null) }}
         onDragOver={(e) => {
-          if (!draggedPaneId || draggedPaneId === pane.id) return
+          const hasPaneDrag = e.dataTransfer.types.includes(PANE_DRAG_MIME)
+          if (!hasPaneDrag && !draggedPaneId) return
+          if (draggedPaneId === pane.id) return
           e.preventDefault()
           e.stopPropagation()
           setHovered(true)
-          setDropActive(true)
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node)) {
             setHovered(false)
-            setDropActive(false)
           }
         }}
         onDrop={(e) => {
-          if (!draggedPaneId || draggedPaneId === pane.id) return
+          // All pane-split drops are handled by the PaneSplitDropTarget overlay inside this row.
+          // This handler fires only for drags that miss the overlay (edge race).
+          if (!e.dataTransfer.types.includes(PANE_DRAG_MIME) && !draggedPaneId) return
           e.preventDefault()
           e.stopPropagation()
-          swapPanes(draggedPaneId, pane.id)
-          setHovered(false)
-          setDropActive(false)
         }}
-        onMouseDown={() => { if (!renaming) onMouseDownOverride?.() }}
+        onMouseDown={(e) => {
+          if (renaming) return
+          if (e.button === 2) {
+            // Arm the swap threshold — swap does not start until the cursor moves >5px.
+            // A right-press released before that is a plain right-click and lets onContextMenu fire.
+            const origin = { x: e.clientX, y: e.clientY }
+            let dragging = false
+
+            const resolveTarget = (x: number, y: number): string | null => {
+              const el = document.elementFromPoint(x, y) as HTMLElement | null
+              const id = el?.closest('[data-pane-id]')?.getAttribute('data-pane-id') ?? null
+              return id && id !== pane.id ? id : null
+            }
+
+            const onContextMenu = (ce: MouseEvent): void => {
+              ce.preventDefault()
+              ce.stopImmediatePropagation()
+              window.removeEventListener('contextmenu', onContextMenu, true)
+            }
+
+            const onMove = (ev: MouseEvent): void => {
+              if (!dragging) {
+                if (Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y) < 5) return
+                dragging = true
+                startSwapDrag(pane.id)
+                document.body.classList.add('pane-dragging')
+                window.addEventListener('contextmenu', onContextMenu, true)
+              }
+              setSwapDragTarget(resolveTarget(ev.clientX, ev.clientY))
+            }
+
+            const onUp = (ev: MouseEvent): void => {
+              window.removeEventListener('mousemove', onMove, true)
+              window.removeEventListener('mouseup', onUp, true)
+              if (!dragging) {
+                // Plain right-click — let the contextmenu event reach onContextMenu
+                setTimeout(() => window.removeEventListener('contextmenu', onContextMenu, true), 0)
+                return
+              }
+              document.body.classList.remove('pane-dragging')
+              const targetId = resolveTarget(ev.clientX, ev.clientY)
+              clearSwapDrag()
+              setTimeout(() => window.removeEventListener('contextmenu', onContextMenu, true), 0)
+              if (!targetId || sourceWindowId === undefined || windowId === null) return
+
+              // Resolve target pane info from store (needed for cross-window payload)
+              const storeState = usePanesStore.getState()
+              const { tabs: storeTabs, detachedWindowTabIds, windowId: myWin } = storeState
+              let targetPane: PaneLeaf | null = null
+              let targetTabId = ''
+              let tgtWin: number = myWin!
+              outer: for (const t of storeTabs) {
+                if (!t.rootNode) continue
+                for (const leaf of collectLeaves(t.rootNode)) {
+                  if (leaf.id === targetId) {
+                    targetPane = leaf
+                    targetTabId = t.id
+                    if (t.detached) {
+                      const entry = Object.entries(detachedWindowTabIds).find(([, ids]) => ids.includes(t.id))
+                      tgtWin = entry ? parseInt(entry[0], 10) : (myWin ?? 0)
+                    }
+                    break outer
+                  }
+                }
+              }
+              if (!targetPane) return
+
+              if (sourceWindowId === myWin && tgtWin === myWin) {
+                // Both panes local — use store action (handles same-tab and cross-tab)
+                swapPanesAcrossTabs(pane.id, targetId)
+              } else {
+                window.ipc?.invoke('pane:swap-transfer', {
+                  sourcePane: pane,
+                  sourceTabId: tab.id,
+                  sourceWindowId,
+                  targetPane,
+                  targetTabId,
+                  targetWindowId: tgtWin,
+                }).catch(console.error)
+              }
+            }
+
+            window.addEventListener('mousemove', onMove, true)
+            window.addEventListener('mouseup', onUp, true)
+            return  // do NOT call onMouseDownOverride for right-press
+          }
+          onMouseDownOverride?.()
+        }}
         onClick={() => { if (!renaming) { if (onClickOverride) { onClickOverride() } else { focusPaneInTab(tab.id, pane.id) } } }}
         onDoubleClick={() => startRename()}
         onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }) }}
@@ -531,12 +633,15 @@ function PaneRow({
           borderRadius: 4,
           cursor: renaming ? 'default' : 'pointer',
           backgroundColor: isFocused ? ui.color.control : hovered ? ui.color.panelRaised : 'transparent',
-          outline: dropActive ? border.accent : 'none',
+          outline: isSwapTarget ? '2px solid #4ade80' : 'none',
           outlineOffset: -1,
           transition: 'background-color 0.1s',
           position: 'relative',
         }}
       >
+        {/* Directional split overlay — same PaneSplitDropTarget as the pane grid, sized to this row */}
+        <PaneSplitDropTarget pane={pane} overlayMode targetWindowId={sourceWindowId} />
+
         {pane.paneType === 'agent' && pane.agentKind ? (
           <span
             style={{

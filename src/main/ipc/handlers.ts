@@ -15,7 +15,7 @@ import { getRecentDirs, addRecentDir } from '../recentDirs'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, PaneTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, PaneTransferPayload, PaneSplitTransferPayload, PaneSwapTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
@@ -854,6 +854,94 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
         flushDirectOutput(payload.pane.ptyId)
       }
       sourceWin.webContents.send('pane:remove-remote', payload.pane.id)
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  // Reusable ack helper: send `trigger()`, wait for renderer to send `channel` with matching `id`.
+  function waitForAck(win: BrowserWindow, channel: string, id: string, trigger: () => void, ms = 1000): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        ipcMain.removeListener(channel, onAck)
+        resolve(false)
+      }, ms)
+      const onAck = (ev: Electron.IpcMainEvent, ackId: unknown): void => {
+        if (ackId !== id) return
+        const ackWin = BrowserWindow.fromWebContents(ev.sender)
+        if (!ackWin || ackWin.id !== win.id) return
+        clearTimeout(timer)
+        ipcMain.removeListener(channel, onAck)
+        resolve(true)
+      }
+      ipcMain.on(channel, onAck)
+      trigger()
+    })
+  }
+
+  // Move a pane to a directional split in another window, rerouting its PTY.
+  ipcMain.handle('pane:split-transfer', async (_e, payload: PaneSplitTransferPayload) => {
+    try {
+      const { pane, sourceWindowId, targetPaneId, direction, sourceBefore, targetWindowId } = payload
+      if (pane.id === targetPaneId) return false  // self-drop is a no-op; never remove-after-noop-insert
+      const srcWin = windowManager.getWindowById(sourceWindowId)
+      const tgtWin = windowManager.getWindowById(targetWindowId)
+      if (!srcWin || srcWin.isDestroyed() || !tgtWin || tgtWin.isDestroyed()) return false
+      const transferId = `split:${Date.now()}:${Math.random().toString(36).slice(2)}`
+      const committed = await waitForAck(tgtWin, 'renderer:insert-at-split-applied', transferId, () => {
+        tgtWin.webContents.send('renderer:insert-at-split', JSON.stringify(pane), targetPaneId, direction, sourceBefore, transferId)
+      })
+      if (!committed || tgtWin.isDestroyed()) return false
+      srcWin.webContents.send('renderer:remove-pane', pane.id)
+      if (pane.ptyId) {
+        windowManager.transferPty(pane.ptyId, tgtWin)
+        flushDirectOutput(pane.ptyId)
+      }
+      // Raise and focus the target window (cross-window split follows the pane — spec decision 4)
+      if (sourceWindowId !== targetWindowId && !tgtWin.isDestroyed()) {
+        tgtWin.show()
+        tgtWin.focus()
+      }
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  // Swap two panes across windows, rerouting both PTYs.
+  ipcMain.handle('pane:swap-transfer', async (_e, payload: PaneSwapTransferPayload) => {
+    try {
+      const { sourcePane, sourceWindowId, targetPane, targetWindowId } = payload
+      const srcWin = windowManager.getWindowById(sourceWindowId)
+      const tgtWin = windowManager.getWindowById(targetWindowId)
+      if (!srcWin || srcWin.isDestroyed() || !tgtWin || tgtWin.isDestroyed()) return false
+      if (sourceWindowId === targetWindowId) return false  // caller should use local store for same-window
+      const id1 = `swap:src:${Date.now()}:${Math.random().toString(36).slice(2)}`
+      const id2 = `swap:tgt:${Date.now()}:${Math.random().toString(36).slice(2)}`
+      // Commit in both windows before rerouting either PTY (multi-window invariant)
+      const [ok1, ok2] = await Promise.all([
+        waitForAck(srcWin, 'renderer:replace-pane-applied', id1, () =>
+          srcWin.webContents.send('renderer:replace-pane', sourcePane.id, JSON.stringify(targetPane), id1)),
+        waitForAck(tgtWin, 'renderer:replace-pane-applied', id2, () =>
+          tgtWin.webContents.send('renderer:replace-pane', targetPane.id, JSON.stringify(sourcePane), id2)),
+      ])
+      if (!ok1 || !ok2) {
+        // Partial commit: roll back whichever side applied so we never leave a half-swapped tree
+        // with a stale PTY route. The renderer applies synchronously before acking, so a missing
+        // ack means that side did not apply; only undo the side that acked. PTYs are untouched here
+        // (reroute happens only after both commit), so restoring the tree is sufficient.
+        if (ok1 && !srcWin.isDestroyed()) {
+          srcWin.webContents.send('renderer:replace-pane', targetPane.id, JSON.stringify(sourcePane), `${id1}:rollback`)
+        }
+        if (ok2 && !tgtWin.isDestroyed()) {
+          tgtWin.webContents.send('renderer:replace-pane', sourcePane.id, JSON.stringify(targetPane), `${id2}:rollback`)
+        }
+        return false
+      }
+      if (sourcePane.ptyId) { windowManager.transferPty(sourcePane.ptyId, tgtWin); flushDirectOutput(sourcePane.ptyId) }
+      if (targetPane.ptyId) { windowManager.transferPty(targetPane.ptyId, srcWin); flushDirectOutput(targetPane.ptyId) }
+      // No window raise/focus for swap — view stays put (spec decision 4)
       return true
     } catch {
       return false
