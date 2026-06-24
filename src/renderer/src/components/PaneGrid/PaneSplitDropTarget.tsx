@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import type { PaneLeaf, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
-import { decodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
+import { decodePaneDragPayload, paneDragSourceId, PANE_DRAG_MIME } from '../../utils/paneDrag'
 
 type DropZone = 'up' | 'down' | 'left' | 'right' | null
 
@@ -42,17 +42,47 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
   const windowId = usePanesStore((s) => s.windowId)
   const [dropZone, setDropZone] = useState<DropZone>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [selfDropActive, setSelfDropActive] = useState(false)
 
   const isDropTarget = (draggedPaneId !== null && draggedPaneId !== pane.id) || isDragOver
 
+  useEffect(() => {
+    if (paneDragActive || draggedPaneId !== null) return
+    setDropZone(null)
+    setIsDragOver(false)
+    setSelfDropActive(false)
+  }, [draggedPaneId, paneDragActive])
+
+  function sourcePaneIdFor(e: React.DragEvent<HTMLDivElement>): string | null {
+    return paneDragSourceId(e.dataTransfer) ?? draggedPaneId
+  }
+
+  function updateDropState(e: React.DragEvent<HTMLDivElement>): boolean {
+    const sourcePaneId = sourcePaneIdFor(e)
+    const isSelfDrop = sourcePaneId === pane.id
+    setSelfDropActive(isSelfDrop)
+    if (isSelfDrop) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'none'
+      setDropZone(null)
+      setIsDragOver(true)
+      return false
+    }
+    e.dataTransfer.dropEffect = 'move'
+    setIsDragOver(true)
+    return true
+  }
+
   function onDragEnter(e: React.DragEvent<HTMLDivElement>): void {
-    if (e.dataTransfer.types.includes(PANE_DRAG_MIME)) setIsDragOver(true)
+    if (e.dataTransfer.types.includes(PANE_DRAG_MIME)) updateDropState(e)
   }
 
   function onDragOver(e: React.DragEvent<HTMLDivElement>): void {
-    if (!isDropTarget) return
+    if (!isDropTarget && !paneDragActive) return
     e.preventDefault()
     e.stopPropagation()
+    if (!updateDropState(e)) return
     setDropZone(computeZone(e))
   }
 
@@ -60,6 +90,7 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setDropZone(null)
       setIsDragOver(false)
+      setSelfDropActive(false)
     }
   }
 
@@ -70,6 +101,7 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
     const zone = computeZone(e)
     setDropZone(null)
     setIsDragOver(false)
+    setSelfDropActive(false)
     if (!zone) return
 
     const direction: SplitDirection = zone === 'left' || zone === 'right' ? 'vertical' : 'horizontal'
@@ -82,7 +114,7 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
     // does not — and for a cross-window drag onto the pane's OWN row, isDropTarget does not exclude
     // it (draggedPaneId is null, isDragOver is true). Without this guard the split-transfer removes
     // the source pane after a no-op insert and the pane is lost.
-    const sourcePaneId = payload?.pane.id ?? draggedPaneId
+    const sourcePaneId = payload?.pane.id ?? paneDragSourceId(e.dataTransfer) ?? draggedPaneId
     if (sourcePaneId === pane.id) return
 
     if (payload && (payload.sourceWindowId !== windowId || tgtWin !== windowId)) {
@@ -124,7 +156,19 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
       onDrop={onDrop}
     >
       {children}
-      {isDropTarget && dropZone && (
+      {selfDropActive && (
+        <div
+          style={{
+            position: 'absolute',
+            pointerEvents: 'none',
+            backgroundColor: 'rgba(239, 68, 68, 0.10)',
+            border: '2px solid #ef4444',
+            zIndex: 50,
+            inset: 0,
+          }}
+        />
+      )}
+      {!selfDropActive && isDropTarget && dropZone && (
         <div
           style={{
             position: 'absolute',

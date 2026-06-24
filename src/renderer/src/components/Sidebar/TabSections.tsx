@@ -5,7 +5,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
 import { displayGitBranch } from '../../utils/git'
-import { decodePaneDragPayload, encodePaneDragPayload, PANE_DRAG_MIME, type PaneDragPayload } from '../../utils/paneDrag'
+import { decodePaneDragPayload, paneDragSourceId, PANE_DRAG_MIME, setPaneDragData, type PaneDragPayload } from '../../utils/paneDrag'
 import { DirPicker } from '../DirPicker'
 import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnChoiceMenu'
 import { useGitBranch } from '../../hooks/useGitBranch'
@@ -496,8 +496,7 @@ function PaneRow({
           if (renaming || sourceWindowId === undefined) return
           e.stopPropagation()
           e.dataTransfer.effectAllowed = 'move'
-          e.dataTransfer.setData('text/plain', pane.id)
-          e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: tab.id, sourceWindowId }))
+          setPaneDragData(e.dataTransfer, { pane, sourceTabId: tab.id, sourceWindowId })
           setDraggedPane(pane.id)
           // Capture-phase cleanup so draggedPaneId clears even when the source pane unmounts
           // before onDragEnd fires (spec-025 lesson — mirrors pane header beginNativeDrag)
@@ -513,7 +512,14 @@ function PaneRow({
         onDragOver={(e) => {
           const hasPaneDrag = e.dataTransfer.types.includes(PANE_DRAG_MIME)
           if (!hasPaneDrag && !draggedPaneId) return
-          if (draggedPaneId === pane.id) return
+          if ((paneDragSourceId(e.dataTransfer) ?? draggedPaneId) === pane.id) {
+            e.preventDefault()
+            e.stopPropagation()
+            e.dataTransfer.dropEffect = 'none'
+            setHovered(false)
+            return
+          }
+          e.dataTransfer.dropEffect = 'move'
           e.preventDefault()
           e.stopPropagation()
           setHovered(true)

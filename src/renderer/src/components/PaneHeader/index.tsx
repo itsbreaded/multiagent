@@ -6,7 +6,7 @@ import { paneLabelText } from '../../utils/tabLabels'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { displayGitBranch } from '../../utils/git'
-import { encodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
+import { setPaneDragData } from '../../utils/paneDrag'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
@@ -171,9 +171,8 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
         onDragStart={(e) => {
           e.stopPropagation()
           e.dataTransfer.effectAllowed = 'move'
-          e.dataTransfer.setData('text/plain', pane.id)
           if (windowId !== null && activeTabId) {
-            e.dataTransfer.setData(PANE_DRAG_MIME, encodePaneDragPayload({ pane, sourceTabId: activeTabId, sourceWindowId: windowId }))
+            setPaneDragData(e.dataTransfer, { pane, sourceTabId: activeTabId, sourceWindowId: windowId })
           }
           setDraggedPane(pane.id)
           beginNativeDrag()
