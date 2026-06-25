@@ -1,6 +1,6 @@
 import { resolve } from 'path'
 import { readFileSync } from 'fs'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -10,7 +10,6 @@ export default defineConfig({
       'process.env.GH_UPDATE_TOKEN': JSON.stringify(process.env.GH_UPDATE_TOKEN ?? ''),
     },
     plugins: [
-      externalizeDepsPlugin(),
       {
         name: 'copy-shell-integration',
         generateBundle() {
@@ -35,7 +34,9 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    build: {
+      externalizeDeps: true
+    }
   },
   renderer: {
     resolve: {
@@ -45,7 +46,7 @@ export default defineConfig({
       }
     },
     plugins: [
-      react(),
+      react({}),
       tailwindcss()
     ]
   }
