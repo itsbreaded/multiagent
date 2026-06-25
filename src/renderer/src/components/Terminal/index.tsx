@@ -40,6 +40,10 @@ const XTERM_THEME = {
 }
 
 const RESIZE_COL_DEBOUNCE_MS = 100
+// Agent panes pay a leaked classic-renderer redraw on every resize in SIGWINCH;
+// a longer debounce during drag reduces how many duplicate frames accumulate in
+// scrollback. Shell panes keep the 100 ms value; they tolerate frequent resizes.
+const AGENT_RESIZE_COL_DEBOUNCE_MS = 400
 const RESIZE_DEBOUNCE_BUFFER_THRESHOLD = 200
 const ALT_ENTER_SEQUENCE = '\x1b\r'
 
@@ -461,11 +465,12 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         latestResize = null
       }
 
+      const colDebounce = pane.paneType === 'agent' ? AGENT_RESIZE_COL_DEBOUNCE_MS : RESIZE_COL_DEBOUNCE_MS
       const queueResize = ({ cols, rows }: { cols: number; rows: number }): void => {
         if (lastResize?.cols === cols && lastResize.rows === rows) return
         if (Date.now() < suppressResizeUntil) {
           latestResize = { cols, rows }
-          if (!pendingResizeTimer) pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
+          if (!pendingResizeTimer) pendingResizeTimer = setTimeout(flushPendingResize, colDebounce)
           return
         }
         const bufferIsSmall = terminal.buffer.normal.length < RESIZE_DEBOUNCE_BUFFER_THRESHOLD
@@ -481,7 +486,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
         if (bufferIsSmall && lastResize.rows === rows) {
           latestResize = { cols, rows }
-          if (!pendingResizeTimer) pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
+          if (!pendingResizeTimer) pendingResizeTimer = setTimeout(flushPendingResize, colDebounce)
           return
         }
 
@@ -490,7 +495,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         }
         latestResize = { cols, rows }
         if (pendingResizeTimer) return
-        pendingResizeTimer = setTimeout(flushPendingResize, RESIZE_COL_DEBOUNCE_MS)
+        pendingResizeTimer = setTimeout(flushPendingResize, colDebounce)
       }
       resizeDisposable = terminal.onResize(queueResize)
       suppressResizeUntil = Date.now() + 750

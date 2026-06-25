@@ -39,9 +39,26 @@ type ParentMessage =
   | { type: 'ready'; id: string; pid: number | null; cwd: string; windowsPty?: PtyReadyEvent['windowsPty'] }
   | { type: 'error'; id: string; message: string }
 
+type PendingSpawn = {
+  cwd: string
+  cmd: string[]
+  env: Record<string, string>
+  allowCwdFallback: boolean
+  size: { cols: number; rows: number }
+  resized: boolean
+  timeout: ReturnType<typeof setTimeout> | null
+}
+
+// How long to wait for the renderer's first pty:resize before falling back to
+// the 80x24 default. In practice the renderer sends the resize within one React
+// render cycle (~16 ms), so 500 ms is a conservative backstop.
+const DEFERRED_SPAWN_TIMEOUT_MS = 500
+
 export class PtyManager extends EventEmitter {
   private worker: ChildProcess
   private pendingResizes = new Map<string, { cols: number; rows: number }>()
+  private pendingSpawns = new Map<string, PendingSpawn>()
+  private spawnedIds = new Set<string>()
   private readyIds = new Set<string>()
   private readyEvents = new Map<string, PtyReadyEvent>()
 
@@ -77,6 +94,7 @@ export class PtyManager extends EventEmitter {
           break
         case 'exit':
           this.pendingResizes.delete(msg.id)
+          this.spawnedIds.delete(msg.id)
           this.readyIds.delete(msg.id)
           this.readyEvents.delete(msg.id)
           this.emit('exit', msg.id, msg.exitCode, msg.signal)
@@ -99,6 +117,10 @@ export class PtyManager extends EventEmitter {
           break
         }
         case 'error':
+          this.pendingResizes.delete(msg.id)
+          this.spawnedIds.delete(msg.id)
+          this.readyIds.delete(msg.id)
+          this.readyEvents.delete(msg.id)
           this.emit('error', msg.id, new Error(msg.message))
           break
       }
@@ -122,28 +144,75 @@ export class PtyManager extends EventEmitter {
     cmd: string[],
     extraEnv?: Record<string, string>,
     initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
-    envProfile: 'agent' | 'shell' = 'agent',
-    allowCwdFallback = envProfile === 'shell',
+    allowCwdFallback = false,
+    deferSpawn = false,
   ): string {
     const id = randomUUID()
+
+    if (deferSpawn) {
+      // Register the pending entry synchronously so that a pty:resize arriving
+      // before setImmediate fires (extremely unlikely but theoretically possible)
+      // is captured correctly. setImmediate is used only for the existsSync check,
+      // which must be async so the caller can attach error listeners first.
+      const entry: PendingSpawn = {
+        cwd,
+        cmd,
+        env: buildEnv(extraEnv),
+        allowCwdFallback,
+        size: initialSize,
+        resized: false,
+        timeout: null,
+      }
+      this.pendingSpawns.set(id, entry)
+      setImmediate(() => {
+        const e = this.pendingSpawns.get(id)
+        if (!e) return // already killed or spawned by an early resize
+        const cwdExists = existsSync(e.cwd)
+        if (!cwdExists && !e.allowCwdFallback) {
+          this.pendingSpawns.delete(id)
+          this.emit('error', id, new Error(`Working directory does not exist: ${e.cwd}`))
+          return
+        }
+        e.cwd = cwdExists ? e.cwd : homedir()
+        if (e.resized) {
+          // First resize already arrived before setImmediate ran; spawn now.
+          this.pendingSpawns.delete(id)
+          this._spawn(id, e.cwd, e.cmd, e.env, e.size.cols, e.size.rows, e.allowCwdFallback)
+          return
+        }
+        // Wait for the renderer's first pty:resize; fall back to 80x24 on timeout.
+        e.timeout = setTimeout(() => {
+          const p = this.pendingSpawns.get(id)
+          if (!p) return
+          this.pendingSpawns.delete(id)
+          this._spawn(id, p.cwd, p.cmd, p.env, p.size.cols, p.size.rows, p.allowCwdFallback)
+        }, DEFERRED_SPAWN_TIMEOUT_MS)
+      })
+      return id
+    }
+
     setImmediate(() => {
       const cwdExists = existsSync(cwd)
       if (!cwdExists && !allowCwdFallback) {
         this.emit('error', id, new Error(`Working directory does not exist: ${cwd}`))
         return
       }
-      this._send({
-        type: 'spawn',
-        id,
-        cwd: cwdExists ? cwd : homedir(),
-        cmd,
-        env: buildEnv(extraEnv, envProfile),
-        cols: initialSize.cols,
-        rows: initialSize.rows,
-        allowCwdFallback,
-      })
+      this._spawn(id, cwdExists ? cwd : homedir(), cmd, buildEnv(extraEnv), initialSize.cols, initialSize.rows, allowCwdFallback)
     })
     return id
+  }
+
+  private _spawn(
+    id: string,
+    cwd: string,
+    cmd: string[],
+    env: Record<string, string>,
+    cols: number,
+    rows: number,
+    allowCwdFallback: boolean,
+  ): void {
+    this.spawnedIds.add(id)
+    this._send({ type: 'spawn', id, cwd, cmd, env, cols, rows, allowCwdFallback })
   }
 
   private _shellCmd(): string[] {
@@ -154,17 +223,13 @@ export class PtyManager extends EventEmitter {
   }
 
   createShell(cwd: string, initialSize?: { cols: number; rows: number }): string {
-    // Shell panes use the 'shell' env profile: no CLAUDE_CODE_* vars (inert for a
-    // plain shell). Critically, no env rewrite reorders PATH — that is what broke
-    // short no-scroll output like `git pull -> Already up to date.` (see buildEnv).
-    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize, 'shell')
+    // Shell panes may fall back to the home directory for deleted cwd paths.
+    // Agent panes validate cwd before spawning and should fail loudly instead.
+    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize, true)
   }
 
   createClaude(cwd: string): string {
-    return this.createDeferred(cwd, this._shellCmd(), {
-      CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL: '1',
-      CLAUDE_CODE_NO_FLICKER: '1',
-    })
+    return this.createDeferred(cwd, this._shellCmd())
   }
 
   createAgent(cwd: string, agentKind: AgentKind): string {
@@ -177,16 +242,45 @@ export class PtyManager extends EventEmitter {
   }
 
   resize(ptyId: string, cols: number, rows: number): void {
+    const pending = this.pendingSpawns.get(ptyId)
+    if (pending) {
+      // First pty:resize for a deferred agent spawn: use this size for the actual
+      // spawn so Claude never renders its banner at 80x24 and gets a corrective redraw.
+      pending.size = { cols, rows }
+      pending.resized = true
+      if (pending.timeout !== null) {
+        // setImmediate already ran and started the fallback timer; spawn now.
+        clearTimeout(pending.timeout)
+        this.pendingSpawns.delete(ptyId)
+        this._spawn(ptyId, pending.cwd, pending.cmd, pending.env, cols, rows, pending.allowCwdFallback)
+      }
+      // else: setImmediate hasn't run yet; it will see resized=true and spawn.
+      // Do not forward a resize message; the spawn itself carries the correct size.
+      return
+    }
     // Pre-ready: queue so the 'ready' handler can apply it once the PTY exists.
     // Post-ready: the immediate send below is sufficient.
     if (!this.readyIds.has(ptyId)) {
+      if (this.spawnedIds.has(ptyId)) {
+        this._send({ type: 'resize', id: ptyId, cols, rows })
+        return
+      }
       this.pendingResizes.set(ptyId, { cols, rows })
+      return
     }
     this._send({ type: 'resize', id: ptyId, cols, rows })
   }
 
   kill(ptyId: string): void {
+    const pending = this.pendingSpawns.get(ptyId)
+    if (pending) {
+      if (pending.timeout !== null) clearTimeout(pending.timeout)
+      this.pendingSpawns.delete(ptyId)
+      // The worker never received a spawn message, so no kill is needed.
+      return
+    }
     this.pendingResizes.delete(ptyId)
+    this.spawnedIds.delete(ptyId)
     this.readyIds.delete(ptyId)
     this.readyEvents.delete(ptyId)
     this._send({ type: 'kill', id: ptyId })
@@ -197,18 +291,27 @@ export class PtyManager extends EventEmitter {
   }
 
   destroy(): void {
+    for (const entry of this.pendingSpawns.values()) {
+      if (entry.timeout !== null) clearTimeout(entry.timeout)
+    }
+    this.pendingSpawns.clear()
+    this.spawnedIds.clear()
     this.worker.kill()
   }
 }
 
 function buildEnv(
   extraVars?: Record<string, string>,
-  profile: 'agent' | 'shell' = 'agent',
 ): Record<string, string> {
   const env = { ...process.env } as Record<string, string>
 
   delete env['ELECTRON_RUN_AS_NODE']
   delete env['ELECTRON_NO_ASAR']
+  delete env['CLAUDECODE']
+  delete env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN']
+  delete env['CLAUDE_CODE_DISABLE_MOUSE']
+  delete env['CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL']
+  delete env['CLAUDE_CODE_NO_FLICKER']
 
   env['TERM'] = 'xterm-256color'
   env['COLORTERM'] = 'truecolor'
@@ -217,16 +320,9 @@ function buildEnv(
   // and the shell integration script gates on it too, so both profiles set it.
   env['TERM_PROGRAM'] = 'vscode'
 
-  if (profile === 'agent') {
-    // CLAUDECODE=1 activates claude's embedded-terminal rendering path, which
-    // works correctly inside our ConPTY. The DISABLE_* flags suppress alternate-
-    // screen switching and mouse capture, both of which break in xterm.js. Scoped
-    // to agents so plain shells get a clean, inert environment.
-    env['CLAUDECODE'] = '1'
-    env['CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'] = '1'
-    env['CLAUDE_CODE_DISABLE_MOUSE'] = '1'
-    env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
-  }
+  // Agent-specific CLI environment belongs in SessionSpawner.agentEnv(), where
+  // the concrete agent kind is known. Keep this profile terminal-like; VS Code
+  // and Warp do not set Claude-only renderer flags for a normal PTY session.
 
   // NOTE: we deliberately do NOT rewrite PATH. An earlier version prepended
   // %APPDATA%\npm, %ProgramFiles%\nodejs, and ~/.local/bin to PATH for agents.

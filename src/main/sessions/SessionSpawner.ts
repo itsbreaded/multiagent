@@ -70,7 +70,10 @@ export class SessionSpawner {
     const ptyId = this.ptyManager.createDeferred(
       cwd,
       agentLaunchCommand(newSessionCommand(agentKind, sessionId ?? undefined)),
-      agentEnv(agentKind)
+      agentEnv(agentKind),
+      undefined, // initialSize: overridden by renderer's first pty:resize (see deferSpawn)
+      false,     // allowCwdFallback: assertUsableAgentCwd already validated
+      true,      // deferSpawn: wait for fitted size before spawning CLI
     )
     if (agentKind === 'codex') {
       this._registerCodexDetection(ptyId, cwd, startedAt, targetWin, 'new', codexBaseline)
@@ -86,7 +89,10 @@ export class SessionSpawner {
     const ptyId = this.ptyManager.createDeferred(
       cwd,
       agentLaunchCommand(resumeSessionCommand(agentKind, sessionId, cwd)),
-      agentEnv(agentKind)
+      agentEnv(agentKind),
+      undefined, // initialSize: overridden by renderer's first pty:resize (see deferSpawn)
+      false,     // allowCwdFallback
+      true,      // deferSpawn: wait for fitted size before spawning CLI
     )
     if (agentKind === 'codex') {
       this._registerCodexDetection(ptyId, cwd, startedAt, targetWin, 'resume', codexBaseline, sessionId)
@@ -358,8 +364,7 @@ function agentEnv(agentKind: AgentKind): Record<string, string> {
   const vars: Record<string, string> = {}
 
   if (agentKind === 'claude') {
-    vars['CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL'] = '1'
-    vars['CLAUDE_CODE_NO_FLICKER'] = '1'
+    vars['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
     const cfg = _agentProviderSettings?.claude
     if (cfg?.enabled && cfg.preset !== 'native') {
       if (cfg.baseUrl)       vars['ANTHROPIC_BASE_URL'] = cfg.baseUrl
