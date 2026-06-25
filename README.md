@@ -16,7 +16,7 @@ This is the part that bites — most "it doesn't work" reports trace back to a m
 | Requirement | Why | Notes |
 |---|---|---|
 | **Windows 10/11** | The app spawns `powershell.exe`, uses ConPTY, and ships a PowerShell shell-integration script. | macOS/Linux are **not** supported. |
-| **Node.js 24.x** | Native modules (`node-pty`, `better-sqlite3`) are rebuilt against the Electron ABI on install. A mismatched Node causes cryptic rebuild failures. | See `.nvmrc`. Use `nvm use` if you have nvm-windows. |
+| **Node.js 24.x** | `better-sqlite3` is rebuilt against the Electron ABI on install, and `node-pty` uses Electron-compatible Windows prebuilds. A mismatched Node causes cryptic native-module failures. | See `.nvmrc`. Use `nvm use` if you have nvm-windows. |
 | **`claude` CLI** on PATH, **logged in** | The app *launches* the Claude Code CLI for Claude agent panes. | Run `claude` once in a terminal and complete login before starting the app. |
 | **`codex` CLI** on PATH, **logged in** | Same, for Codex agent panes. | Run `codex` once and complete login first. |
 | **VS Build Tools + Python** *(usually optional)* | Fallback for compiling native modules if prebuilt binaries aren't available for your setup. | Only needed if `npm install` fails on the native rebuild step. |
@@ -32,7 +32,7 @@ fail to start.
 ```powershell
 git clone <repo-url>
 cd multiagent
-npm install        # postinstall rebuilds native modules — let it finish, don't add --ignore-scripts
+npm install        # postinstall rebuilds native modules; don't add --ignore-scripts
 npm run dev        # launches the app with Electron + Vite HMR
 ```
 
@@ -68,9 +68,9 @@ Without it, `npm run dist` fails on the symlink step. `npm run dev` is unaffecte
 
 ## Troubleshooting
 
-- **`npm install` fails rebuilding `better-sqlite3` / `node-pty`** — you're almost certainly on the
-  wrong Node version. Check `node -v` against `.nvmrc`. Don't run `npm install --ignore-scripts`;
-  the `postinstall` rebuild is required.
+- **`npm install` fails rebuilding `better-sqlite3`** — you're almost certainly on the wrong Node
+  version or missing fallback build tools. Check `node -v` against `.nvmrc`. Don't run
+  `npm install --ignore-scripts`; the `postinstall` rebuild is required.
 - **App opens but agent panes immediately fail** — `claude` and/or `codex` isn't on PATH or isn't
   logged in. Open a regular terminal, run each one, complete auth, then restart the app.
 - **`npm run dist` fails on a symlink/EPERM error** — enable Developer Mode (above).

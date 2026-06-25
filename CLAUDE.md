@@ -19,11 +19,11 @@ npm run typecheck  # TypeScript type-check without emitting
 npm run dist       # build + package to dist\win-unpacked\ (requires Windows Developer Mode)
 ```
 
-`postinstall` runs the `electron-rebuild` CLI from `@electron/rebuild` automatically after `npm install`, rebuilding `node-pty` and `better-sqlite3` for the Electron ABI. Do not re-run it manually or add `--ignore-scripts`.
+`postinstall` runs the `electron-rebuild` CLI from `@electron/rebuild` automatically after `npm install`, rebuilding `better-sqlite3` for the Electron ABI. `node-pty` ships Windows Electron-compatible prebuilds in this tree; if those are unavailable, a source rebuild requires Visual Studio Build Tools. Do not add `--ignore-scripts`.
 
 ### Packaging Notes
 
-- `npm run dist` uses `electron-builder` with `npmRebuild: false` because postinstall already handles native module rebuilding.
+- `npm run dist` uses `electron-builder` with `npmRebuild: false` because postinstall already handles the required `better-sqlite3` rebuild.
 - Output: `dist\MultiAgent Setup X.Y.Z.exe` (NSIS installer, primary distribution artifact) and `dist\win-unpacked\` (portable, kept for dev inspection).
 - The NSIS installer does a per-user install to `%LOCALAPPDATA%\Programs\MultiAgent` — no admin rights needed.
 - `asarUnpack` is set for `**/*.node`, `**/node-pty/**`, and `**/better-sqlite3/**` so native modules are accessible outside the asar archive.
