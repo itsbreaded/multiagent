@@ -3,6 +3,14 @@ import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
 import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
 import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
+import {
+  defaultTerminalKeyBindings,
+  mergeBindings,
+  TERMINAL_KEY_BINDINGS_VERSION,
+  type TerminalKeyBinding,
+  type Trigger,
+  defaultTrigger,
+} from '../utils/terminalKeyBindings'
 
 export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers' | 'updates'
 export type { GpuAccelerationPref }
@@ -58,6 +66,13 @@ interface SettingsState {
   setHotkeyOverride: (id: HotkeyId, override: HotkeyOverride) => void
   resetHotkeyOverride: (id: HotkeyId) => void
   resetAllHotkeyOverrides: () => void
+  // Terminal key bindings (copy/paste and PTY signals).
+  // Global — apply identically to all pane types. See utils/terminalKeyBindings.ts.
+  terminalKeyBindings: TerminalKeyBinding[]
+  terminalKeyBindingsVersion: number
+  setTerminalKeyBindingTrigger: (id: string, trigger: Trigger) => void
+  resetTerminalKeyBinding: (id: string) => void
+  resetAllTerminalKeyBindings: () => void
   mcpSettings: McpSettings
   setMcpSettings: (settings: McpSettings) => void
   hydrateMcpSettings: (settings: McpSettings) => void
@@ -76,6 +91,8 @@ type Persisted = Pick<SettingsState,
   | 'terminalRescaleOverlappingGlyphs'
   | 'terminalScrollbackLines'
   | 'hotkeyOverrides'
+  | 'terminalKeyBindings'
+  | 'terminalKeyBindingsVersion'
   | 'mcpSettings'
   | 'agentProviders'
 >
@@ -91,6 +108,8 @@ function defaultSettings(): Persisted {
     terminalRescaleOverlappingGlyphs: true,
     terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
     hotkeyOverrides: {},
+    terminalKeyBindings: defaultTerminalKeyBindings(),
+    terminalKeyBindingsVersion: TERMINAL_KEY_BINDINGS_VERSION,
     mcpSettings: DEFAULT_MCP_SETTINGS,
     agentProviders: defaultAgentProviderSettings(),
   }
@@ -124,6 +143,10 @@ function loadSettings(): Persisted {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return defaultSettings()
     const parsed = JSON.parse(raw) as Partial<Persisted>
+    const terminalKeyBindingsVersion =
+      typeof parsed.terminalKeyBindingsVersion === 'number'
+        ? parsed.terminalKeyBindingsVersion
+        : 1
     return {
       autoUpdateEnabled: parsed.autoUpdateEnabled === true,
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
@@ -134,6 +157,10 @@ function loadSettings(): Persisted {
       terminalRescaleOverlappingGlyphs: parsed.terminalRescaleOverlappingGlyphs !== false,
       terminalScrollbackLines: normalizeTerminalScrollbackLines(parsed.terminalScrollbackLines),
       hotkeyOverrides: (parsed.hotkeyOverrides as Partial<Record<HotkeyId, HotkeyOverride>>) ?? {},
+      terminalKeyBindings: mergeBindings(parsed.terminalKeyBindings as TerminalKeyBinding[] | undefined, {
+        migrateOldKillWordDefault: terminalKeyBindingsVersion < TERMINAL_KEY_BINDINGS_VERSION,
+      }),
+      terminalKeyBindingsVersion: TERMINAL_KEY_BINDINGS_VERSION,
       mcpSettings: {
         builtinBrowserEnabled: (parsed.mcpSettings as McpSettings | undefined)?.builtinBrowserEnabled !== false,
         customServers: Array.isArray((parsed.mcpSettings as McpSettings | undefined)?.customServers)
@@ -159,6 +186,8 @@ function saveSettings(state: Persisted): void {
     terminalRescaleOverlappingGlyphs: state.terminalRescaleOverlappingGlyphs,
     terminalScrollbackLines: state.terminalScrollbackLines,
     hotkeyOverrides: state.hotkeyOverrides,
+    terminalKeyBindings: state.terminalKeyBindings,
+    terminalKeyBindingsVersion: state.terminalKeyBindingsVersion,
     mcpSettings: state.mcpSettings,
     agentProviders: state.agentProviders,
   }))
@@ -228,6 +257,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   resetAllHotkeyOverrides: () => {
     const hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>> = {}
     set({ hotkeyOverrides })
+    saveSettings(get())
+  },
+
+  setTerminalKeyBindingTrigger: (id, trigger) => {
+    const terminalKeyBindings = get().terminalKeyBindings.map((b) =>
+      b.id === id ? { ...b, trigger: { ...trigger } } : b
+    )
+    set({ terminalKeyBindings })
+    saveSettings(get())
+  },
+
+  resetTerminalKeyBinding: (id) => {
+    const defTrigger = defaultTrigger(id)
+    if (!defTrigger) return
+    const terminalKeyBindings = get().terminalKeyBindings.map((b) =>
+      b.id === id ? { ...b, trigger: { ...defTrigger } } : b
+    )
+    set({ terminalKeyBindings })
+    saveSettings(get())
+  },
+
+  resetAllTerminalKeyBindings: () => {
+    set({ terminalKeyBindings: defaultTerminalKeyBindings() })
     saveSettings(get())
   },
 

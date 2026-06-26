@@ -9,6 +9,7 @@ import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store/settings'
 import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
+import { buildTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/terminalKeyBindings'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
 import { applyBackend } from '../../terminal/rendering/backends'
@@ -87,6 +88,17 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
   // Keep ptyIdRef in sync so context menu paste can always find the current ptyId
   useEffect(() => { ptyIdRef.current = pane.ptyId ?? null }, [pane.ptyId])
+
+  // Copy/paste binding triggers drive the context-menu hint labels. Subscribed
+  // so the labels update when the user rebinds them in Settings.
+  const copyDisplay = useSettingsStore((s) => {
+    const b = s.terminalKeyBindings.find((x) => x.id === 'copy')
+    return b ? bindingDisplay(b.trigger) : 'Ctrl+C'
+  })
+  const pasteDisplay = useSettingsStore((s) => {
+    const b = s.terminalKeyBindings.find((x) => x.id === 'paste')
+    return b ? bindingDisplay(b.trigger) : 'Ctrl+V'
+  })
 
   useEffect(() => {
     let disposed = false
@@ -223,8 +235,11 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     // Re-attach the key handler on every mount so the closure captures fresh
     // refs. attachCustomKeyEventHandler replaces the previous handler.
     xterm.attachCustomKeyEventHandler((e) => {
-      // Shift+Enter: translate to Alt+Enter for agent CLIs. Both Codex and
-      // Claude Code treat Alt+Enter as insert-newline without submitting.
+      // Step 1 — Shift+Enter: translate to Alt+Enter for agent CLIs. Both Codex
+      // and Claude Code treat Alt+Enter as insert-newline without submitting.
+      // MUST run before the terminal-binding lookup below: a terminal binding on
+      // Shift+Enter is intentionally shadowed here for agent panes (documented
+      // limitation, not a bug to fix without re-verifying Codex/Claude behavior).
       if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Enter') {
         if (pane.agentKind !== 'codex' && pane.agentKind !== 'claude') return true
         if (e.type === 'keydown') {
@@ -239,25 +254,47 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       if (e.type !== 'keydown') return true
 
       const stop = (): false => { e.stopPropagation(); e.preventDefault(); return false }
+
+      // Step 2 — Terminal key bindings (copy/paste and PTY signals).
+      // Runs on ALL keydowns regardless of modifier, BEFORE the if (mod) app-
+      // hotkey gate, so Alt-only combos (e.g. the default Alt+C interrupt) are
+      // reachable. Bindings are read from settings at event time — no re-attach
+      // needed when the user rebinds. On match the event is consumed (stop());
+      // a 'suppress' entry consumes the key and sends nothing (a vacated default
+      // trigger of a rebound signal binding).
+      const entry = buildTerminalKeyMap(useSettingsStore.getState().terminalKeyBindings).get(bindingEventKey(e))
+      if (entry) {
+        if (entry.kind === 'suppress') return stop()
+        const b = entry.binding
+        switch (b.action.type) {
+          case 'clipboard-copy': {
+            // Always consume. Silent no-op when nothing is selected.
+            const selection = xterm.getSelection()
+            if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+            return stop()
+          }
+          case 'clipboard-paste': {
+            // preventDefault (via stop()) suppresses the browser's native paste
+            // event. The blockPaste capture listener below is the backstop that
+            // guarantees no double-paste; keep both.
+            navigator.clipboard.readText().then((text) => {
+              if (text) xterm.paste(text)
+            }).catch(() => {})
+            return stop()
+          }
+          case 'pty-sequence': {
+            const ptyId = ptyIdRef.current
+            if (ptyId) window.ipc.send('pty:write', ptyId, b.action.sequence)
+            return stop()
+          }
+        }
+      }
+
       const mod = e.ctrlKey || e.metaKey
       const store = usePanesStore.getState()
 
-      // Ctrl+Shift+C: copy selection
-      if (mod && e.shiftKey && e.code === 'KeyC') {
-        const selection = xterm.getSelection()
-        if (selection) navigator.clipboard.writeText(selection).catch(() => {})
-        return stop()
-      }
-
-      // Ctrl+Shift+V: paste from clipboard
-      if (mod && e.shiftKey && e.code === 'KeyV') {
-        navigator.clipboard.readText().then((text) => {
-          if (text) xterm.paste(text)
-        }).catch(() => {})
-        return stop()
-      }
-
-      // Global app shortcuts — read overrides at call time so rebinds take effect immediately
+      // Step 3 — Global app shortcuts (HotkeyId). Read overrides at call time
+      // so rebinds take effect immediately.
       if (mod) {
         const hotkeys = buildHotkeys(useSettingsStore.getState().hotkeyOverrides)
         const dispatch: Record<string, () => void> = {
@@ -313,9 +350,11 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     ro.observe(containerRef.current)
     if (containerRef.current.parentElement) ro.observe(containerRef.current.parentElement)
 
-    // Block paste events from reaching xterm's internal textarea listener.
-    // Without this, Ctrl+Shift+V triggers both our key handler AND xterm's
-    // native paste handler, causing every paste to appear twice in the PTY.
+    // Backstop paste blocker: stops native paste ClipboardEvents from reaching
+    // xterm's internal textarea listener. The terminal-binding handler already
+    // calls preventDefault on the Ctrl+V keydown, but this guard guarantees no
+    // double-paste survives (e.g. programmatic paste, or a rebound paste trigger).
+    // Keep it alongside the binding handler.
     const container = containerRef.current
     const blockPaste = (e: ClipboardEvent): void => {
       e.stopPropagation()
@@ -821,7 +860,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
             }}
           >
             Copy
-            <span style={{ float: 'right', opacity: 0.4, fontSize: 11 }}>Ctrl+Shift+C</span>
+            <span style={{ float: 'right', opacity: 0.4, fontSize: 11 }}>{copyDisplay}</span>
           </button>
           <button
             onClick={handlePaste}
@@ -832,7 +871,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
             }}
           >
             Paste
-            <span style={{ float: 'right', opacity: 0.4, fontSize: 11 }}>Ctrl+Shift+V</span>
+            <span style={{ float: 'right', opacity: 0.4, fontSize: 11 }}>{pasteDisplay}</span>
           </button>
         </div>
       )}

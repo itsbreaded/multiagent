@@ -24,17 +24,13 @@ import {
 } from '../../utils/hotkeys'
 import { McpSection } from './McpSection'
 import { AgentProvidersSection } from './AgentProvidersSection'
+import { TerminalBindingsSection } from './TerminalBindingsSection'
 
 const MCP_KEYWORDS      = ['mcp', 'model context', 'protocol', 'server', 'browser']
 const PROVIDER_KEYWORDS = ['provider', 'agent', 'claude', 'codex', 'api', 'key', 'env', 'environment', 'variable']
 const UPDATE_KEYWORDS   = ['update', 'version', 'auto update', 'release', 'upgrade']
 
 // Terminal-only shortcuts shown read-only for visibility
-const TERMINAL_SHORTCUTS = [
-  { label: 'Copy selection',              display: 'Ctrl+Shift+C' },
-  { label: 'Paste from clipboard',        display: 'Ctrl+Shift+V' },
-  { label: 'Insert newline (agent panes)', display: 'Shift+Enter'  },
-]
 
 const HOTKEY_ORDER: HotkeyId[] = [
   'newTab', 'closeTab', 'splitVertical', 'splitHorizontal',
@@ -70,6 +66,10 @@ export function SettingsPanel(): JSX.Element {
   const [query, setQuery] = useState('')
   const [recording, setRecording] = useState<HotkeyId | null>(null)
   const [conflictLabel, setConflictLabel] = useState<string | null>(null)
+  // Non-blocking yellow warning: a recorded app hotkey shares its key with a
+  // terminal key binding. Distinct from the red `conflictLabel` refusal.
+  const [hotkeyTerminalWarning, setHotkeyTerminalWarning] = useState<string | null>(null)
+  const terminalKeyBindings = useSettingsStore((s) => s.terminalKeyBindings)
   const [scrollbackDraft, setScrollbackDraft] = useState(String(terminalScrollbackLines))
   const [contrastDraft, setContrastDraft] = useState(String(terminalMinimumContrastRatio))
   const mouseDownOnOverlay = useRef(false)
@@ -108,9 +108,18 @@ export function SettingsPanel(): JSX.Element {
 
     function onKeyDown(e: KeyboardEvent): void {
       if (!recordingId) return  // narrows type inside this closure
-      // Escape cancels recording
+      // Escape cancels recording — swallow it (capture phase) so it does NOT also
+      // bubble to App.tsx's global Escape handler and close the settings overlay.
+      // This listener only exists while recording is active, so normal
+      // Escape-to-close still works once recording ends.
       if (!e.ctrlKey && !e.metaKey) {
-        if (e.key === 'Escape') { setRecording(null); setConflictLabel(null) }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          setRecording(null)
+          setConflictLabel(null)
+          setHotkeyTerminalWarning(null)
+        }
         return
       }
       // Skip bare modifier presses
@@ -131,6 +140,17 @@ export function SettingsPanel(): JSX.Element {
         return
       }
 
+      // Bidirectional clash: app hotkey shares code+shift with a terminal binding
+      // held with Ctrl/Meta. Non-blocking — warn but still commit.
+      const tbClash = terminalKeyBindings.find((b) =>
+        (b.trigger.ctrl || b.trigger.meta) &&
+        b.trigger.code === newBinding.code &&
+        b.trigger.shift === newBinding.shift
+      )
+      if (tbClash) {
+        setHotkeyTerminalWarning(`Shares key with terminal binding "${tbClash.label}". Terminal wins while a pane is focused.`)
+      }
+
       // If same as default, clear any override instead of storing a no-op
       const def = DEFAULT_HOTKEYS[recordingId]
       if (def.code === newBinding.code && def.shift === newBinding.shift) {
@@ -145,7 +165,7 @@ export function SettingsPanel(): JSX.Element {
     // Capture phase so we intercept before global app handler
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [recording, hotkeyOverrides, setHotkeyOverride, resetHotkeyOverride])
+  }, [recording, hotkeyOverrides, terminalKeyBindings, setHotkeyOverride, resetHotkeyOverride])
 
   // Clear conflict message after a short delay
   useEffect(() => {
@@ -153,6 +173,13 @@ export function SettingsPanel(): JSX.Element {
     const t = setTimeout(() => setConflictLabel(null), 2000)
     return () => clearTimeout(t)
   }, [conflictLabel])
+
+  // Clear the terminal-binding clash warning after a short delay
+  useEffect(() => {
+    if (!hotkeyTerminalWarning) return
+    const t = setTimeout(() => setHotkeyTerminalWarning(null), 4000)
+    return () => clearTimeout(t)
+  }, [hotkeyTerminalWarning])
 
   useEffect(() => {
     setScrollbackDraft(String(terminalScrollbackLines))
@@ -189,6 +216,15 @@ export function SettingsPanel(): JSX.Element {
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
     !normalizedQuery || DEFAULT_HOTKEYS[id].label.toLowerCase().includes(normalizedQuery)
   )
+  function terminalClashLabelForHotkey(id: HotkeyId): string | null {
+    const h = effectiveHotkeys[id]
+    const clash = terminalKeyBindings.find((b) =>
+      (b.trigger.ctrl || b.trigger.meta) &&
+      b.trigger.code === h.code &&
+      b.trigger.shift === h.shift
+    )
+    return clash?.label ?? null
+  }
 
   return (
     <div
@@ -423,6 +459,20 @@ export function SettingsPanel(): JSX.Element {
                       </div>
                     )}
 
+                    {hotkeyTerminalWarning && (
+                      <div style={{
+                        background: '#2a2410',
+                        border: '1px solid #5a4810',
+                        borderRadius: 5,
+                        color: '#fbbf24',
+                        fontSize: 12,
+                        padding: '6px 10px',
+                        marginBottom: 8,
+                      }}>
+                        {hotkeyTerminalWarning}
+                      </div>
+                    )}
+
                     {recording && (
                       <div style={{
                         background: '#1a2a1a',
@@ -449,6 +499,7 @@ export function SettingsPanel(): JSX.Element {
                             display={effective.display}
                             isCustomized={isCustomized}
                             isRecording={isRecording}
+                            terminalClashLabel={terminalClashLabelForHotkey(id)}
                             onStartRecording={() => { setRecording(id); setConflictLabel(null) }}
                             onReset={() => { resetHotkeyOverride(id); if (recording === id) setRecording(null) }}
                           />
@@ -459,29 +510,9 @@ export function SettingsPanel(): JSX.Element {
                     )}
 
                     {!normalizedQuery && (
-                      <>
-                        <div style={{ margin: '16px 0 4px', borderTop: '1px solid #2a2b2e', paddingTop: 12 }}>
-                          <SectionLabel>Terminal shortcuts (fixed)</SectionLabel>
-                        </div>
-                        {TERMINAL_SHORTCUTS.map((s) => (
-                          <div
-                            key={s.label}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              padding: '7px 12px',
-                              marginBottom: 2,
-                              border: '1px solid #222326',
-                              borderRadius: 5,
-                              backgroundColor: '#141517',
-                            }}
-                          >
-                            <span style={{ color: '#6b7280', fontSize: 12 }}>{s.label}</span>
-                            <KeyBadge muted>{s.display}</KeyBadge>
-                          </div>
-                        ))}
-                      </>
+                      <div style={{ margin: '16px 0 4px', borderTop: '1px solid #2a2b2e', paddingTop: 12 }}>
+                        <TerminalBindingsSection />
+                      </div>
                     )}
                   </>
                 )}
@@ -695,6 +726,7 @@ export function SettingsPanel(): JSX.Element {
                 hotkeyOverrides={hotkeyOverrides}
                 recording={recording}
                 conflictLabel={conflictLabel}
+                terminalClashLabelForHotkey={terminalClashLabelForHotkey}
                 showGitBranchBadges={showGitBranchBadges}
                 setShowGitBranchBadges={setShowGitBranchBadges}
                 tabOverflowMode={tabOverflowMode}
@@ -741,6 +773,7 @@ function SearchResults({
   hotkeyOverrides,
   recording,
   conflictLabel,
+  terminalClashLabelForHotkey,
   showGitBranchBadges,
   setShowGitBranchBadges,
   tabOverflowMode,
@@ -778,6 +811,7 @@ function SearchResults({
   hotkeyOverrides: Record<string, HotkeyOverride>
   recording: HotkeyId | null
   conflictLabel: string | null
+  terminalClashLabelForHotkey: (id: HotkeyId) => string | null
   showGitBranchBadges: boolean
   setShowGitBranchBadges: (v: boolean) => void
   tabOverflowMode: 'scroll' | 'wrap'
@@ -902,6 +936,7 @@ function SearchResults({
                 display={effective.display}
                 isCustomized={isCustomized}
                 isRecording={isRecording}
+                terminalClashLabel={terminalClashLabelForHotkey(id)}
                 onStartRecording={() => onStartRecording(id)}
                 onReset={() => onResetHotkey(id)}
               />
@@ -1136,6 +1171,7 @@ function HotkeyRow({
   display,
   isCustomized,
   isRecording,
+  terminalClashLabel,
   onStartRecording,
   onReset,
 }: {
@@ -1143,6 +1179,7 @@ function HotkeyRow({
   display: string
   isCustomized: boolean
   isRecording: boolean
+  terminalClashLabel?: string | null
   onStartRecording: () => void
   onReset: () => void
 }): JSX.Element {
@@ -1162,6 +1199,23 @@ function HotkeyRow({
     >
       <span style={{ color: '#c9cdd1', fontSize: 12, flex: 1 }}>{label}</span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        {terminalClashLabel && (
+          <span style={{
+            display: 'inline-block',
+            background: '#2a2410',
+            border: '1px solid #5a4810',
+            borderRadius: 4,
+            color: '#fbbf24',
+            fontSize: 10,
+            padding: '2px 6px',
+            maxWidth: 220,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }} title={`Shares key with terminal binding "${terminalClashLabel}"`}>
+            Shares key with {terminalClashLabel}
+          </span>
+        )}
         <button
           onClick={onStartRecording}
           title="Click to rebind"
