@@ -124,3 +124,27 @@ Automated verification:
 - Do not add xterm focus-reporting shims unless a current regression proves xterm's native
   `?1004h` handling is insufficient.
 - Do not reintroduce PATH rewrites, PTY flow control, or prompt-detection launch fallback.
+
+## 2026-06-26 Revisit Close-Out
+
+After later Claude Code updates, switching between `/tui default` and `/tui fullscreen`
+again caused Claude to ignore normal keyboard input. The same behavior reproduced in both
+app-created Claude panes and manually launched Claude sessions in regular shell panes.
+
+Investigation showed that keyboard bytes were not being lost by MultiAgent: they reached
+`xterm.onData`, renderer IPC, main, `PtyManager`, the PTY worker, and `node-pty.write()`.
+Claude ignored normal input until a bracketed-paste carriage-return sequence or real paste
+woke its renderer/input state.
+
+Warp appears to tolerate the Claude renderer transition better, but reproducing that would
+require brittle Claude-specific terminal shims such as detecting `/tui` commands, matching
+Claude UI text, and injecting synthetic bracketed paste. Those workarounds were rejected as
+too fragile to ship.
+
+Decision:
+
+- Keep the original completed spec as-is.
+- Do not ship Claude-specific `/tui` renderer-switch wakeups or debug tracing.
+- Treat the later fullscreen/default switch stall as a Claude Code fullscreen-renderer
+  compatibility issue unless Claude stabilizes the protocol or a general terminal-standard
+  fix is identified.
