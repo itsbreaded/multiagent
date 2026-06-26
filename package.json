@@ -13,7 +13,7 @@
     "dist:dir": "electron-vite build && electron-builder --win dir",
     "dist:nsis": "electron-vite build && electron-builder --win nsis",
     "release": "electron-vite build && electron-builder --win nsis --publish always",
-    "postinstall": "electron-rebuild -f -o better-sqlite3"
+    "postinstall": "electron-rebuild -f -o better-sqlite3 && patch-package"
   },
   "keywords": [],
   "author": "Chris Haniszewski",
@@ -35,6 +35,7 @@
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "patch-package": "^8.0.1",
     "tailwindcss": "^4.3.1",
     "typescript": "^6.0.3",
     "vite": "^7.3.6"

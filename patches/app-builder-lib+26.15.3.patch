@@ -1,0 +1,27 @@
+diff --git a/node_modules/app-builder-lib/out/publish/PublishManager.js b/node_modules/app-builder-lib/out/publish/PublishManager.js
+index 6e8918f..9a6db39 100644
+--- a/node_modules/app-builder-lib/out/publish/PublishManager.js
++++ b/node_modules/app-builder-lib/out/publish/PublishManager.js
+@@ -166,13 +166,15 @@ class PublishManager {
+     async getOrCreatePublisher(publishConfig, appInfo) {
+         // to not include token into cache key
+         const providerCacheKey = (0, builder_util_1.safeStringifyJson)(publishConfig);
+-        let publisher = this.nameToPublisher.get(providerCacheKey);
+-        if (publisher == null) {
+-            publisher = await createPublisher(this, appInfo.version, publishConfig, this.publishOptions, this.packager);
+-            this.nameToPublisher.set(providerCacheKey, publisher);
+-            builder_util_1.log.info({ publisher: publisher.toString() }, "publishing");
+-        }
+-        return publisher;
++        let publisherPromise = this.nameToPublisher.get(providerCacheKey);
++        if (publisherPromise == null) {
++            publisherPromise = createPublisher(this, appInfo.version, publishConfig, this.publishOptions, this.packager).then(publisher => {
++                builder_util_1.log.info({ publisher: publisher.toString() }, "publishing");
++                return publisher;
++            });
++            this.nameToPublisher.set(providerCacheKey, publisherPromise);
++        }
++        return await publisherPromise;
+     }
+     // noinspection JSUnusedGlobalSymbols
+     cancelTasks() {

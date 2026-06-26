@@ -41,6 +41,8 @@ The app uses `electron-updater` to check `github.com/itsbreaded/multiagent` rele
 
 `publish.bat` runs `npm run release` which calls `electron-builder --publish always`. The GitHub release and `latest.yml` metadata are created automatically. Do not hardcode any tokens in source files.
 
+`patch-package` applies `patches/app-builder-lib+26.15.3.patch` after install. It fixes an upstream publisher-cache race that otherwise lets concurrent NSIS artifact callbacks create duplicate GitHub releases. Remove the patch only after upgrading to an `app-builder-lib` version that caches in-flight publisher creation.
+
 **Update flow in the running app**: updater checks on startup (10s delay) and hourly. `updater:status` IPC events drive the `UpdateBanner` component in the renderer. The banner is suppressed in dev mode and in detached windows.
 
 ## Architecture
