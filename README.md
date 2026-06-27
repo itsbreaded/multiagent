@@ -68,6 +68,9 @@ Without it, `npm run dist` fails on the symlink step. `npm run dev` is unaffecte
 
 ## Troubleshooting
 
+- **`Electron uninstall` when running `npm run dev`** — the Electron npm package is present but its
+  binary wasn't downloaded. Run `node node_modules/electron/install.js`, or re-run `npm install`
+  (postinstall downloads it). Usually means a prior install used `--ignore-scripts` or was interrupted.
 - **`npm install` fails rebuilding `better-sqlite3`** — you're almost certainly on the wrong Node
   version or missing fallback build tools. Check `node -v` against `.nvmrc`. Don't run
   `npm install --ignore-scripts`; the `postinstall` rebuild is required.

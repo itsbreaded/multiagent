@@ -20,10 +20,11 @@ export type TerminalBindingAction =
   | { type: 'clipboard-copy' }
   | { type: 'clipboard-paste' }
   | { type: 'pty-sequence'; sequence: string }   // well-known signal bindings only
+  | { type: 'text-macro'; text: string }         // user-defined literal text
 
 export interface TerminalKeyBinding {
-  id: string               // stable well-known ID
-  label: string            // display name; derived from id
+  id: string               // well-known id or custom-<uuid>
+  label: string            // display name
   trigger: Trigger
   action: TerminalBindingAction
 }
@@ -68,6 +69,10 @@ export function isWellKnownId(id: string): boolean {
   return WELL_KNOWN.some((d) => d.id === id)
 }
 
+export function isCustomBindingId(id: string): boolean {
+  return id.startsWith('custom-')
+}
+
 export function defaultTerminalKeyBindings(): TerminalKeyBinding[] {
   return WELL_KNOWN.map((d) => ({ ...d, trigger: { ...d.trigger }, action: cloneAction(d.action) }))
 }
@@ -75,6 +80,7 @@ export function defaultTerminalKeyBindings(): TerminalKeyBinding[] {
 function cloneAction(a: TerminalBindingAction): TerminalBindingAction {
   switch (a.type) {
     case 'pty-sequence': return { type: 'pty-sequence', sequence: a.sequence }
+    case 'text-macro': return { type: 'text-macro', text: a.text }
     default: return a
   }
 }
@@ -104,6 +110,7 @@ export function isCustomizedTrigger(b: TerminalKeyBinding): boolean {
 
 // Returns true if a well-known binding differs from its default.
 export function isCustomizedBinding(b: TerminalKeyBinding): boolean {
+  if (!isWellKnownId(b.id)) return false
   return isCustomizedTrigger(b)
 }
 
@@ -120,12 +127,47 @@ export function bindingKey(t: Trigger): string {
   return `${t.ctrl ? 1 : 0}:${t.shift ? 1 : 0}:${t.alt ? 1 : 0}:${t.meta ? 1 : 0}:${t.code}`
 }
 
+// First binding (in list order) whose trigger fingerprint equals `key`, skipping
+// `excludeId`. Mirrors buildTerminalKeyMap's first-claimant rule and is the
+// single conflict-detection primitive used by both the settings store and the
+// settings UI, so the two never diverge on what "already claimed" means.
+export function findClaimant(
+  bindings: TerminalKeyBinding[],
+  key: string,
+  excludeId?: string | null,
+): TerminalKeyBinding | undefined {
+  for (const b of bindings) {
+    if (excludeId && b.id === excludeId) continue
+    if (bindingKey(b.trigger) === key) return b
+  }
+  return undefined
+}
+
+// Display label for a binding: the well-known label when applicable, else the
+// stored label. Used for conflict messages so the store (which has no labelFor)
+// and the UI report identical wording.
+export function bindingLabel(b: TerminalKeyBinding): string {
+  return defaultLabel(b.id) ?? b.label
+}
+
 export function bindingEventKey(e: KeyboardEvent): string {
   return `${e.ctrlKey ? 1 : 0}:${e.shiftKey ? 1 : 0}:${e.altKey ? 1 : 0}:${e.metaKey ? 1 : 0}:${e.code}`
 }
 
 export function triggerFromEvent(e: KeyboardEvent): Trigger {
   return { code: e.code, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey }
+}
+
+// A trigger is valid only if it names a real key (non-empty code) and includes
+// a Ctrl, Alt, or Meta. Shift-only combos are rejected because they would
+// hijack ordinary typing: a Shift+M macro would make every capital 'M' send the
+// macro text instead, and Shift+Enter is reserved for agent-CLI multiline
+// input. Shift may still combine with Ctrl/Alt/Meta. This is the single
+// recordability predicate shared by the trigger recorder, the settings store,
+// and persisted-binding sanitization.
+export function isValidTrigger(t: Trigger): boolean {
+  if (!t.code) return false
+  return t.ctrl || t.alt || t.meta
 }
 
 // Human-readable combo string, e.g. "Ctrl+C", "Alt+C", "Ctrl+Shift+C".
@@ -217,6 +259,14 @@ export function mergeBindings(
     }
   }
 
+  // Custom text-macro entries after well-known rows, in stored order.
+  for (const s of list) {
+    if (!s || typeof s !== 'object') continue
+    if (isWellKnownId(s.id)) continue
+    const custom = sanitizeCustomBinding(s)
+    if (custom) out.push(custom)
+  }
+
   return out
 }
 
@@ -252,4 +302,23 @@ function sanitizeAction(a: unknown, id: string): TerminalBindingAction | null {
     return null
   }
   return null
+}
+
+function sanitizeCustomBinding(s: unknown): TerminalKeyBinding | null {
+  if (!s || typeof s !== 'object') return null
+  const obj = s as Record<string, unknown>
+  if (typeof obj.id !== 'string' || !isCustomBindingId(obj.id)) return null
+  if (typeof obj.label !== 'string' || !obj.label.trim()) return null
+  const trigger = sanitizeTrigger(obj.trigger)
+  if (!trigger || !isValidTrigger(trigger)) return null
+  const action = sanitizeCustomAction(obj.action)
+  if (!action) return null
+  return { id: obj.id, label: obj.label.trim(), trigger, action }
+}
+
+function sanitizeCustomAction(a: unknown): TerminalBindingAction | null {
+  if (!a || typeof a !== 'object') return null
+  const o = a as Record<string, unknown>
+  if (o.type !== 'text-macro' || typeof o.text !== 'string') return null
+  return { type: 'text-macro', text: o.text }
 }

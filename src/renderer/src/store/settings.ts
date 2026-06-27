@@ -10,10 +10,20 @@ import {
   type TerminalKeyBinding,
   type Trigger,
   defaultTrigger,
+  isWellKnownId,
+  bindingKey,
+  findClaimant,
+  bindingLabel,
+  isValidTrigger,
 } from '../utils/terminalKeyBindings'
 
 export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers' | 'updates'
 export type { GpuAccelerationPref }
+
+// Outcome of a mutating terminal-key-binding action. The store is the final
+// validation authority: on failure it returns `{ ok: false, message }` so the
+// UI can surface the reason instead of the action silently no-op-ing.
+export type BindingEditResult = { ok: true } | { ok: false; message: string }
 
 const SETTINGS_KEY = 'multiagent:settings'
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 250_000
@@ -70,9 +80,12 @@ interface SettingsState {
   // Global — apply identically to all pane types. See utils/terminalKeyBindings.ts.
   terminalKeyBindings: TerminalKeyBinding[]
   terminalKeyBindingsVersion: number
-  setTerminalKeyBindingTrigger: (id: string, trigger: Trigger) => void
-  resetTerminalKeyBinding: (id: string) => void
-  resetAllTerminalKeyBindings: () => void
+  setTerminalKeyBindingTrigger: (id: string, trigger: Trigger) => BindingEditResult
+  resetTerminalKeyBinding: (id: string) => BindingEditResult
+  resetAllTerminalKeyBindings: () => BindingEditResult
+  addCustomTerminalKeyBinding: (label: string, trigger: Trigger, text: string) => BindingEditResult
+  updateCustomTerminalKeyBinding: (id: string, label: string, trigger: Trigger, text: string) => BindingEditResult
+  removeTerminalKeyBinding: (id: string) => void
   mcpSettings: McpSettings
   setMcpSettings: (settings: McpSettings) => void
   hydrateMcpSettings: (settings: McpSettings) => void
@@ -261,25 +274,86 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setTerminalKeyBindingTrigger: (id, trigger) => {
-    const terminalKeyBindings = get().terminalKeyBindings.map((b) =>
+    const current = get().terminalKeyBindings
+    if (!current.some((b) => b.id === id)) return { ok: false, message: 'Binding not found' }
+    if (!isValidTrigger(trigger)) return { ok: false, message: 'Use a Ctrl, Alt, or Meta key combination' }
+    const owner = findClaimant(current, bindingKey(trigger), id)
+    if (owner) return { ok: false, message: `Already used by: ${bindingLabel(owner)}` }
+    const terminalKeyBindings = current.map((b) =>
       b.id === id ? { ...b, trigger: { ...trigger } } : b
     )
     set({ terminalKeyBindings })
     saveSettings(get())
+    return { ok: true }
   },
 
   resetTerminalKeyBinding: (id) => {
     const defTrigger = defaultTrigger(id)
-    if (!defTrigger) return
-    const terminalKeyBindings = get().terminalKeyBindings.map((b) =>
+    if (!defTrigger) return { ok: false, message: 'Binding has no default' }
+    const current = get().terminalKeyBindings
+    const owner = findClaimant(current, bindingKey(defTrigger), id)
+    if (owner) return { ok: false, message: `Cannot reset: default is used by ${bindingLabel(owner)}` }
+    const terminalKeyBindings = current.map((b) =>
       b.id === id ? { ...b, trigger: { ...defTrigger } } : b
     )
     set({ terminalKeyBindings })
     saveSettings(get())
+    return { ok: true }
   },
 
   resetAllTerminalKeyBindings: () => {
-    set({ terminalKeyBindings: defaultTerminalKeyBindings() })
+    const customs = get().terminalKeyBindings.filter((b) => !isWellKnownId(b.id))
+    const defaults = defaultTerminalKeyBindings()
+    for (const d of defaults) {
+      const owner = findClaimant(customs, bindingKey(d.trigger))
+      if (owner) return { ok: false, message: `Cannot reset: a default is used by ${bindingLabel(owner)}` }
+    }
+    set({ terminalKeyBindings: [...defaults, ...customs] })
+    saveSettings(get())
+    return { ok: true }
+  },
+
+  addCustomTerminalKeyBinding: (label, trigger, text) => {
+    const trimmed = label.trim()
+    if (!trimmed) return { ok: false, message: 'Label is required' }
+    if (!isValidTrigger(trigger)) return { ok: false, message: 'Use a Ctrl, Alt, or Meta key combination' }
+    const current = get().terminalKeyBindings
+    const owner = findClaimant(current, bindingKey(trigger))
+    if (owner) return { ok: false, message: `Already used by: ${bindingLabel(owner)}` }
+    const binding: TerminalKeyBinding = {
+      id: `custom-${crypto.randomUUID()}`,
+      label: trimmed,
+      trigger: { ...trigger },
+      action: { type: 'text-macro', text },
+    }
+    set({ terminalKeyBindings: [...current, binding] })
+    saveSettings(get())
+    return { ok: true }
+  },
+
+  updateCustomTerminalKeyBinding: (id, label, trigger, text) => {
+    if (!id.startsWith('custom-')) return { ok: false, message: 'Only custom macros can be edited' }
+    const trimmed = label.trim()
+    if (!trimmed) return { ok: false, message: 'Label is required' }
+    if (!isValidTrigger(trigger)) return { ok: false, message: 'Use a Ctrl, Alt, or Meta key combination' }
+    const current = get().terminalKeyBindings
+    const existing = current.find((b) => b.id === id)
+    if (!existing || existing.action.type !== 'text-macro') return { ok: false, message: 'Macro not found' }
+    const owner = findClaimant(current, bindingKey(trigger), id)
+    if (owner) return { ok: false, message: `Already used by: ${bindingLabel(owner)}` }
+    const terminalKeyBindings = current.map((b) => b.id === id
+      ? { ...b, label: trimmed, trigger: { ...trigger }, action: { type: 'text-macro' as const, text } }
+      : b
+    )
+    set({ terminalKeyBindings })
+    saveSettings(get())
+    return { ok: true }
+  },
+
+  removeTerminalKeyBinding: (id) => {
+    if (!id.startsWith('custom-')) return
+    const terminalKeyBindings = get().terminalKeyBindings.filter((b) => b.id !== id)
+    set({ terminalKeyBindings })
     saveSettings(get())
   },
 

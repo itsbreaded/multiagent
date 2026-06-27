@@ -287,6 +287,11 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
             if (ptyId) window.ipc.send('pty:write', ptyId, b.action.sequence)
             return stop()
           }
+          case 'text-macro': {
+            const ptyId = ptyIdRef.current
+            if (ptyId) window.ipc.send('pty:write', ptyId, b.action.text)
+            return stop()
+          }
         }
       }
 
