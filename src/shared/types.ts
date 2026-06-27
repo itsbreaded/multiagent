@@ -1,6 +1,7 @@
 // Auto-updater status pushed from main to renderer
 export type UpdaterStatus =
   | { state: 'available'; version: string }
+  | { state: 'preparing'; version: string }
   | { state: 'downloading'; percent: number }
   | { state: 'ready'; version: string }
   | { state: 'up-to-date' }

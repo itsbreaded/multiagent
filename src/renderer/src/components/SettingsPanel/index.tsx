@@ -1330,6 +1330,7 @@ function UpdatesSection({
     if (!updaterStatus) return ''
     if (updaterStatus.state === 'up-to-date') return 'Up to date'
     if (updaterStatus.state === 'available') return `Update available: v${updaterStatus.version}`
+    if (updaterStatus.state === 'preparing') return 'Preparing update…'
     if (updaterStatus.state === 'downloading') return `Downloading… ${updaterStatus.percent}%`
     if (updaterStatus.state === 'ready') return `Ready to install: v${updaterStatus.version}`
     if (updaterStatus.state === 'error') return 'Update check failed'
@@ -1337,8 +1338,20 @@ function UpdatesSection({
   }
 
   const label = statusLabel()
-  const isAvailable = updaterStatus?.state === 'available' || updaterStatus?.state === 'ready'
+  const isAvailable =
+    updaterStatus?.state === 'available' ||
+    updaterStatus?.state === 'ready' ||
+    updaterStatus?.state === 'preparing' ||
+    updaterStatus?.state === 'downloading'
   const buttonDisabled = checking || !updaterEnabled
+
+  // Inline actions mirror the banner so the user can complete an update without
+  // leaving Settings. Download is only meaningful when auto-update is off (when
+  // it is on, the download starts automatically the moment a version is found).
+  const showDownload =
+    updaterEnabled && updaterStatus?.state === 'available' && !autoUpdateEnabled
+  const showRestart = updaterEnabled && updaterStatus?.state === 'ready'
+  const showActionRow = showDownload || showRestart
 
   return (
     <>
@@ -1387,6 +1400,26 @@ function UpdatesSection({
             Update token not set — rebuild with GH_UPDATE_TOKEN configured to enable updates.
           </div>
         )}
+        {showActionRow && (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            {showDownload && (
+              <button
+                onClick={() => window.ipc.send('updater:download')}
+                style={updateActionStyle}
+              >
+                Download
+              </button>
+            )}
+            {showRestart && (
+              <button
+                onClick={() => window.ipc.send('updater:install')}
+                style={updateActionStyle}
+              >
+                Restart to install
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <SettingRow
         title="Auto-update"
@@ -1403,6 +1436,16 @@ function UpdatesSection({
       </SettingRow>
     </>
   )
+}
+
+const updateActionStyle: React.CSSProperties = {
+  padding: '4px 12px',
+  backgroundColor: 'transparent',
+  border: '1px solid #4ade80',
+  borderRadius: 4,
+  color: '#4ade80',
+  fontSize: 12,
+  cursor: 'pointer',
 }
 
 function SettingRow({

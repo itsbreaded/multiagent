@@ -23,6 +23,8 @@ export function UpdateBanner(): JSX.Element | null {
   if (status.state === 'available') {
     message = `Update v${status.version} available`
     showDownload = !autoUpdateEnabled
+  } else if (status.state === 'preparing') {
+    message = `Preparing update v${status.version}…`
   } else if (status.state === 'downloading') {
     message = `Downloading update… ${status.percent}%`
   } else {
