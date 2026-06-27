@@ -1,10 +1,12 @@
 # 029 — Terminal Text Macros (Custom Key Bindings)
 
+Status: **DONE.** Custom macros can be created, edited, rebound, persisted, and deleted.
+
 ## Problem
 
 Spec 028 (Terminal Keybinding Customization) shipped customizable copy/paste and well-known PTY-signal bindings, but explicitly deferred the "custom text macro" feature. Users still cannot bind an arbitrary key combo to send a fixed literal string to the PTY (e.g. `Ctrl+G` → `git status\n`, `Ctrl+J` → `exit\n`).
 
-## Current Behavior
+## Pre-implementation Behavior
 
 - The terminal key-binding system (`src/renderer/src/utils/terminalKeyBindings.ts`) handles only the well-known bindings: `clipboard-copy`, `clipboard-paste`, and `pty-sequence` (interrupt, eof, suspend, etc.).
 - There is no `text-macro` action type, no custom-binding storage, and no UI to add one.
@@ -32,7 +34,9 @@ A `text-macro` binding intercepts its trigger key and writes a literal UTF-8 str
   - A **trigger** key combo, recorded via the same full-modifier recorder used by the well-known rows (supports Ctrl/Alt/Shift + key).
   - A **plain text** payload sent on trigger.
 - Custom entries get `id: 'custom-<uuid>'`.
-- Custom rows have a **delete** button. No reset button (no default to restore to).
+- Custom rows have **edit** and **delete** buttons. Editing uses an inline form and
+  atomically updates the label, trigger, and literal payload. No reset button is
+  shown because custom entries have no default to restore.
 - Custom bindings participate in clash detection identically to well-known bindings:
   - Duplicate trigger within terminal bindings → recording refused, inline error, nothing saved.
   - Trigger matching an app hotkey → yellow warning (allowed).
@@ -49,6 +53,7 @@ New store actions (re-add what 028 deferred):
 
 ```ts
 addCustomTerminalKeyBinding: (label: string, trigger: Trigger, text: string) => void
+updateCustomTerminalKeyBinding: (id: string, label: string, trigger: Trigger, text: string) => void
 removeTerminalKeyBinding: (id: string) => void
 ```
 
@@ -70,18 +75,27 @@ removeTerminalKeyBinding: (id: string) => void
   }
   ```
 - Re-add `addCustomTerminalKeyBinding` / `removeTerminalKeyBinding` to the settings store.
+- Add `updateCustomTerminalKeyBinding` for atomic edits. Store mutations reject
+  blank labels, unknown/non-custom IDs, and duplicate triggers even when called
+  outside the settings UI.
 
 ### Phase 2: UI
 
 - Add a **Custom Macros** sub-section below Terminal Signals in `TerminalBindingsSection`.
 - **Add custom macro** button → inline form: label input, trigger recorder, plain-text input. Confirm validates label non-empty + trigger set + not clashing.
-- Render custom rows: label, text preview (e.g. `JSON.stringify(text)`), trigger badge, delete button.
+- Render custom rows: label, bounded text preview (e.g. `JSON.stringify(text)`), trigger badge, edit button, and delete button.
+- **Edit** opens the same fields with current values. Saving validates conflicts
+  while excluding the macro's own trigger, then persists all fields together;
+  cancelling leaves the stored macro unchanged.
 
 ## Risks
 
 - **Literal text**: emphasize in the UI that the payload is sent verbatim. Multi-line payloads require real newlines (Enter in the field), not `\n`.
 - **Suppress interaction**: custom macros are not signal bindings, so they never generate suppress entries (that logic is `pty-sequence`-only). A custom macro on a vacated signal default key correctly overrides the suppress entry because explicit bindings are inserted in pass 1 of `buildTerminalKeyMap`, before suppress entries in pass 2.
 - **Meta on Windows**: the recorder captures `meta` but it is inert on Windows; do not present it as a viable modifier.
+- **Reset collisions**: a macro may intentionally occupy the vacated default of a
+  rebound signal. Individual and reset-all operations must refuse a reset that
+  would create a duplicate trigger, leaving both bindings unchanged.
 
 ## Verification
 
@@ -90,4 +104,6 @@ removeTerminalKeyBinding: (id: string) => void
 - [ ] Duplicate trigger refused with inline error; nothing saved.
 - [ ] Custom macro on a vacated signal default key (e.g. Ctrl+D after rebinding `eof`) sends the macro text (suppress overridden).
 - [ ] Custom rows can be deleted individually.
+- [ ] Existing custom rows can edit label, trigger, and payload; Cancel makes no changes.
+- [ ] Editing to a duplicate trigger is refused; editing without changing the trigger succeeds.
 - [ ] Custom bindings persist across reload; well-known defaults still merge correctly.

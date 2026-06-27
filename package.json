@@ -1,6 +1,6 @@
 {
   "name": "multiagent",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Multiagent",
   "main": "out/main/index.js",
   "scripts": {
@@ -13,7 +13,7 @@
     "dist:dir": "electron-vite build && electron-builder --win dir",
     "dist:nsis": "electron-vite build && electron-builder --win nsis",
     "release": "electron-vite build && electron-builder --win nsis --publish always",
-    "postinstall": "electron-rebuild -f -o better-sqlite3 && patch-package"
+    "postinstall": "node node_modules/electron/install.js && electron-rebuild -f -o better-sqlite3 && patch-package"
   },
   "keywords": [],
   "author": "Chris Haniszewski",

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useUpdaterStore } from '../../store/updater'
 import { usePanesStore } from '../../store/panes'
 import {
@@ -85,21 +85,15 @@ export function SettingsPanel(): JSX.Element {
 
   const autoUpdateEnabled = useSettingsStore((s) => s.autoUpdateEnabled)
   const setAutoUpdateEnabled = useSettingsStore((s) => s.setAutoUpdateEnabled)
-  const agentProviders = useSettingsStore((s) => s.agentProviders)
   const customizedCount = Object.keys(hotkeyOverrides).length
-  const activeProviderCount =
-    ((agentProviders.claude.enabled && agentProviders.claude.preset !== 'native') ? 1 : 0) +
-    ((agentProviders.codex.enabled && agentProviders.codex.preset !== 'native') ? 1 : 0) +
-    agentProviders.claude.extraEnvVars.filter((e) => e.enabled && e.key.trim()).length +
-    agentProviders.codex.extraEnvVars.filter((e) => e.enabled && e.key.trim()).length
-  const sections = useMemo(() => [
-    { id: 'appearance' as const,   label: 'Appearance',   count: 2 },
-    { id: 'hotkeys' as const,      label: 'Hotkeys',      count: customizedCount },
-    { id: 'terminal' as const,     label: 'Terminal',     count: 0 },
-    { id: 'mcp' as const,          label: 'MCP',          count: 0, experimental: true },
-    { id: 'providers' as const,    label: 'Providers',    count: activeProviderCount },
-    { id: 'updates' as const,      label: 'Updates',      count: 0 },
-  ], [customizedCount, activeProviderCount])
+  const sections = [
+    { id: 'appearance' as const,   label: 'Appearance' },
+    { id: 'hotkeys' as const,      label: 'Hotkeys' },
+    { id: 'terminal' as const,     label: 'Terminal' },
+    { id: 'mcp' as const,          label: 'MCP' },
+    { id: 'providers' as const,    label: 'Providers' },
+    { id: 'updates' as const,      label: 'Updates' },
+  ]
 
   // Listen for key recording
   useEffect(() => {
@@ -283,9 +277,6 @@ export function SettingsPanel(): JSX.Element {
                   setConflictLabel(null)
                 }}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
                   width: '100%',
                   padding: '7px 12px',
                   background: active ? '#242528' : 'none',
@@ -297,23 +288,7 @@ export function SettingsPanel(): JSX.Element {
                   color: active ? '#d4d4d4' : '#6b7280',
                 }}
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {section.label}
-                  {'experimental' in section && section.experimental && (
-                    <span style={{
-                      fontSize: 9,
-                      background: '#1a2a3a',
-                      border: '1px solid #2a3a5a',
-                      borderRadius: 3,
-                      color: '#60a0d0',
-                      padding: '0 4px',
-                      letterSpacing: '0.04em',
-                    }}>
-                      beta
-                    </span>
-                  )}
-                </span>
-                {section.count > 0 && <span style={{ color: '#4a4b4e', fontSize: 11 }}>{section.count}</span>}
+                {section.label}
               </button>
             )
           })}

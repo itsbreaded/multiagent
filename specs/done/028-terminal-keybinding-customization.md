@@ -54,7 +54,7 @@ type TerminalBindingAction =
 
 App hotkeys (`HotkeyId`) are **not** a terminal binding action type — the existing dispatch table inside `attachCustomKeyEventHandler` already handles that path and is unchanged.
 
-> **Out of scope:** custom text-macro bindings (`text-macro` action, arbitrary literal strings on custom key combos) are deferred to spec **029-terminal-text-macros.md**. This spec covers only the well-known clipboard and signal bindings.
+> **Out of scope:** custom text-macro bindings (`text-macro` action, arbitrary literal strings on custom key combos) are specified and completed separately in **029-terminal-text-macros.md**. This spec covers only the well-known clipboard and signal bindings.
 
 ### Well-known bindings
 
