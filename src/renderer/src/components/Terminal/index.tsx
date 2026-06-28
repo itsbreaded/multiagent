@@ -184,6 +184,11 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
           getCellSizePixels: true,
           getWinSizeChars: true,
         },
+        linkHandler: {
+          activate(_event, uri) {
+            window.ipc.invoke('shell:open-external', uri).catch(() => {})
+          },
+        },
       })
 
       const fitAddon = new FitAddon()

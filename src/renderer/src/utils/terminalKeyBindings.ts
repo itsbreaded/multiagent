@@ -55,7 +55,8 @@ const WELL_KNOWN: WellKnownDef[] = [
   { id: 'suspend',       label: 'Suspend process',    trigger: { code: 'KeyZ', ctrl: true,  shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x1a' } },
   { id: 'clear-screen',  label: 'Clear screen',       trigger: { code: 'KeyL', ctrl: true,  shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x0c' } },
   { id: 'kill-line',     label: 'Kill line',          trigger: { code: 'KeyU', ctrl: true,  shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x15' } },
-  { id: 'kill-word',     label: 'Kill word',          trigger: { code: 'Backspace', ctrl: true, shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x17' } },
+  { id: 'kill-word',         label: 'Kill word',         trigger: { code: 'Backspace', ctrl: true, shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x17' } },
+  { id: 'kill-word-forward', label: 'Kill word forward', trigger: { code: 'Delete',    ctrl: true, shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x1bd' } },
   { id: 'line-start',    label: 'Line start',         trigger: { code: 'KeyA', ctrl: true,  shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x01' } },
   { id: 'line-end',      label: 'Line end',           trigger: { code: 'KeyE', ctrl: true,  shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x05' } },
   { id: 'history-prev',  label: 'Previous history',   trigger: { code: 'KeyP', ctrl: true,  shift: false, alt: false, meta: false }, action: { type: 'pty-sequence', sequence: '\x10' } },
@@ -89,7 +90,7 @@ function cloneAction(a: TerminalBindingAction): TerminalBindingAction {
 // Used to (a) reset a binding, (b) decide whether a binding is "customized",
 // and (c) compute vacated-trigger suppress entries.
 const DEFAULT_DEF_BY_ID: Map<string, WellKnownDef> = new Map(WELL_KNOWN.map((d) => [d.id, d]))
-const APP_HANDLED_DEFAULT_IDS = new Set(['copy', 'paste', 'interrupt', 'kill-word'])
+const APP_HANDLED_DEFAULT_IDS = new Set(['copy', 'paste', 'interrupt', 'kill-word', 'kill-word-forward'])
 const OLD_KILL_WORD_TRIGGER: Trigger = { code: 'KeyW', ctrl: true, shift: false, alt: false, meta: false }
 
 export function defaultTrigger(id: string): Trigger | undefined {
