@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    # Windows runner matches the native-module/ConPTY target: better-sqlite3 and
+    # node-pty rebuild against the Windows ABI and the PowerShell shell-integration
+    # path is Windows-specific. Don't assume macOS/Linux CI exercises the real
+    # terminal stack.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      # Cache the Electron binary download and the electron-rebuild output so the
+      # native-rebuild cost (better-sqlite3 + node-pty) doesn't dominate CI time.
+      - name: Cache Electron + native modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron
+            ~\AppData\Local\electron-builder\Cache
+            node_modules
+          key: ${{ runner.os }}-node-24-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        # postinstall downloads Electron + rebuilds better-sqlite3 for the
+        # Electron ABI. Do NOT add --ignore-scripts.
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/

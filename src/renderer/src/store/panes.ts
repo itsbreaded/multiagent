@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneSplit, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
+import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
+import {
+  uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
+  updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
+} from '../../../shared/paneTree'
+import { replaceCwdPrefix } from '../../../shared/cwdRepair'
 import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
 import { PANE_DRAG_MIME } from '../utils/paneDrag'
@@ -36,196 +41,6 @@ function clearPendingRemoteFocus(): void {
   }
   // pendingFocusTarget is intentionally not cleared here — it should remain visible
   // until focus:target-changed arrives with the confirmed target, or the timeout fires.
-}
-
-function uuid(): string {
-  return crypto.randomUUID()
-}
-
-function makeLeaf(cwd: string, paneType: PaneType = 'shell', agentKind?: AgentKind): PaneLeaf {
-  return {
-    type: 'leaf',
-    id: uuid(),
-    paneType,
-    agentKind: paneType === 'agent' ? (agentKind ?? DEFAULT_AGENT_KIND) : undefined,
-    cwd
-  }
-}
-
-function makeSplit(
-  direction: SplitDirection,
-  first: PaneNode,
-  second: PaneNode
-): PaneSplit {
-  return { type: 'split', id: uuid(), direction, ratio: 0.5, first, second }
-}
-
-/** Walk the tree and return the leaf with the given id, or null */
-function findLeaf(node: PaneNode, id: string): PaneLeaf | null {
-  if (node.type === 'leaf') return node.id === id ? node : null
-  return findLeaf(node.first, id) ?? findLeaf(node.second, id)
-}
-
-/** Replace the node identified by `targetId` with `replacement` */
-function replaceNode(node: PaneNode, targetId: string, replacement: PaneNode): PaneNode {
-  if (node.id === targetId) return replacement
-  if (node.type === 'leaf') return node
-  return {
-    ...node,
-    first: replaceNode(node.first, targetId, replacement),
-    second: replaceNode(node.second, targetId, replacement),
-  }
-}
-
-/**
- * Remove the leaf with `removeId` from the tree.
- * Returns the updated subtree, or null if the entire subtree should be removed.
- */
-function removeLeaf(node: PaneNode, removeId: string): PaneNode | null {
-  if (node.type === 'leaf') {
-    return node.id === removeId ? null : node
-  }
-  // It's a split
-  if (node.first.id === removeId || (node.first.type === 'leaf' && node.first.id === removeId)) {
-    return node.second
-  }
-  if (node.second.id === removeId || (node.second.type === 'leaf' && node.second.id === removeId)) {
-    return node.first
-  }
-  const newFirst = removeLeaf(node.first, removeId)
-  const newSecond = removeLeaf(node.second, removeId)
-  if (newFirst === null) return newSecond
-  if (newSecond === null) return newFirst
-  return { ...node, first: newFirst, second: newSecond }
-}
-
-/**
- * Return a new tree with the two leaf nodes exchanged in their structural positions, in a
- * single traversal pass. The split structure — every split node's id, direction, and
- * ratio — is preserved byte-for-byte; only the two leaves trade slots. Each leaf keeps its
- * own id/data, so live PTYs follow their panes.
- */
-function swapLeaves(node: PaneNode, idA: string, idB: string, leafA: PaneLeaf, leafB: PaneLeaf): PaneNode {
-  if (node.type === 'leaf') {
-    if (node.id === idA) return leafB
-    if (node.id === idB) return leafA
-    return node
-  }
-  return {
-    ...node,
-    first: swapLeaves(node.first, idA, idB, leafA, leafB),
-    second: swapLeaves(node.second, idA, idB, leafA, leafB),
-  }
-}
-
-/** Update ratio on the split with the given id */
-function updateRatioInTree(node: PaneNode, splitId: string, ratio: number): PaneNode {
-  if (node.type === 'leaf') return node
-  if (node.id === splitId) return { ...node, ratio }
-  return {
-    ...node,
-    first: updateRatioInTree(node.first, splitId, ratio),
-    second: updateRatioInTree(node.second, splitId, ratio),
-  }
-}
-
-/** Update a field on the leaf with the given id */
-function updateLeaf(node: PaneNode, leafId: string, patch: Partial<PaneLeaf>): PaneNode {
-  if (node.type === 'leaf') {
-    return node.id === leafId ? { ...node, ...patch } : node
-  }
-  return {
-    ...node,
-    first: updateLeaf(node.first, leafId, patch),
-    second: updateLeaf(node.second, leafId, patch),
-  }
-}
-
-function updateCwdsInTree(node: PaneNode, mapping: CwdRepairMapping): { node: PaneNode; changed: boolean } {
-  if (node.type === 'leaf') {
-    const cwd = replaceCwdPrefix(node.cwd, mapping)
-    const sessionDetectionCwd = node.sessionDetectionCwd
-      ? replaceCwdPrefix(node.sessionDetectionCwd, mapping)
-      : undefined
-    const changed = cwd !== node.cwd || sessionDetectionCwd !== node.sessionDetectionCwd
-    return {
-      node: changed ? { ...node, cwd, sessionDetectionCwd } : node,
-      changed,
-    }
-  }
-  const first = updateCwdsInTree(node.first, mapping)
-  const second = updateCwdsInTree(node.second, mapping)
-  if (!first.changed && !second.changed) return { node, changed: false }
-  return { node: { ...node, first: first.node, second: second.node }, changed: true }
-}
-
-function replaceCwdPrefix(value: string, mapping: CwdRepairMapping): string {
-  const oldRoot = normalizeRepairPath(mapping.oldCwd)
-  const newRoot = normalizeRepairPath(mapping.newCwd)
-  const candidate = normalizeRepairPath(value)
-  const oldKey = comparableRepairPath(oldRoot)
-  const candidateKey = comparableRepairPath(candidate)
-  if (candidateKey === oldKey) return newRoot
-
-  const sep = repairSeparator(oldRoot)
-  const oldPrefix = oldKey.endsWith(sep) ? oldKey : `${oldKey}${sep}`
-  if (!candidateKey.startsWith(oldPrefix)) return value
-  const suffix = candidate.slice(oldRoot.length)
-  return joinRepairPath(newRoot, suffix)
-}
-
-function normalizeRepairPath(value: string): string {
-  const windows = isWindowsPath(value)
-  const sep = windows ? '\\' : '/'
-  const normalized = value.replace(/[\\/]+/g, sep)
-  const prefix = windows && /^[A-Za-z]:/.test(normalized) ? normalized.slice(0, 2) : normalized.startsWith(sep) ? sep : ''
-  const rest = prefix ? normalized.slice(prefix.length) : normalized
-  const parts: string[] = []
-  for (const part of rest.split(sep)) {
-    if (!part || part === '.') continue
-    if (part === '..' && parts.length > 0 && parts[parts.length - 1] !== '..') {
-      parts.pop()
-    } else if (part !== '..' || !prefix) {
-      parts.push(part)
-    }
-  }
-  const joined = parts.join(sep)
-  if (prefix === sep) return `${sep}${joined}`
-  return joined ? `${prefix}${prefix && prefix !== sep ? sep : ''}${joined}` : prefix || '.'
-}
-
-function comparableRepairPath(value: string): string {
-  return isWindowsPath(value) ? value.toLowerCase() : value
-}
-
-function repairSeparator(value: string): '\\' | '/' {
-  return isWindowsPath(value) ? '\\' : '/'
-}
-
-function isWindowsPath(value: string): boolean {
-  return /^[A-Za-z]:/.test(value) || value.includes('\\')
-}
-
-function joinRepairPath(root: string, suffix: string): string {
-  const sep = repairSeparator(root)
-  let cleanSuffix = suffix.replace(/[\\/]+/g, sep)
-  while (cleanSuffix.startsWith(sep)) cleanSuffix = cleanSuffix.slice(1)
-  if (!cleanSuffix) return root
-  return root.endsWith(sep) ? `${root}${cleanSuffix}` : `${root}${sep}${cleanSuffix}`
-}
-
-/** Collect all leaf ids in tree order */
-function collectLeafIds(node: PaneNode): string[] {
-  if (node.type === 'leaf') return [node.id]
-  return [...collectLeafIds(node.first), ...collectLeafIds(node.second)]
-}
-
-/** Find a leaf by its agent/session ID pair */
-function findLeafBySessionId(node: PaneNode, agentKind: AgentKind, sessionId: string): PaneLeaf | null {
-  if (node.type === 'leaf') {
-    return node.agentKind === agentKind && node.sessionId === sessionId ? node : null
-  }
-  return findLeafBySessionId(node.first, agentKind, sessionId) ?? findLeafBySessionId(node.second, agentKind, sessionId)
 }
 
 function agentIpcErrorMessage(err: unknown, fallback: string): string {
@@ -1391,7 +1206,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
           changed = true
           return { ...tab, defaultCwd }
         }
-        const root = updateCwdsInTree(tab.rootNode, mapping)
+        const root = updateCwdsInTree(tab.rootNode, mapping, replaceCwdPrefix)
         if (!defaultChanged && !root.changed) return tab
         changed = true
         return { ...tab, defaultCwd, rootNode: root.node }
