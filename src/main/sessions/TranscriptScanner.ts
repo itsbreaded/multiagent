@@ -4,6 +4,13 @@ import * as path from 'path'
 import * as os from 'os'
 import * as readline from 'readline'
 import type { AgentKind } from '../../shared/types'
+import {
+  extractText,
+  isRealUserMessage,
+  truncate,
+  parseRecord,
+  deriveProjectName,
+} from './transcriptParse'
 
 export interface ScannedSession {
   agentKind: AgentKind
@@ -22,63 +29,8 @@ export interface ScannedSession {
   mtimeMs: number
 }
 
-interface JsonlRecord {
-  type?: string
-  sessionId?: string
-  cwd?: string
-  gitBranch?: string
-  timestamp?: string
-  isMeta?: boolean
-  message?: {
-    role?: string
-    content?: string | Array<{ type: string; text?: string }>
-  }
-}
-
 // Cache: filePath:mtimeMs -> ScannedSession
 const scanCache = new Map<string, ScannedSession>()
-
-function extractText(record: JsonlRecord): string | null {
-  if (!record.message) return null
-  const content = record.message.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    const textItem = content.find((c) => c.type === 'text')
-    return textItem?.text ?? null
-  }
-  return null
-}
-
-function isRealUserMessage(record: JsonlRecord): boolean {
-  if (record.type !== 'user') return false
-  if (record.isMeta === true) return false
-  const text = extractText(record)
-  if (!text) return false
-  if (text.startsWith('<command') || text.startsWith('<local-command')) return false
-  return true
-}
-
-function truncate(text: string, maxLen = 200): string {
-  return text.length > maxLen ? text.slice(0, maxLen) : text
-}
-
-function parseRecord(line: string): JsonlRecord | null {
-  try {
-    return JSON.parse(line) as JsonlRecord
-  } catch {
-    return null
-  }
-}
-
-function deriveProjectName(cwd: string): string {
-  // Normalize separators
-  const normalized = cwd.replace(/\\/g, '/')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length >= 2) {
-    return parts.slice(-2).join('/')
-  }
-  return parts[parts.length - 1] ?? cwd
-}
 
 async function readLines(filePath: string, maxLines: number): Promise<string[]> {
   return new Promise((resolve, reject) => {

@@ -1,10 +1,13 @@
 import * as fs from 'fs'
-import * as path from 'path'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type { PtyManager } from '../pty/PtyManager'
 import type { AgentKind, AgentProviderSettings } from '../../shared/types'
 import { codexSessionsDir, listCodexSessionFilePaths, readCodexSessionMeta } from './CodexSessionScanner'
+import {
+  normalizePath,
+  selectCodexAssignments,
+} from './codexDetection'
 import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentMcpSettings } from '../mcp/McpInjector'
 import { defaultShell } from '../pty/shell'
 
@@ -15,7 +18,6 @@ export function setAgentProviderSettings(settings: AgentProviderSettings): void 
 }
 
 const SESSION_DETECTION_TIMEOUT_MS = 30 * 60_000
-const SESSION_DETECTION_GRACE_MS = 5_000
 const CODEX_SESSION_POLL_MS = 1_000
 
 interface PendingCodexDetection {
@@ -222,44 +224,16 @@ export class SessionSpawner {
   }
 
   private _assignCodexCandidates(pending: PendingCodexDetection[], candidates: CodexRolloutCandidate[]): void {
-    const cwdKeys = new Set<string>([
-      ...pending.map((p) => p.normalizedCwd),
-      ...candidates.map((c) => c.normalizedCwd),
-    ])
+    // Only consider pending that are still live (a prior claim in this poll may
+    // have removed one); the pure selector is otherwise partitioned by cwd.
+    const live = pending.filter((p) => this.pendingCodexDetections.has(p.ptyId))
+    const { claims, ambiguities } = selectCodexAssignments(live, candidates, this.claimedCodexFiles)
 
-    for (const cwdKey of cwdKeys) {
-      const cwdPending = pending.filter((p) => this.pendingCodexDetections.has(p.ptyId) && p.normalizedCwd === cwdKey)
-      if (cwdPending.length === 0) continue
-      const cwdCandidates = candidates.filter((c) =>
-        !this.claimedCodexFiles.has(c.filePath) &&
-        c.normalizedCwd === cwdKey &&
-        cwdPending.some((p) => codexCandidateMatchesPending(c, p))
-      )
-      if (cwdCandidates.length === 0) continue
-
-      if (cwdPending.length === 1) {
-        if (cwdPending[0].firstMessageAt === null) continue
-        if (cwdCandidates.length === 1 && codexCandidateMatchesPending(cwdCandidates[0], cwdPending[0])) {
-          this._claimCodexCandidate(cwdPending[0], cwdCandidates[0])
-        } else {
-          this._logCodexAmbiguity(cwdKey, cwdPending, cwdCandidates)
-        }
-        continue
-      }
-
-      const messagedPending = cwdPending.filter((p) => p.firstMessageAt !== null)
-      if (messagedPending.length !== 1 || cwdCandidates.length !== 1) {
-        this._logCodexAmbiguity(cwdKey, messagedPending, cwdCandidates)
-        continue
-      }
-
-      const target = messagedPending[0]
-      const candidate = cwdCandidates[0]
-      if (codexCandidateMatchesPending(candidate, target)) {
-        this._claimCodexCandidate(target, candidate)
-      } else {
-        this._logCodexAmbiguity(cwdKey, messagedPending, cwdCandidates)
-      }
+    for (const claim of claims) {
+      this._claimCodexCandidate(claim.pending, claim.candidate)
+    }
+    for (const ambiguity of ambiguities) {
+      this._logCodexAmbiguity(ambiguity.cwdKey, ambiguity.pending, ambiguity.candidates)
     }
   }
 
@@ -288,14 +262,6 @@ async function snapshotCodexSessionPaths(): Promise<Set<string>> {
   const sessionsDir = codexSessionsDir()
   fs.mkdirSync(sessionsDir, { recursive: true })
   return new Set(await listCodexSessionFilePaths())
-}
-
-function codexCandidateMatchesPending(candidate: CodexRolloutCandidate, pending: PendingCodexDetection): boolean {
-  if (pending.baselinePaths.has(candidate.filePath)) return false
-  if (candidate.normalizedCwd !== pending.normalizedCwd) return false
-  if (pending.resumedSessionId && candidate.sessionId === pending.resumedSessionId) return false
-  if (candidate.timestampMs > 0 && candidate.timestampMs < pending.startedAt - SESSION_DETECTION_GRACE_MS) return false
-  return true
 }
 
 function codexWriteContainsFirstMessageSubmit(pending: PendingCodexDetection, data: string): boolean {
@@ -502,10 +468,5 @@ function tomlLit(value: string): string {
 
 function tomlLitArray(items: string[]): string {
   return `[${items.map(tomlLit).join(', ')}]`
-}
-
-function normalizePath(value: string): string {
-  const normalized = path.normalize(value)
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 

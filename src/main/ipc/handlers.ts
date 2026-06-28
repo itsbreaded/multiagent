@@ -10,6 +10,7 @@ import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner, setAgentProviderSettings } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import type { PtyReadyEvent } from '../pty/PtyManager'
+import { parseOsc7, parseShellIntegrationCwd } from '../pty/shellIntegration'
 import { openExternalUrl } from '../external'
 import { getRecentDirs, addRecentDir } from '../recentDirs'
 import { mcpManager } from '../mcp/McpManager'
@@ -45,34 +46,6 @@ interface GitBranchCacheEntry {
 }
 
 const gitBranchCache = new Map<string, GitBranchCacheEntry>()
-
-/**
- * Parse an OSC 7 CWD escape sequence from PTY output.
- * Format: ESC ] 7 ; file://[host]/path BEL  (or ST terminator)
- */
-function parseOsc7(data: string): string | null {
-  const match = data.match(/\x1b\]7;file:\/\/[^\x07\x1b/]*(\/?[^\x07\x1b]*)(?:\x07|\x1b\\)/)
-  if (!match || !match[1]) return null
-  let cwd = match[1]
-  try { cwd = decodeURIComponent(cwd) } catch { /* use raw value */ }
-  if (process.platform === 'win32') {
-    if (/^\/[A-Za-z]:/.test(cwd)) cwd = cwd.slice(1)  // /C:/... → C:/...
-    cwd = cwd.replace(/\//g, '\\')
-  }
-  return cwd || null
-}
-
-function parseShellIntegrationCwd(data: string): string | null {
-  const match = data.match(/\x1b\]633;P;Cwd=([^\x07\x1b]*)(?:\x07|\x1b\\)/)
-  if (!match || !match[1]) return null
-  return unescapeShellIntegrationValue(match[1])
-}
-
-function unescapeShellIntegrationValue(value: string): string {
-  return value.replace(/\\x([0-9a-fA-F]{2})/g, (_match, hex: string) => {
-    return String.fromCharCode(Number.parseInt(hex, 16))
-  })
-}
 
 export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   cleanup: () => void

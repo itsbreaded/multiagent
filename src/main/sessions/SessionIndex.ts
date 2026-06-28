@@ -1,10 +1,10 @@
 import Database from 'better-sqlite3'
 import * as path from 'path'
 import * as fs from 'fs'
-import * as os from 'os'
 import { app } from 'electron'
 import type { AgentKind, Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
+import { claudeProjectDirForCwd, claudeTranscriptPathForCwd } from './claudePaths'
 
 const DB_PATH = path.join(app.getPath('userData'), 'session-index.db')
 
@@ -331,18 +331,6 @@ export class SessionIndex {
   close(): void {
     this.db.close()
   }
-}
-
-function encodeClaudeProjectDir(cwd: string): string {
-  return cwd.replace(/\\/g, '-').replace(/\//g, '-').replace(/:/g, '-')
-}
-
-function claudeProjectDirForCwd(cwd: string): string {
-  return path.join(os.homedir(), '.claude', 'projects', encodeClaudeProjectDir(cwd))
-}
-
-function claudeTranscriptPathForCwd(sessionId: string, cwd: string): string {
-  return path.join(claudeProjectDirForCwd(cwd), `${sessionId}.jsonl`)
 }
 
 function existingClaudeTranscriptPathForCwd(sessionId: string, cwd: string): string | null {
