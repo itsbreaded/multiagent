@@ -37,4 +37,3 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Done. Release %TAG% published to GitHub.
-timeout /t 3 /nobreak >nul
