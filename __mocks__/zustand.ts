@@ -16,7 +16,13 @@ import { afterEach, vi } from 'vitest'
 
 const actual = await vi.importActual<typeof import('zustand')>('zustand')
 
-const resets: Array<() => void> = []
+// One reset fn per store, keyed by store identity so a module-level singleton
+// (created once at import) is registered exactly once. We do NOT clear this set
+// after each test: clearing would drop the singleton's reset after the first
+// test, and state would leak across every subsequent test. Resetting a store
+// that a test created and discarded is harmless (it just mutates an orphan), so
+// never clearing is safe for both per-test and singleton stores.
+const resets = new Set<() => void>()
 
 interface Resettable {
   setState: (state: unknown, replace?: boolean) => void
@@ -25,7 +31,10 @@ interface Resettable {
 
 function withReset<T extends Resettable>(created: T): T {
   const initial = created.getState()
-  resets.push(() => created.setState(initial, true))
+  const reset = (): void => {
+    created.setState(initial, true)
+  }
+  resets.add(reset)
   return created
 }
 
@@ -37,5 +46,4 @@ export const createStore = ((store: unknown) =>
 
 afterEach(() => {
   for (const reset of resets) reset()
-  resets.length = 0
 })
