@@ -143,7 +143,7 @@ export class PtyManager extends EventEmitter {
   createDeferred(
     cwd: string,
     cmd: string[],
-    extraEnv?: Record<string, string>,
+    extraEnv?: Record<string, string | undefined>,
     initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
     allowCwdFallback = false,
     deferSpawn = false,

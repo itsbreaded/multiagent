@@ -3,7 +3,7 @@
 ## Progress (as of 2026-06-28)
 
 **Done:**
-- Phase 0 — Vitest 4 harness (`vitest.config.ts`, two projects), `tests/setup.renderer.ts`, repo-root `__mocks__/zustand.ts`, `test`/`test:watch`/`test:coverage` scripts, tsconfigs include test files, `.github/workflows/ci.yml` (Windows runner), `.gitignore` covers `coverage/`. 238 tests pass; `npm run typecheck` clean; `npm run build` clean.
+- Phase 0 — Vitest 4 harness (`vitest.config.ts`, two projects), `tests/setup.renderer.ts`, repo-root `__mocks__/zustand.ts`, `test`/`test:watch`/`test:coverage` scripts, tsconfigs include test files, `.github/workflows/ci.yml` (Windows runner), `.gitignore` covers `coverage/`. 239 tests pass; `npm run typecheck` clean; `npm run build` clean.
 - Phase 1 Wave 1A — tests for `tabLabels`, `hotkeys`, `terminalKeyBindings`, `paneDrag`, `agents`, `git`, `time`, `resolveBackend`.
 - Phase 1 Wave 1B (partial) — behavior-preserving extractions: `src/shared/paneTree.ts` (tree ops out of `panes.ts`) + characterization tests; `src/shared/cwdRepair.ts` (renderer cwd-repair out of `panes.ts`) + separator-coverage tests.
 - Phase 1 Wave 1C — `buildEnv` extracted to `src/main/pty/buildEnv.ts` + PATH/Claude-flag guard test. Ratchet verified: reintroducing the PATH prepend turns the guard red.

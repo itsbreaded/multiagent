@@ -69,6 +69,10 @@ export interface CodexProviderConfig {
 export interface AgentProviderSettings {
   claude: ClaudeProviderConfig
   codex: CodexProviderConfig
+  // Per-preset drafts keep provider-specific credentials and overrides intact
+  // while `claude` / `codex` remain the active runtime configurations.
+  claudePresets?: Partial<Record<ClaudeProviderPreset, ClaudeProviderConfig>>
+  codexPresets?: Partial<Record<CodexProviderPreset, CodexProviderConfig>>
 }
 
 export interface McpStatus {

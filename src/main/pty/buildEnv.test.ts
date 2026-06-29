@@ -79,16 +79,29 @@ describe('buildEnv', () => {
       expect(env.MY_TOOL_VAR).toBe('yes')
     })
 
-    it('removes an empty-string ANTHROPIC_API_KEY (alternative-provider routing)', () => {
+    it('removes an inherited key when the override is undefined', () => {
       process.env.ANTHROPIC_API_KEY = 'native-key'
       expect(buildEnv().ANTHROPIC_API_KEY).toBe('native-key')
-      process.env.ANTHROPIC_API_KEY = ''
-      expect(buildEnv().ANTHROPIC_API_KEY).toBeUndefined()
+      expect(buildEnv({ ANTHROPIC_API_KEY: undefined }).ANTHROPIC_API_KEY).toBeUndefined()
     })
 
     it('keeps a non-empty ANTHROPIC_API_KEY supplied via extra vars', () => {
       const env = buildEnv({ ANTHROPIC_API_KEY: 'provider-token' })
       expect(env.ANTHROPIC_API_KEY).toBe('provider-token')
+    })
+
+    it('replaces differently-cased inherited keys on Windows', () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      try {
+        process.env.Anthropic_Api_Key = 'inherited-token'
+        const env = buildEnv({ ANTHROPIC_API_KEY: 'provider-token' })
+        expect(env.ANTHROPIC_API_KEY).toBe('provider-token')
+        expect(env.Anthropic_Api_Key).toBeUndefined()
+      } finally {
+        delete process.env.Anthropic_Api_Key
+        Object.defineProperty(process, 'platform', platform)
+      }
     })
   })
 })

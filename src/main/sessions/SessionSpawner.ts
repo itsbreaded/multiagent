@@ -326,36 +326,108 @@ function agentLaunchCommand(command: string): string[] {
   return [defaultShell(), '-lc', command]
 }
 
-function agentEnv(agentKind: AgentKind): Record<string, string> {
-  const vars: Record<string, string> = {}
+const CLAUDE_PROVIDER_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+  'CLAUDE_CODE_EFFORT_LEVEL',
+] as const
+
+// Raw provider overrides must not be able to make another agent unlaunchable
+// merely because that provider card is disabled or scoped to a different agent.
+const REQUIRED_PROCESS_ENV_KEYS = new Set([
+  'path',
+  'pathext',
+  'systemroot',
+  'windir',
+  'comspec',
+  'home',
+  'userprofile',
+  'temp',
+  'tmp',
+  'shell',
+])
+
+function removeExtraEnvKeys(
+  vars: Record<string, string | undefined>,
+  entries: AgentProviderSettings['claude']['extraEnvVars'] | undefined,
+): void {
+  for (const entry of entries ?? []) {
+    const key = entry.key.trim()
+    if (key && !REQUIRED_PROCESS_ENV_KEYS.has(key.toLowerCase())) vars[key] = undefined
+  }
+}
+
+function applyExtraEnv(
+  vars: Record<string, string | undefined>,
+  entries: AgentProviderSettings['claude']['extraEnvVars'],
+): void {
+  for (const entry of entries) {
+    const key = entry.key.trim()
+    if (key) vars[key] = entry.enabled ? entry.value : undefined
+  }
+}
+
+function agentEnv(agentKind: AgentKind): Record<string, string | undefined> {
+  const vars: Record<string, string | undefined> = {}
+  const claudeCfg = _agentProviderSettings?.claude
+  const codexCfg = _agentProviderSettings?.codex
 
   if (agentKind === 'claude') {
     vars['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1'
-    const cfg = _agentProviderSettings?.claude
-    if (cfg?.enabled && cfg.preset !== 'native') {
-      if (cfg.baseUrl)       vars['ANTHROPIC_BASE_URL'] = cfg.baseUrl
-      if (cfg.authToken)     vars['ANTHROPIC_AUTH_TOKEN'] = cfg.authToken
-      if (cfg.model)         vars['ANTHROPIC_MODEL'] = cfg.model
-      if (cfg.opusModel)     vars['ANTHROPIC_DEFAULT_OPUS_MODEL'] = cfg.opusModel
-      if (cfg.sonnetModel)   vars['ANTHROPIC_DEFAULT_SONNET_MODEL'] = cfg.sonnetModel
-      if (cfg.haikuModel)    vars['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = cfg.haikuModel
-      if (cfg.subagentModel) vars['CLAUDE_CODE_SUBAGENT_MODEL'] = cfg.subagentModel
-      if (cfg.effortLevel)   vars['CLAUDE_CODE_EFFORT_LEVEL'] = cfg.effortLevel
-      // Signal buildEnv to remove the native ANTHROPIC_API_KEY when using an alternative provider
-      vars['ANTHROPIC_API_KEY'] = ''
-    }
-    for (const e of cfg?.extraEnvVars ?? []) {
-      if (e.enabled && e.key.trim()) vars[e.key.trim()] = e.value
+
+    // Provider settings and raw overrides are scoped to their agent. Never let
+    // Codex credentials inherited from the app process reach a Claude pane.
+    vars['OPENAI_API_KEY'] = undefined
+    if (codexCfg?.envKey.trim()) vars[codexCfg.envKey.trim()] = undefined
+    removeExtraEnvKeys(vars, codexCfg?.extraEnvVars)
+
+    if (!claudeCfg?.enabled) {
+      for (const key of CLAUDE_PROVIDER_ENV_KEYS) vars[key] = undefined
+      removeExtraEnvKeys(vars, claudeCfg?.extraEnvVars)
+    } else {
+      if (claudeCfg.preset !== 'native') {
+        // Clear inherited routing/auth first so blank profile fields cannot fall
+        // back to host credentials or endpoints.
+        for (const key of CLAUDE_PROVIDER_ENV_KEYS) vars[key] = undefined
+        if (claudeCfg.baseUrl)       vars['ANTHROPIC_BASE_URL'] = claudeCfg.baseUrl
+        if (claudeCfg.authToken)     vars['ANTHROPIC_AUTH_TOKEN'] = claudeCfg.authToken
+        if (claudeCfg.model)         vars['ANTHROPIC_MODEL'] = claudeCfg.model
+        if (claudeCfg.opusModel)     vars['ANTHROPIC_DEFAULT_OPUS_MODEL'] = claudeCfg.opusModel
+        if (claudeCfg.sonnetModel)   vars['ANTHROPIC_DEFAULT_SONNET_MODEL'] = claudeCfg.sonnetModel
+        if (claudeCfg.haikuModel)    vars['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = claudeCfg.haikuModel
+        if (claudeCfg.subagentModel) vars['CLAUDE_CODE_SUBAGENT_MODEL'] = claudeCfg.subagentModel
+        if (claudeCfg.effortLevel)   vars['CLAUDE_CODE_EFFORT_LEVEL'] = claudeCfg.effortLevel
+      }
+      applyExtraEnv(vars, claudeCfg.extraEnvVars)
     }
   }
 
   if (agentKind === 'codex') {
-    const cfg = _agentProviderSettings?.codex
-    if (cfg?.enabled && cfg.preset !== 'native') {
-      if (cfg.envKey.trim() && cfg.apiKey) vars[cfg.envKey.trim()] = cfg.apiKey
-    }
-    for (const e of cfg?.extraEnvVars ?? []) {
-      if (e.enabled && e.key.trim()) vars[e.key.trim()] = e.value
+    // Never pass Claude credentials or raw overrides to a Codex pane.
+    for (const key of CLAUDE_PROVIDER_ENV_KEYS) vars[key] = undefined
+    removeExtraEnvKeys(vars, claudeCfg?.extraEnvVars)
+
+    if (!codexCfg?.enabled) {
+      vars['OPENAI_API_KEY'] = undefined
+      if (codexCfg?.envKey.trim()) vars[codexCfg.envKey.trim()] = undefined
+      removeExtraEnvKeys(vars, codexCfg?.extraEnvVars)
+    } else {
+      if (codexCfg.preset !== 'native') {
+        // Do not let an empty alternate-provider key fall back to an inherited
+        // native or custom credential.
+        vars['OPENAI_API_KEY'] = undefined
+        if (codexCfg.envKey.trim()) {
+          vars[codexCfg.envKey.trim()] = undefined
+          if (codexCfg.apiKey) vars[codexCfg.envKey.trim()] = codexCfg.apiKey
+        }
+      }
+      applyExtraEnv(vars, codexCfg.extraEnvVars)
     }
   }
 
