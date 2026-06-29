@@ -142,7 +142,7 @@ export class PtyManager extends EventEmitter {
   createDeferred(
     cwd: string,
     cmd: string[],
-    extraEnv?: Record<string, string>,
+    extraEnv?: Record<string, string | undefined>,
     initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 },
     allowCwdFallback = false,
     deferSpawn = false,
@@ -301,7 +301,7 @@ export class PtyManager extends EventEmitter {
 }
 
 function buildEnv(
-  extraVars?: Record<string, string>,
+  extraVars?: Record<string, string | undefined>,
 ): Record<string, string> {
   const env = { ...process.env } as Record<string, string>
 
@@ -332,11 +332,18 @@ function buildEnv(
   // like `git pull -> Already up to date.`. This was the real root cause of the
   // whole "no-scroll drop" investigation (see spec 013); do not reintroduce it.
 
-  if (extraVars) Object.assign(env, extraVars)
-
-  // Remove empty-string API key: agentEnv sets it to '' when routing to an
-  // alternative provider so the native key does not shadow the provider token.
-  if (env['ANTHROPIC_API_KEY'] === '') delete env['ANTHROPIC_API_KEY']
+  // Undefined values explicitly remove inherited variables. Agent provider
+  // profiles use this to prevent disabled credentials from reaching the PTY.
+  for (const [key, value] of Object.entries(extraVars ?? {})) {
+    // Windows treats environment names case-insensitively. Remove every casing
+    // before deleting or assigning so `Anthropic_Api_Key` cannot bypass a scrub
+    // (and assignments cannot create ambiguous duplicate names).
+    const matchingKeys = process.platform === 'win32'
+      ? Object.keys(env).filter((existing) => existing.toLowerCase() === key.toLowerCase())
+      : [key]
+    for (const matchingKey of matchingKeys) delete env[matchingKey]
+    if (value !== undefined) env[key] = value
+  }
 
   return env
 }
