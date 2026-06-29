@@ -17,6 +17,7 @@ import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
 import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, PaneTransferPayload, PaneSplitTransferPayload, PaneSwapTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
+import { replaceCwdPrefix } from '../../shared/cwdRepair'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 
 let vsCodeAvailable = false
@@ -1193,26 +1194,6 @@ function rewritePathProperty(record: Record<string, unknown>, key: string, mappi
   if (rewritten === value) return 0
   record[key] = rewritten
   return 1
-}
-
-function replaceCwdPrefix(value: string, mapping: CwdRepairMapping): string {
-  const oldRoot = path.resolve(mapping.oldCwd)
-  const newRoot = path.resolve(mapping.newCwd)
-  const candidate = path.resolve(value)
-  const oldKey = comparablePath(oldRoot)
-  const candidateKey = comparablePath(candidate)
-  if (candidateKey === oldKey) return newRoot
-
-  const sep = path.sep
-  if (!candidateKey.startsWith(oldKey.endsWith(sep) ? oldKey : `${oldKey}${sep}`)) return value
-  let suffix = candidate.slice(oldRoot.length)
-  while (suffix.startsWith(path.sep) || suffix.startsWith('/') || suffix.startsWith('\\')) suffix = suffix.slice(1)
-  return path.join(newRoot, suffix)
-}
-
-function comparablePath(value: string): string {
-  const normalized = path.normalize(value)
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
 function writeJsonAtomic(filePath: string, value: unknown): void {

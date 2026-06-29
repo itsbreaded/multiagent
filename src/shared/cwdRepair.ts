@@ -1,16 +1,14 @@
 // Cwd-repair path mapping — the prefix-aware, segment-boundary rewrite used to
 // repair stored layouts/sessions when a project directory moves or is copied.
 //
-// This is the RENDERER semantics (string-based, platform-agnostic): it handles
+// This is the app-wide semantics (string-based, platform-agnostic): it handles
 // `\`-style, `/`-style, and mixed `[\\/]+` paths plus drive prefixes (C:)
 // regardless of host OS. It is the correct semantics for stored paths that may
 // have been written on a different OS than the one reading them.
 //
-// NOTE: a host-bound copy of this logic still lives in src/main/ipc/handlers.ts
-// (Node path.* + process.platform). Consolidating that call site onto this
-// module is a deliberate behavioral reconciliation — it must be gated by
-// golden-master characterization tests of BOTH copies first. Until then, this
-// module is the canonical renderer-side implementation and the one under test.
+// The former host-bound main-process behavior is preserved as a golden master
+// in src/main/ipc/cwdRepairLegacy.test.ts. Main and renderer now share this
+// implementation so persisted paths are repaired consistently.
 
 import type { CwdRepairMapping } from './types'
 
