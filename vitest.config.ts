@@ -29,9 +29,32 @@ export default defineConfig({
         'src/**/types.ts',
         'src/**/*.{test,spec}.{ts,tsx}',
       ],
-      // Start at zero — the threshold exists only as the ratchet mechanism.
-      // Raise it per-PR as high-value directories gain coverage; do not chase a number.
-      thresholds: { lines: 0, functions: 0, branches: 0, statements: 0 },
+      // Keep the global floor at zero for legacy integration-only surfaces,
+      // with measured nonzero ratchets on pure and directly tested seams.
+      thresholds: {
+        lines: 0,
+        functions: 0,
+        branches: 0,
+        statements: 0,
+        'src/renderer/src/utils/**': {
+          lines: 77,
+          functions: 78,
+          branches: 72,
+          statements: 73,
+        },
+        'src/shared/**': {
+          lines: 97,
+          functions: 100,
+          branches: 84,
+          statements: 93,
+        },
+        'src/main/{pty/buildEnv.ts,pty/shellIntegration.ts,sessions/{claudePaths,codexDetection,deepSearch,transcriptParse}.ts}': {
+          lines: 90,
+          functions: 100,
+          branches: 75,
+          statements: 90,
+        },
+      },
     },
     projects: [
       {

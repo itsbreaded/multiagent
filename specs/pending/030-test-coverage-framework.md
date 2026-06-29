@@ -3,7 +3,7 @@
 ## Progress (as of 2026-06-28)
 
 **Done:**
-- Phase 0 — Vitest 4 harness (`vitest.config.ts`, two projects), `tests/setup.renderer.ts`, repo-root `__mocks__/zustand.ts`, `test`/`test:watch`/`test:coverage` scripts, tsconfigs include test files, `.github/workflows/ci.yml` (Windows runner), `.gitignore` covers `coverage/`. 189 tests pass; `npm run typecheck` clean; `npm run build` clean.
+- Phase 0 — Vitest 4 harness (`vitest.config.ts`, two projects), `tests/setup.renderer.ts`, repo-root `__mocks__/zustand.ts`, `test`/`test:watch`/`test:coverage` scripts, tsconfigs include test files, `.github/workflows/ci.yml` (Windows runner), `.gitignore` covers `coverage/`. 238 tests pass; `npm run typecheck` clean; `npm run build` clean.
 - Phase 1 Wave 1A — tests for `tabLabels`, `hotkeys`, `terminalKeyBindings`, `paneDrag`, `agents`, `git`, `time`, `resolveBackend`.
 - Phase 1 Wave 1B (partial) — behavior-preserving extractions: `src/shared/paneTree.ts` (tree ops out of `panes.ts`) + characterization tests; `src/shared/cwdRepair.ts` (renderer cwd-repair out of `panes.ts`) + separator-coverage tests.
 - Phase 1 Wave 1C — `buildEnv` extracted to `src/main/pty/buildEnv.ts` + PATH/Claude-flag guard test. Ratchet verified: reintroducing the PATH prepend turns the guard red.
@@ -13,13 +13,13 @@
   - Codex session-detection matching → `src/main/sessions/codexDetection.ts` (`normalizePath`, `codexCandidateMatchesPending`, `selectCodexAssignments`) extracted out of `SessionSpawner.ts`; `_assignCodexCandidates` now delegates to the pure selector. Test covers cwd/time-grace/baseline/resume exclusion and the **ambiguity-is-ignored** invariant (spec 003/008).
   - Deep-search helpers → `src/main/sessions/deepSearch.ts` (`buildMatcher`, `snippetAround`, `truncate`, `extractClaudeText`/`extractCodexText`, `scoreResult`, caps + session-id regex) extracted out of `DeepSearcher.ts`; test covers matcher modes, snippet window, role/recency ranking (`vi.setSystemTime`), caps.
   - Claude transcript path encoding → `src/main/sessions/claudePaths.ts` (`encodeClaudeProjectDir`, `claudeProjectDirForCwd`, `claudeTranscriptPathForCwd`) extracted out of `SessionIndex.ts`; test covers the separators+colons→dashes encoding used during cwd repair.
+- Phase 2 — real-store transition suites cover `usePanesStore` focus atomicity, cwd/zoom/tree edits, cross-window ack booleans, and cwd repair; `useSessionsStore` loading, exact-project selection, IPC/local search, composite-identity deletion, and cwd-repair reconciliation. React Testing Library covers `UpdateBanner`, `CommandPalette` filtering/enabled gates, `PaneHeader` actions, `TabBar` overflow modes, and `SessionBrowser` summary/deep rendering.
+- Phase 4 — nonzero scoped coverage ratchets now protect `src/renderer/src/utils/**`, `src/shared/**`, and the extracted pure main-process modules. `CLAUDE.md` documents the testing workflow, scoped ratchets, and boy-scout rule.
 
 **Remaining (do not delete this spec until these land):**
 - Wave 1B cwd-repair **main-side reconciliation**: the host-bound copy in `src/main/ipc/handlers.ts` must consolidate onto `src/shared/cwdRepair.ts` — its own PR, gated by golden-master characterization tests of both pre-existing copies (a deliberate behavior change, NOT a no-op extraction).
 - Wave 1B **SessionIndex real-DB FTS test** (deferred): `better-sqlite3` is rebuilt for the Electron ABI (`NODE_MODULE_VERSION 146`) by postinstall and **will not load under plain Node** (`137`) — the `main` vitest project runs under Node, so a real-DB `SessionIndex` integration test is currently impossible without rebuilding better-sqlite3 for Node (which would break the Electron runtime). The pure path-encoding helpers are extracted and tested (`claudePaths.ts`); the FTS5 `MATCH` query itself is a single literal with no query-builder to factor out. To land a real FTS test, either (a) run the SessionIndex test under Electron via Playwright (Phase 3), or (b) add a separate Node-ABI better-sqlite3 build for the test process. Documented here so this isn't mistaken for an oversight.
-- Phase 2 — Zustand store transition tests (`focusPaneInTab` atomicity, etc.) and React Testing Library component tests. The auto-reset mock infra is already in place.
 - Phase 3 — Playwright-Electron E2E.
-- Phase 4 — ratchet the coverage threshold above 0 on `src/renderer/src/utils/**` + `src/shared/**` + the extracted modules once Phase 2 lands.
 
 ## Problem
 

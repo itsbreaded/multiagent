@@ -70,9 +70,11 @@ npm run typecheck   # tsc -b --noEmit — also type-checks test files
 
 **Determinism.** Tests touching recency, time-grace windows, uuids, or file mtimes must control those inputs (`vi.setSystemTime`, pinned timestamps via `fs.utimesSync`, structural assertions that ignore ids). `process.platform` is machine-dependent — pin it in tests that branch on `win32` and cover both branches; CI runs `windows-latest`.
 
-**Boy-scout rule.** Any file a PR touches should gain or extend a test, and new features ship with tests. This is the durable mechanism that grows coverage without a dedicated sprint — do not chase a percentage. The coverage threshold in `vitest.config.ts` starts at 0 and exists only as the ratchet; raise it per-PR on high-value directories as they gain coverage.
+**Boy-scout rule.** Any file a PR touches should gain or extend a test, and new features ship with tests. This is the durable mechanism that grows coverage without a dedicated sprint — do not chase a percentage. The global threshold remains 0 for legacy integration-only surfaces; raise the nonzero scoped ratchets in `vitest.config.ts` as their measured baselines improve.
 
-**Not yet covered (follow-ups, tracked in spec 030):** Playwright-Electron E2E for multi-process flows the unit tests can't reach (cold-start layout restore, `pty:ready`/`deferSpawn`, cross-window `tab:absorb`); the no-flow-control PTY contract and cross-window transfer-ack semantics are protected only by review until E2E exists. The host-bound cwd-repair copy in `src/main/ipc/handlers.ts` still needs consolidating onto the shared `cwdRepair.ts` — a deliberate behavioral reconciliation that must be gated by golden-master characterization tests of both copies first. Codex session-detection candidate matching (`CodexSessionScanner`) still needs an extract-and-test pass.
+**Not yet covered (follow-ups, tracked in spec 030):** Playwright-Electron E2E for multi-process flows the unit tests can't reach (cold-start layout restore, `pty:ready`/`deferSpawn`, cross-window `tab:absorb`); the no-flow-control PTY contract and cross-window transfer-ack semantics are protected only by review until E2E exists. The host-bound cwd-repair copy in `src/main/ipc/handlers.ts` still needs consolidating onto the shared `cwdRepair.ts` — a deliberate behavioral reconciliation that must be gated by golden-master characterization tests of both copies first.
+
+**Coverage ratchets.** The global floor remains 0 while legacy Electron surfaces require integration tests. Nonzero scoped thresholds protect renderer utilities, shared helpers, and the extracted pure main-process modules; raise those floors when their measured baseline improves.
 
 ## Architecture
 
