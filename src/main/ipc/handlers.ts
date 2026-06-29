@@ -624,8 +624,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ipcMain.handle('tab:tear-off', async (e, tabJson: string, ptyIds: string[], screenX: number, screenY: number) => {
     const fromWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     const tab = JSON.parse(tabJson) as Tab
-    const newWin = windowManager.createDetachedWindow(fromWin, screenX, screenY)
-    windowManager.pendingInitData.set(newWin.id, { mode: 'detached', tab, ptyIds })
+    const newWin = windowManager.createDetachedWindow(
+      fromWin,
+      screenX,
+      screenY,
+      { mode: 'detached', tab, ptyIds }
+    )
     windowManager.prepareDetachedTab(newWin.id, [tab.id])
     registerWindowHandlers(newWin)
     return { windowId: newWin.id }

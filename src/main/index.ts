@@ -132,10 +132,13 @@ async function createWindow(): Promise<void> {
   performShutdownSaveFn = performShutdownSave
 
   // Configure WindowManager so it can create detached windows with the correct preload/renderer.
+  const rendererUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
+    ? process.env['ELECTRON_RENDERER_URL']
+    : null
   windowManager.configure(
     join(__dirname, '../preload/index.js'),
-    is.dev && process.env['ELECTRON_RENDERER_URL'] ? process.env['ELECTRON_RENDERER_URL'] : null,
-    !is.dev ? join(__dirname, '../renderer/index.html') : null,
+    rendererUrl,
+    rendererUrl ? null : join(__dirname, '../renderer/index.html'),
     registerWindowHandlers
   )
   windowManager.startMoveTracking(mainWindow)

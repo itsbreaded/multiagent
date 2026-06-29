@@ -253,7 +253,12 @@ class WindowManager {
     return null
   }
 
-  createDetachedWindow(fromWin: BrowserWindow, screenX: number, screenY: number): BrowserWindow {
+  createDetachedWindow(
+    fromWin: BrowserWindow,
+    screenX: number,
+    screenY: number,
+    initData?: WindowInitData
+  ): BrowserWindow {
     if (!this.preloadPath) throw new Error('WindowManager not configured — call configure() first')
 
     const fromBounds = fromWin.getBounds()
@@ -284,6 +289,10 @@ class WindowManager {
 
     this.register(win)
     this.detachedWindowIds.add(win.id)
+    // Register init data before loadFile/loadURL starts. A fast local file load
+    // can invoke window:get-init-data immediately; setting this afterward races
+    // the renderer and incorrectly initializes a detached window as primary.
+    if (initData) this.pendingInitData.set(win.id, initData)
     this.startMoveTracking(win)
 
     if (this.onWindowCreated) {
