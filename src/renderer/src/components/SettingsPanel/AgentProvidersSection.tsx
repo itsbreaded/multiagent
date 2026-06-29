@@ -40,6 +40,38 @@ const CODEX_PRESET_DEFAULTS: Record<CodexProviderPreset, Partial<CodexProviderCo
   custom: {},
 }
 
+function newClaudePreset(preset: ClaudeProviderPreset, enabled: boolean): ClaudeProviderConfig {
+  return {
+    enabled,
+    preset,
+    baseUrl: '',
+    authToken: '',
+    model: '',
+    opusModel: '',
+    sonnetModel: '',
+    haikuModel: '',
+    subagentModel: '',
+    effortLevel: '',
+    extraEnvVars: [],
+    ...CLAUDE_PRESET_DEFAULTS[preset],
+  }
+}
+
+function newCodexPreset(preset: CodexProviderPreset, enabled: boolean): CodexProviderConfig {
+  return {
+    enabled,
+    preset,
+    providerName: '',
+    model: '',
+    baseUrl: '',
+    envKey: '',
+    apiKey: '',
+    wireApi: 'responses',
+    extraEnvVars: [],
+    ...CODEX_PRESET_DEFAULTS[preset],
+  }
+}
+
 
 // Compact key-value editor extracted from the old EnvVarsSection
 function EnvVarEditor({
@@ -297,24 +329,58 @@ export function AgentProvidersSection(): JSX.Element {
 
   // Flush draft to store (triggers IPC save + localStorage)
   function flushClaude(draft: ClaudeProviderConfig = claudeDraft): void {
-    setAgentProviders({ ...agentProviders, claude: draft })
+    const current = useSettingsStore.getState().agentProviders
+    setAgentProviders({
+      ...current,
+      claude: draft,
+      claudePresets: { ...current.claudePresets, [draft.preset]: draft },
+    })
   }
   function flushCodex(draft: CodexProviderConfig = codexDraft): void {
-    setAgentProviders({ ...agentProviders, codex: draft })
+    const current = useSettingsStore.getState().agentProviders
+    setAgentProviders({
+      ...current,
+      codex: draft,
+      codexPresets: { ...current.codexPresets, [draft.preset]: draft },
+    })
   }
 
-  // Apply a preset (fills known fields, saves immediately)
+  // Save the current draft and restore the selected preset's last draft.
   function applyClaudePreset(preset: ClaudeProviderPreset): void {
-    const defaults = CLAUDE_PRESET_DEFAULTS[preset]
-    const next: ClaudeProviderConfig = { ...claudeDraft, preset, ...defaults }
+    if (preset === claudeDraft.preset) return
+    const current = useSettingsStore.getState().agentProviders
+    const saved = current.claudePresets?.[preset]
+    const next: ClaudeProviderConfig = saved
+      ? { ...saved, enabled: claudeDraft.enabled, preset }
+      : newClaudePreset(preset, claudeDraft.enabled)
     setClaudeDraft(next)
-    setAgentProviders({ ...agentProviders, claude: next })
+    setAgentProviders({
+      ...current,
+      claude: next,
+      claudePresets: {
+        ...current.claudePresets,
+        [claudeDraft.preset]: claudeDraft,
+        [preset]: next,
+      },
+    })
   }
   function applyCodexPreset(preset: CodexProviderPreset): void {
-    const defaults = CODEX_PRESET_DEFAULTS[preset]
-    const next: CodexProviderConfig = { ...codexDraft, preset, ...defaults }
+    if (preset === codexDraft.preset) return
+    const current = useSettingsStore.getState().agentProviders
+    const saved = current.codexPresets?.[preset]
+    const next: CodexProviderConfig = saved
+      ? { ...saved, enabled: codexDraft.enabled, preset }
+      : newCodexPreset(preset, codexDraft.enabled)
     setCodexDraft(next)
-    setAgentProviders({ ...agentProviders, codex: next })
+    setAgentProviders({
+      ...current,
+      codex: next,
+      codexPresets: {
+        ...current.codexPresets,
+        [codexDraft.preset]: codexDraft,
+        [preset]: next,
+      },
+    })
   }
 
   const claudeDisabled = !claudeDraft.enabled
