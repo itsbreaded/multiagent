@@ -12,6 +12,7 @@ import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
 import { buildTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/terminalKeyBindings'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
+import { createDirectPtyDataHandler } from '../../terminal/ptyData'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
@@ -490,11 +491,10 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
         if (typeof metadata.cwd === 'string') applyReadyMetadata(metadata)
       }).catch(() => {})
 
-      unsubData = window.ipc.on('pty:data', (receivedId: unknown, data: unknown) => {
-        if (receivedId === ptyId && typeof data === 'string' && !cancelled) {
-          terminal.write(data)
-        }
-      })
+      unsubData = window.ipc.on(
+        'pty:data',
+        createDirectPtyDataHandler(ptyId, terminal, () => cancelled)
+      )
 
       dataDisposable = terminal.onData((data) => {
         if (cancelled) return

@@ -55,6 +55,7 @@ The app has a Vitest 4 test harness (added in spec 030). Tests are the regressio
 npm test            # vitest run (both projects, no coverage)
 npm run test:watch  # vitest watch
 npm run test:coverage  # vitest run --coverage (text + html + lcov under coverage/)
+npm run test:e2e    # build + Playwright Electron smoke tests (isolated temp profile)
 npm run typecheck   # tsc -b --noEmit — also type-checks test files
 ```
 
@@ -72,7 +73,7 @@ npm run typecheck   # tsc -b --noEmit — also type-checks test files
 
 **Boy-scout rule.** Any file a PR touches should gain or extend a test, and new features ship with tests. This is the durable mechanism that grows coverage without a dedicated sprint — do not chase a percentage. The global threshold remains 0 for legacy integration-only surfaces; raise the nonzero scoped ratchets in `vitest.config.ts` as their measured baselines improve.
 
-**Not yet covered (follow-ups, tracked in spec 030):** Playwright-Electron E2E for multi-process flows the unit tests can't reach (cold-start layout restore, `pty:ready`/`deferSpawn`, cross-window `tab:absorb`); the no-flow-control PTY contract and cross-window transfer-ack semantics are protected only by review until E2E exists. The host-bound cwd-repair copy in `src/main/ipc/handlers.ts` still needs consolidating onto the shared `cwdRepair.ts` — a deliberate behavioral reconciliation that must be gated by golden-master characterization tests of both copies first.
+**Electron E2E.** `e2e/startup.spec.ts` launches the compiled app with a temporary user-data/home profile. It covers cold layout restore, the real SQLite FTS index, shell `pty:ready` plus direct seq=0 output, cross-window `tab:absorb`, and Claude deferred spawning through an isolated fake agent command.
 
 **Coverage ratchets.** The global floor remains 0 while legacy Electron surfaces require integration tests. Nonzero scoped thresholds protect renderer utilities, shared helpers, and the extracted pure main-process modules; raise those floors when their measured baseline improves.
 

@@ -47,6 +47,9 @@ jobs:
       - name: Coverage
         run: npm run test:coverage
 
+      - name: Electron E2E
+        run: npm run test:e2e
+
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4

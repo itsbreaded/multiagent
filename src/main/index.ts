@@ -1,4 +1,5 @@
 import { app, BrowserWindow, screen } from 'electron'
+import './e2eIsolation'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'

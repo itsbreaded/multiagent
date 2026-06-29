@@ -320,10 +320,14 @@ function shellArg(value: string): string {
 }
 
 function agentLaunchCommand(command: string): string[] {
+  const e2eCommand = process.env['MULTIAGENT_E2E_USER_DATA_DIR']
+    ? process.env['MULTIAGENT_E2E_AGENT_COMMAND']
+    : undefined
+  const resolvedCommand = e2eCommand || command
   if (process.platform === 'win32') {
-    return ['powershell.exe', '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command]
+    return ['powershell.exe', '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', resolvedCommand]
   }
-  return [defaultShell(), '-lc', command]
+  return [defaultShell(), '-lc', resolvedCommand]
 }
 
 const CLAUDE_PROVIDER_ENV_KEYS = [

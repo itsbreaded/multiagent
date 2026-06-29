@@ -1,9 +1,9 @@
 # 030 — Test Coverage Framework
 
-## Progress (as of 2026-06-28)
+## Progress (as of 2026-06-29)
 
 **Done:**
-- Phase 0 — Vitest 4 harness (`vitest.config.ts`, two projects), `tests/setup.renderer.ts`, repo-root `__mocks__/zustand.ts`, `test`/`test:watch`/`test:coverage` scripts, tsconfigs include test files, `.github/workflows/ci.yml` (Windows runner), `.gitignore` covers `coverage/`. 239 tests pass; `npm run typecheck` clean; `npm run build` clean.
+- Phase 0 — Vitest 4 harness (`vitest.config.ts`, two projects), `tests/setup.renderer.ts`, repo-root `__mocks__/zustand.ts`, `test`/`test:watch`/`test:coverage` scripts, tsconfigs include test files, `.github/workflows/ci.yml` (Windows runner), `.gitignore` covers `coverage/`. 247 tests pass; `npm run typecheck` clean; `npm run build` clean.
 - Phase 1 Wave 1A — tests for `tabLabels`, `hotkeys`, `terminalKeyBindings`, `paneDrag`, `agents`, `git`, `time`, `resolveBackend`.
 - Phase 1 Wave 1B (partial) — behavior-preserving extractions: `src/shared/paneTree.ts` (tree ops out of `panes.ts`) + characterization tests; `src/shared/cwdRepair.ts` (renderer cwd-repair out of `panes.ts`) + separator-coverage tests.
 - Phase 1 Wave 1C — `buildEnv` extracted to `src/main/pty/buildEnv.ts` + PATH/Claude-flag guard test. Ratchet verified: reintroducing the PATH prepend turns the guard red.
@@ -15,11 +15,12 @@
   - Claude transcript path encoding → `src/main/sessions/claudePaths.ts` (`encodeClaudeProjectDir`, `claudeProjectDirForCwd`, `claudeTranscriptPathForCwd`) extracted out of `SessionIndex.ts`; test covers the separators+colons→dashes encoding used during cwd repair.
 - Phase 2 — real-store transition suites cover `usePanesStore` focus atomicity, cwd/zoom/tree edits, cross-window ack booleans, and cwd repair; `useSessionsStore` loading, exact-project selection, IPC/local search, composite-identity deletion, and cwd-repair reconciliation. React Testing Library covers `UpdateBanner`, `CommandPalette` filtering/enabled gates, `PaneHeader` actions, `TabBar` overflow modes, and `SessionBrowser` summary/deep rendering.
 - Phase 4 — nonzero scoped coverage ratchets now protect `src/renderer/src/utils/**`, `src/shared/**`, and the extracted pure main-process modules. `CLAUDE.md` documents the testing workflow, scoped ratchets, and boy-scout rule.
+- Wave 1B cwd-repair main-side reconciliation — the former `path.*`/host-bound behavior is captured for Win32 and POSIX hosts in `src/main/ipc/cwdRepairLegacy.test.ts`, including the known cross-platform divergences. `handlers.ts` now delegates layout rewrites to `src/shared/cwdRepair.ts`, so main and renderer use the same separator-agnostic semantics.
+- Phase 3 — Playwright launches the compiled Electron app against an isolated temporary profile. Six E2E tests cover duplicate-free cold layout restore, a real Electron-ABI SQLite/FTS5 `MATCH` query, cwd-override persistence across restart/reindex, shell `pty:ready` plus direct `seq=0` output rendered by the real DOM-backed xterm, a real renderer tear-off followed by destination-side `DataTransfer`/`receiveTab`/`tab:absorb` commit-before-release with PTY rerouting, and the Claude deferred-spawn handshake via an isolated fake agent command. The multi-window test caught and fixed init-data and renderer-path races in detached-window startup. `createDirectPtyDataHandler` has a renderer test proving `terminal.write` occurs before callback return and that output handling emits no ack/pause/resume IPC.
+- Clean-install verification — `npm ci` completed with Electron's `better-sqlite3` rebuild, followed by clean typecheck, 247 Vitest tests, coverage ratchets, production build, and all six Electron E2E tests.
 
-**Remaining (do not delete this spec until these land):**
-- Wave 1B cwd-repair **main-side reconciliation**: the host-bound copy in `src/main/ipc/handlers.ts` must consolidate onto `src/shared/cwdRepair.ts` — its own PR, gated by golden-master characterization tests of both pre-existing copies (a deliberate behavior change, NOT a no-op extraction).
-- Wave 1B **SessionIndex real-DB FTS test** (deferred): `better-sqlite3` is rebuilt for the Electron ABI (`NODE_MODULE_VERSION 146`) by postinstall and **will not load under plain Node** (`137`) — the `main` vitest project runs under Node, so a real-DB `SessionIndex` integration test is currently impossible without rebuilding better-sqlite3 for Node (which would break the Electron runtime). The pure path-encoding helpers are extracted and tested (`claudePaths.ts`); the FTS5 `MATCH` query itself is a single literal with no query-builder to factor out. To land a real FTS test, either (a) run the SessionIndex test under Electron via Playwright (Phase 3), or (b) add a separate Node-ABI better-sqlite3 build for the test process. Documented here so this isn't mistaken for an oversight.
-- Phase 3 — Playwright-Electron E2E.
+**Remaining before this spec can move to `done`:**
+- **Remote CI confirmation:** confirm the updated Windows GitHub Actions workflow, including Electron E2E, is green after these changes are committed and pushed. The equivalent clean-install matrix is green locally.
 
 ## Problem
 
@@ -149,7 +150,7 @@ Keep `typecheck` as-is; Vitest uses esbuild and does not type-check tests by def
 - **Layout.** `tests/setup.renderer.ts` (jest-dom + `vi.mock('zustand')` activation), `tests/mockIpc.ts` (stubbed `window.ipc` for renderer modules), `tests/fixtures/` (canned JSONL transcripts, layout trees, session metadata), and the Zustand auto-reset mock at **repo-root `__mocks__/zustand.ts`** (not under `tests/` — see Phase 2). Co-locate unit tests beside source (`foo.ts` → `foo.test.ts`) where convenient; cross-cutting helpers live under `tests/`.
 - **Temp dirs for integration tests.** SQLite (`SessionIndex`) and `DeepSearcher` fixture trees need real files. Create a unique dir under `os.tmpdir()` per test, wrap creation in `beforeEach`, and guarantee cleanup in `afterEach` (`fs.rm(tmp, { recursive: true, force: true })`). Never write into the repo tree or the user's real `~/.claude`/`~/.codex`.
 - **cwd-repair separator coverage.** The repair helpers branch on separator style (`isWindowsPath`, `repairSeparator`, `normalizeRepairPath`, `comparableRepairPath`, `joinRepairPath`). Characterization tests must cover `\`-style, `/`-style, and mixed `[\\/]+` paths explicitly, plus the drive-prefix (`C:`) case — these branches are exactly where a regression hides.
-- **ESLint override for test files.** The repo uses `@electron-toolkit/eslint-config-ts`. Add an `overrides`/`files: ['**/*.test.ts']` block setting the vitest environment/globals and relaxing `no-unused-vars`/`@typescript-eslint/no-explicit-any` where test ergonomics warrant it. If CI later adds a lint step, test files will otherwise fail it on first run.
+- **ESLint override for test files (not applicable in this spec).** The repository has an ESLint config package dependency but no ESLint configuration, lint script, or lint CI step. Introducing the lint system is outside this test-framework scope. When linting is added, its first change must include test/E2E file configuration; no unexercised override is added here.
 
 ### Phase 1 — Invariant tests (highest ROI, pure logic)
 
@@ -206,20 +207,20 @@ Generic guidance: any test touching recency, time-grace windows, uuids, or file 
 
 **Definition of done for Phase 2:** store transitions and key presentational components have tests; IPC call assertions are in place.
 
-### Phase 3 — Electron E2E smoke (deferred, separate follow-up)
+### Phase 3 — Electron E2E smoke
 
 A small number of Playwright-Electron tests via `_electron.launch({ executablePath, args })` exercising critical startup/spawn flows the unit tests can't reach:
 - Cold-start restores saved layout without duplicates (StrictMode guard, `layoutReady`).
 - New shell pane spawns and emits `pty:ready`; new Claude pane uses `deferSpawn` size handshake.
 - Cross-window `tab:absorb` commit-before-reroute ordering does not orphan the tab.
 
-This phase is intentionally last and out of scope for the initial PR. Note it in the spec as the next milestone; do not block Phases 0–2 on it.
+The harness and all listed flows are implemented in `e2e/startup.spec.ts` and run in CI. Claude uses an E2E-only fake command gated behind the isolated-profile environment, so CI does not depend on a globally installed CLI.
 
 **Invariants with no Phase-1 home.** Two `CLAUDE.md` invariants motivated in the Problem section are *not* unit-testable and land only here in Phase 3 — they are **not** covered by Phase 1's DoD, and a reviewer should not read Phase 1 as protecting them:
 - The **no-flow-control PTY contract** (seq=0, synchronous `terminal.write`, no ack/pause) — spans main↔renderer↔xterm at runtime.
 - **Cross-window transfer ack semantics** (spec 024 — destination must *actually apply* before acking; self-drop guards; commit-before-reroute for `tab:absorb`) — spans main + two renderer processes + PTY routing.
 
-Both are real-time, multi-process behaviors. Until Phase 3 exists, they are protected only by code review and the inline `CLAUDE.md` constraints.
+Both are real-time, multi-process behaviors and are now exercised by the shell direct-output and two-window absorb E2E tests; the synchronous renderer callback is additionally protected by `ptyData.test.ts`.
 
 ### Phase 4 — Ratchet & policy
 
@@ -257,5 +258,4 @@ Both are real-time, multi-process behaviors. Until Phase 3 exists, they are prot
 ## Out of Scope
 
 - Aiming for any specific coverage percentage as a goal.
-- E2E Playwright suite (Phase 3) — tracked here but delivered in a later spec/PR.
 - Rewriting app code beyond the **behavior-preserving extraction** called out in Phase 1 Wave 1B (export private helpers, move pure parsers/matchers into sibling/`shared` modules). These extractions are expected and in-scope; they must not change logic. Any *other* change that alters runtime behavior is out of scope and belongs in its own PR. **One deliberate exception:** the cwd-repair consolidation (Wave 1B) intentionally changes the main-side behavior to match the renderer semantics — it is in scope, but only as its own focused PR gated by golden-master characterization tests of both pre-existing copies, never folded into a "no behavior change" extraction commit.
