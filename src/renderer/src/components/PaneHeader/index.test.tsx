@@ -87,4 +87,24 @@ describe('PaneHeader - presentation and actions', () => {
 
     expect(ipc.invoke).toHaveBeenCalledWith('shell:copy-to-clipboard', '12345678-full-session-id')
   })
+
+  it('keeps the newly split pane focused when the menu click bubbles through the old tree', async () => {
+    const user = userEvent.setup()
+    const pane = makeLeaf('C:\\work')
+    plantPane(pane)
+    ipc.invoke.mockResolvedValue({ ptyId: 'new-agent-pty', sessionId: 'new-session' })
+
+    render(
+      <div onClick={() => usePanesStore.getState().focusPane(pane.id)}>
+        <PaneHeader pane={pane} isFocused />
+      </div>
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Split pane' }))
+    await user.click(screen.getAllByTitle('Split horizontal')[0])
+
+    const tab = usePanesStore.getState().tabs[0]
+    expect(tab.focusedPaneId).not.toBe(pane.id)
+    expect(findLeaf(tab.rootNode!, tab.focusedPaneId)?.ptyId).toBe('new-agent-pty')
+  })
 })

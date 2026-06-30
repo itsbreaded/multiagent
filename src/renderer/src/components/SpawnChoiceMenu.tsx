@@ -151,7 +151,15 @@ function DirectionButton({
   return (
     <button
       title={title}
-      onClick={onClick}
+      onClick={(event) => {
+        // The menu is rendered inside the source PaneContainer. Splitting
+        // synchronously rewrites that subtree; without stopping the original
+        // click, React continues bubbling it through the old ancestor path and
+        // PaneContainer focuses the source pane again after splitPane focused
+        // the new leaf.
+        event.stopPropagation()
+        onClick()
+      }}
       style={{
         width: 24,
         height: 22,

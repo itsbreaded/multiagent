@@ -21,10 +21,32 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
     GH_UPDATE_TOKEN: '',
     MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
     MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
-    MULTIAGENT_E2E_AGENT_COMMAND: `node -e "console.log('__multiagent_fake_agent__'); setTimeout(() => {}, 30000)"`,
+    MULTIAGENT_E2E_AGENT_COMMAND: `node "${join(repoRoot, 'e2e', 'fixtures', 'framed-agent.cjs')}"`,
+    MULTIAGENT_E2E_FRAME_INTERVAL_MS: '2',
     HOME: homeDir,
     USERPROFILE: homeDir,
   }
+}
+
+interface SavedPaneNode {
+  type?: 'leaf' | 'split'
+  id?: string
+  ptyId?: string
+  paneType?: string
+  agentKind?: string
+  first?: SavedPaneNode
+  second?: SavedPaneNode
+}
+
+function savedLeaves(node: SavedPaneNode | undefined): SavedPaneNode[] {
+  if (!node) return []
+  if (node.type === 'split') return [...savedLeaves(node.first), ...savedLeaves(node.second)]
+  return [node]
+}
+
+function framedSequences(chunks: Array<{ ptyId: string; data: string }>, ptyId: string): number[] {
+  const stream = chunks.filter((chunk) => chunk.ptyId === ptyId).map((chunk) => chunk.data).join('')
+  return Array.from(stream.matchAll(/\x1b\]777;(?:FRAME|RESIZE):(\d{8})\x07/g), (match) => Number(match[1]))
 }
 
 async function spawnShell(page: Page, userDataDir: string): Promise<{ tab: SavedTab; ptyId: string }> {
@@ -318,5 +340,74 @@ test.describe('cold-start layout restore', () => {
     ) as { cwd: string; pid: number | null } | null
     expect(ready).toMatchObject({ cwd: homeDir })
     expect(typeof ready?.pid).toBe('number')
+  })
+
+  test('preserves original agent PTY output and input isolation across repeated splits', async () => {
+    test.setTimeout(90_000)
+    await page.getByTitle(/Command palette/).click()
+    const commandSearch = page.getByPlaceholder(/Search commands/)
+    await commandSearch.fill('New Claude Session')
+    await page.keyboard.press('Enter')
+
+    const layoutPath = join(userDataDir, 'layout.json')
+    let originalPaneId = ''
+    let originalPtyId = ''
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: Array<{ rootNode?: SavedPaneNode }> }
+      const pane = savedLeaves(saved.tabs[0]?.rootNode).find(
+        (leaf) => leaf.paneType === 'agent' && leaf.agentKind === 'claude' && !!leaf.ptyId
+      )
+      originalPaneId = pane?.id ?? ''
+      originalPtyId = pane?.ptyId ?? ''
+      return originalPtyId
+    }).not.toBe('')
+
+    const before = await page.evaluate(
+      (id) => window.ipc.invoke('pty:get-ready', id),
+      originalPtyId
+    ) as { pid: number | null } | null
+    expect(typeof before?.pid).toBe('number')
+    await expect(page.locator(`[data-pane-id="${originalPaneId}"] .xterm`)).toHaveCount(1)
+    await page.evaluate(() => window.e2ePtyTrace?.reset())
+
+    for (let i = 0; i < 100; i += 1) {
+      await page.keyboard.press(i % 2 === 0 ? 'Control+Shift+E' : 'Control+Shift+D')
+      await expect(page.locator('.xterm')).toHaveCount(2)
+      await page.keyboard.press('Control+Shift+W')
+      await expect(page.locator('.xterm')).toHaveCount(1)
+    }
+
+    await page.waitForTimeout(250)
+    const after = await page.evaluate(
+      (id) => window.ipc.invoke('pty:get-ready', id),
+      originalPtyId
+    ) as { pid: number | null } | null
+    expect(after?.pid).toBe(before?.pid)
+    await expect(page.locator(`[data-pane-id="${originalPaneId}"] .xterm`)).toHaveCount(1)
+
+    const trace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
+    expect(trace).toBeTruthy()
+    const preloadFrames = framedSequences(trace!.preloadChunks, originalPtyId)
+    const terminalFrames = framedSequences(trace!.terminalChunks, originalPtyId)
+    expect(preloadFrames.length).toBeGreaterThan(100)
+    expect(terminalFrames).toEqual(preloadFrames)
+
+    const writesToOriginal = trace!.sends.filter(
+      (entry) => entry.channel === 'pty:write' && entry.args[0] === originalPtyId
+    )
+    const nonEmptyWrites = writesToOriginal
+      .map((entry) => String(entry.args[1] ?? ''))
+      .filter((data) => data.length > 0)
+    expect(nonEmptyWrites.every((data) => data === '\x1b[I' || data === '\x1b[O')).toBe(true)
+    expect(nonEmptyWrites).toContain('\x1b[O')
+    const originalResizes = trace!.sends.filter(
+      (entry) => entry.channel === 'pty:resize' && entry.args[0] === originalPtyId
+    )
+    expect(originalResizes.length).toBeGreaterThan(0)
+    expect(originalResizes.every((entry) => (
+      typeof entry.args[1] === 'number' && entry.args[1] > 0 &&
+      typeof entry.args[2] === 'number' && entry.args[2] > 0
+    ))).toBe(true)
+    expect(trace!.invokes.some((entry) => entry.channel === 'session:resume')).toBe(false)
   })
 })

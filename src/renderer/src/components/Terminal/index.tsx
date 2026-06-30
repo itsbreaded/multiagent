@@ -493,7 +493,12 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
 
       unsubData = window.ipc.on(
         'pty:data',
-        createDirectPtyDataHandler(ptyId, terminal, () => cancelled)
+        createDirectPtyDataHandler(ptyId, {
+          write(data) {
+            window.e2ePtyTrace?.terminalWrite(ptyId, data)
+            terminal.write(data)
+          },
+        }, () => cancelled)
       )
 
       dataDisposable = terminal.onData((data) => {
