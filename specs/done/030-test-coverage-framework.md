@@ -19,8 +19,7 @@
 - Phase 3 — Playwright launches the compiled Electron app against an isolated temporary profile. Six E2E tests cover duplicate-free cold layout restore, a real Electron-ABI SQLite/FTS5 `MATCH` query, cwd-override persistence across restart/reindex, shell `pty:ready` plus direct `seq=0` output rendered by the real DOM-backed xterm, a real renderer tear-off followed by destination-side `DataTransfer`/`receiveTab`/`tab:absorb` commit-before-release with PTY rerouting, and the Claude deferred-spawn handshake via an isolated fake agent command. The multi-window test caught and fixed init-data and renderer-path races in detached-window startup. `createDirectPtyDataHandler` has a renderer test proving `terminal.write` occurs before callback return and that output handling emits no ack/pause/resume IPC.
 - Clean-install verification — `npm ci` completed with Electron's `better-sqlite3` rebuild, followed by clean typecheck, 247 Vitest tests, coverage ratchets, production build, and all six Electron E2E tests.
 
-**Remaining before this spec can move to `done`:**
-- **Remote CI confirmation:** confirm the updated Windows GitHub Actions workflow, including Electron E2E, is green after these changes are committed and pushed. The equivalent clean-install matrix is green locally.
+- Remote CI confirmation — the Windows GitHub Actions workflow, including Electron E2E, completed successfully on GitHub.
 
 ## Problem
 
