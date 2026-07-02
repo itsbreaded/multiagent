@@ -42,7 +42,7 @@ let tabReleaseSeq = 0
 const PTY_ROUTE_RETRY_MS = 50
 
 export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
-  cleanup: () => void
+  cleanup: () => Promise<void>
   registerWindowHandlers: (win: BrowserWindow) => void
   performShutdownSave: () => Promise<void>
 }> {
@@ -57,6 +57,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const pendingDirectOutput = new Map<string, string[]>()
   const directRetryTimers = new Map<string, NodeJS.Timeout>()
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
+  let cleanupPromise: Promise<void> | null = null
   const gitBranchWatcher = new GitBranchWatcher((cwdKeys, branch) => {
     windowManager.broadcastAll('git:branch-updated', cwdKeys, branch)
   })
@@ -1072,14 +1073,18 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   return {
     cleanup: () => {
+      if (cleanupPromise) return cleanupPromise
       clearInterval(contentTimer)
       for (const timer of directRetryTimers.values()) clearTimeout(timer)
       directRetryTimers.clear()
       pendingDirectOutput.clear()
-      void gitBranchWatcher.dispose()
       index.close()
       spawner.dispose()
-      ptyManager.destroy()
+      cleanupPromise = Promise.all([
+        gitBranchWatcher.dispose(),
+        ptyManager.destroy(),
+      ]).then(() => undefined)
+      return cleanupPromise
     },
     registerWindowHandlers,
     performShutdownSave,

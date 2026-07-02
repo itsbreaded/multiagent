@@ -7,6 +7,11 @@ if "%GH_TOKEN%"=="" (
     exit /b 1
 )
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\check-dist-lock.ps1"
+if %errorlevel% neq 0 (
+    exit /b %errorlevel%
+)
+
 for /f "tokens=2 delims=:, " %%v in ('findstr /r "\"version\"" package.json ^| findstr /v "electron\|node\|@"') do (
     set VERSION=%%~v
     goto :found

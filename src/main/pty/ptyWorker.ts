@@ -18,14 +18,18 @@ type WorkerMessage =
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
   | { type: 'kill'; id: string }
+  | { type: 'shutdown' }
 
 type ParentMessage =
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number; signal?: number }
   | { type: 'ready'; id: string; pid: number | null; cwd: string; windowsPty?: WindowsPtyTraits }
   | { type: 'error'; id: string; message: string }
+  | { type: 'shutdown-complete' }
 
 const instances = new Map<string, pty.IPty>()
+let shuttingDown = false
+let shutdownTimer: NodeJS.Timeout | null = null
 
 interface WindowsPtyTraits {
   backend: 'conpty'
@@ -66,6 +70,7 @@ process.on('message', (msg: WorkerMessage) => {
         ptyProcess.onExit(({ exitCode, signal }) => {
           instances.delete(msg.id)
           send({ type: 'exit', id: msg.id, exitCode, signal })
+          finishShutdownIfReady()
         })
 
         instances.set(msg.id, ptyProcess)
@@ -96,8 +101,32 @@ process.on('message', (msg: WorkerMessage) => {
       }
       break
     }
+
+    case 'shutdown': {
+      if (shuttingDown) break
+      shuttingDown = true
+      for (const inst of instances.values()) {
+        try { inst.kill() } catch { /* process may already be exiting */ }
+      }
+      shutdownTimer = setTimeout(finishShutdown, 1500)
+      finishShutdownIfReady()
+      break
+    }
   }
 })
+
+function finishShutdownIfReady(): void {
+  if (shuttingDown && instances.size === 0) finishShutdown()
+}
+
+function finishShutdown(): void {
+  if (!shuttingDown) return
+  shuttingDown = false
+  if (shutdownTimer) clearTimeout(shutdownTimer)
+  shutdownTimer = null
+  try { send({ type: 'shutdown-complete' }) } catch { /* parent may have exited */ }
+  setImmediate(() => process.exit(0))
+}
 
 function sendReadyWhenPidIsAvailable(id: string, ptyProcess: pty.IPty, cwd: string): void {
   const sendReady = () => {

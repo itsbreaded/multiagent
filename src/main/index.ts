@@ -57,7 +57,7 @@ function saveWindowState(win: BrowserWindow): void {
 }
 
 // Keep references so resources can be cleaned up on quit
-let cleanupFn: (() => void) | null = null
+let cleanupFn: (() => Promise<void>) | null = null
 let browserViewManager: BrowserViewManager | null = null
 // Set by registerIpcHandlers; called during primary-window shutdown to flush detached state.
 let performShutdownSaveFn: (() => Promise<void>) | null = null
@@ -206,9 +206,19 @@ if (!gotTheLock) {
     }
   })
 
-  app.on('before-quit', () => {
-    cleanupFn?.()
-    mcpManager.cleanup()
-    browserViewManager?.destroy()
+  let shutdownComplete = false
+  let shutdownPromise: Promise<void> | null = null
+  app.on('before-quit', (event) => {
+    if (shutdownComplete) return
+    event.preventDefault()
+    if (shutdownPromise) return
+    try { mcpManager.cleanup() } catch (error) { console.error('[MultiAgent] MCP cleanup failed:', error) }
+    try { browserViewManager?.destroy() } catch (error) { console.error('[MultiAgent] browser cleanup failed:', error) }
+    shutdownPromise = (cleanupFn?.() ?? Promise.resolve())
+      .catch((error) => console.error('[MultiAgent] shutdown cleanup failed:', error))
+      .then(() => {
+        shutdownComplete = true
+        app.quit()
+      })
   })
 }

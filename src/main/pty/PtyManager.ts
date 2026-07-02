@@ -33,12 +33,14 @@ type WorkerMessage =
   | { type: 'write'; id: string; data: string }
   | { type: 'resize'; id: string; cols: number; rows: number }
   | { type: 'kill'; id: string }
+  | { type: 'shutdown' }
 
 type ParentMessage =
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number; signal?: number }
   | { type: 'ready'; id: string; pid: number | null; cwd: string; windowsPty?: PtyReadyEvent['windowsPty'] }
   | { type: 'error'; id: string; message: string }
+  | { type: 'shutdown-complete' }
 
 type PendingSpawn = {
   cwd: string
@@ -62,6 +64,8 @@ export class PtyManager extends EventEmitter {
   private spawnedIds = new Set<string>()
   private readyIds = new Set<string>()
   private readyEvents = new Map<string, PtyReadyEvent>()
+  private destroyPromise: Promise<void> | null = null
+  private destroying = false
 
   constructor() {
     super()
@@ -124,6 +128,10 @@ export class PtyManager extends EventEmitter {
           this.readyEvents.delete(msg.id)
           this.emit('error', msg.id, new Error(msg.message))
           break
+        case 'shutdown-complete':
+          // The worker exits immediately after this acknowledgement. The destroy
+          // promise resolves on its exit event so Windows has released handles.
+          break
       }
     })
 
@@ -132,11 +140,12 @@ export class PtyManager extends EventEmitter {
     })
 
     this.worker.on('exit', (code) => {
-      console.error('[PtyManager] worker exited with code', code)
+      if (!this.destroying) console.error('[PtyManager] worker exited with code', code)
     })
   }
 
   private _send(msg: WorkerMessage) {
+    if (this.destroying || !this.worker.connected) return
     this.worker.send(msg)
   }
 
@@ -291,13 +300,45 @@ export class PtyManager extends EventEmitter {
     return this.readyEvents.get(ptyId)
   }
 
-  destroy(): void {
+  destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise
+    this.destroying = true
     for (const entry of this.pendingSpawns.values()) {
       if (entry.timeout !== null) clearTimeout(entry.timeout)
     }
     this.pendingSpawns.clear()
+    this.pendingResizes.clear()
     this.spawnedIds.clear()
-    this.worker.kill()
+    this.readyIds.clear()
+    this.readyEvents.clear()
+
+    this.destroyPromise = new Promise((resolve) => {
+      if (this.worker.exitCode !== null || this.worker.signalCode !== null) {
+        resolve()
+        return
+      }
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(forceTimer)
+        clearTimeout(finalTimer)
+        resolve()
+      }
+      this.worker.once('exit', finish)
+      const forceTimer = setTimeout(() => {
+        if (this.worker.exitCode === null && this.worker.signalCode === null) this.worker.kill()
+      }, 2000)
+      const finalTimer = setTimeout(finish, 3500)
+      try {
+        this.worker.send({ type: 'shutdown' } satisfies WorkerMessage, (error) => {
+          if (error && this.worker.exitCode === null && this.worker.signalCode === null) this.worker.kill()
+        })
+      } catch {
+        this.worker.kill()
+      }
+    })
+    return this.destroyPromise
   }
 }
 

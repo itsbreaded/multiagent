@@ -122,7 +122,7 @@ test.describe('cold-start layout restore', () => {
 
   test.afterEach(async () => {
     await app?.close()
-    await rm(userDataDir, { recursive: true, force: true })
+    await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })
 
   test('restores each saved tab exactly once and saves only to the isolated profile', async () => {
