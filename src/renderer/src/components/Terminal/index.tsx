@@ -461,6 +461,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     let suppressResizeUntil = 0
 
     function connect(ptyId: string): void {
+      const isLayoutReattachment = xtermRegistry.getEntry(pane.id)?.connected === true
       ptyIdRef.current = ptyId
       setStatus('ready')
       xtermRegistry.markConnected(pane.id)
@@ -554,7 +555,17 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       resizeDisposable = terminal.onResize(queueResize)
       suppressResizeUntil = Date.now() + 750
       try { fitAddonRef.current?.fit() } catch { /* ignore */ }
-      sendResize(terminal.cols, terminal.rows)
+      // A split reparents and remounts the existing terminal while nested
+      // Allotments are still resolving their geometry. Keep the live PTY at
+      // its last stable size until the normal agent debounce observes the
+      // settled layout. New/deferred PTYs still need an immediate first size
+      // so their process can spawn at the fitted dimensions.
+      if (isLayoutReattachment) {
+        latestResize = { cols: terminal.cols, rows: terminal.rows }
+        pendingResizeTimer = setTimeout(flushPendingResize, colDebounce)
+      } else {
+        sendResize(terminal.cols, terminal.rows)
+      }
     }
 
     if (pane.ptyId) connect(pane.ptyId)

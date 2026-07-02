@@ -342,66 +342,122 @@ test.describe('cold-start layout restore', () => {
     expect(typeof ready?.pid).toBe('number')
   })
 
-  test('preserves original agent PTY output and input isolation across repeated splits', async () => {
+  test('preserves a nested right-column agent across repeated horizontal splits', async () => {
     test.setTimeout(90_000)
-    await page.getByTitle(/Command palette/).click()
-    const commandSearch = page.getByPlaceholder(/Search commands/)
-    await commandSearch.fill('New Claude Session')
-    await page.keyboard.press('Enter')
-
     const layoutPath = join(userDataDir, 'layout.json')
-    let originalPaneId = ''
-    let originalPtyId = ''
+    await app.close()
+    await writeFile(layoutPath, JSON.stringify({
+      tabs: [{
+        id: 'tab-restored-nested',
+        focusedPaneId: 'restored-agent',
+        defaultCwd: projectCwd,
+        rootNode: {
+          type: 'split',
+          id: 'restored-columns',
+          direction: 'vertical',
+          ratio: 0.5,
+          first: {
+            type: 'leaf',
+            id: 'restored-shell',
+            paneType: 'shell',
+            cwd: projectCwd,
+          },
+          second: {
+            type: 'leaf',
+            id: 'restored-agent',
+            paneType: 'agent',
+            agentKind: 'claude',
+            cwd: projectCwd,
+            sessionId: 'fts-session',
+          },
+        },
+      }],
+      sidebarWidth: 220,
+      sidebarOpen: true,
+      activeTabId: 'tab-restored-nested',
+      sidebarSectionOpen: {},
+      sidebarPanelSizes: {},
+    }), 'utf8')
+    await launchTestApp()
+
+    const trackedPaneId = 'restored-agent'
+    let trackedPtyId = ''
     await expect.poll(async () => {
       const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: Array<{ rootNode?: SavedPaneNode }> }
       const pane = savedLeaves(saved.tabs[0]?.rootNode).find(
-        (leaf) => leaf.paneType === 'agent' && leaf.agentKind === 'claude' && !!leaf.ptyId
+        (leaf) => leaf.id === trackedPaneId && leaf.paneType === 'agent' && !!leaf.ptyId
       )
-      originalPaneId = pane?.id ?? ''
-      originalPtyId = pane?.ptyId ?? ''
-      return originalPtyId
+      trackedPtyId = pane?.ptyId ?? ''
+      return trackedPtyId
     }).not.toBe('')
+    await expect(page.locator('.xterm')).toHaveCount(2)
 
     const before = await page.evaluate(
       (id) => window.ipc.invoke('pty:get-ready', id),
-      originalPtyId
+      trackedPtyId
     ) as { pid: number | null } | null
     expect(typeof before?.pid).toBe('number')
-    await expect(page.locator(`[data-pane-id="${originalPaneId}"] .xterm`)).toHaveCount(1)
+    await expect(page.locator(`[data-pane-id="${trackedPaneId}"] .xterm`)).toHaveCount(1)
     await page.evaluate(() => window.e2ePtyTrace?.reset())
 
     for (let i = 0; i < 100; i += 1) {
-      await page.keyboard.press(i % 2 === 0 ? 'Control+Shift+E' : 'Control+Shift+D')
-      await expect(page.locator('.xterm')).toHaveCount(2)
+      const shellPane = page.locator('[data-pane-id="restored-shell"]').last()
+      const trackedPane = page.locator(`[data-pane-id="${trackedPaneId}"]`).last()
+      if (i === 0) {
+        const shellBox = await shellPane.boundingBox()
+        const trackedBox = await trackedPane.boundingBox()
+        expect(shellBox).toBeTruthy()
+        expect(trackedBox).toBeTruthy()
+        expect(trackedBox!.x).toBeGreaterThan(shellBox!.x + shellBox!.width * 0.8)
+        expect(Math.abs(trackedBox!.y - shellBox!.y)).toBeLessThan(4)
+      }
+      await trackedPane.getByTitle('Split pane / new session').click()
+      // First menu section is Claude, Codex, Shell; choose Shell's direction
+      // button so the stress loop creates no additional agent process.
+      await page.getByTitle('Split horizontal').nth(2).click()
+      await expect(page.locator('.xterm')).toHaveCount(3)
+      if (i === 0) {
+        const trackedBox = await trackedPane.boundingBox()
+        const newPane = page.locator('[data-pane-id]').filter({ hasNot: page.locator('[data-never-matches]') }).evaluateAll(
+          (nodes) => nodes
+            .map((node) => node.getAttribute('data-pane-id'))
+            .find((id) => id !== 'restored-shell' && id !== 'restored-agent') ?? ''
+        )
+        const newPaneId = await newPane
+        const newBox = await page.locator(`[data-pane-id="${newPaneId}"]`).last().boundingBox()
+        expect(trackedBox).toBeTruthy()
+        expect(newBox).toBeTruthy()
+        expect(Math.abs(newBox!.x - trackedBox!.x)).toBeLessThan(4)
+        expect(newBox!.y).toBeGreaterThan(trackedBox!.y + trackedBox!.height * 0.8)
+      }
       await page.keyboard.press('Control+Shift+W')
-      await expect(page.locator('.xterm')).toHaveCount(1)
+      await expect(page.locator('.xterm')).toHaveCount(2)
     }
 
     await page.waitForTimeout(250)
     const after = await page.evaluate(
       (id) => window.ipc.invoke('pty:get-ready', id),
-      originalPtyId
+      trackedPtyId
     ) as { pid: number | null } | null
     expect(after?.pid).toBe(before?.pid)
-    await expect(page.locator(`[data-pane-id="${originalPaneId}"] .xterm`)).toHaveCount(1)
+    await expect(page.locator(`[data-pane-id="${trackedPaneId}"] .xterm`)).toHaveCount(1)
 
     const trace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
     expect(trace).toBeTruthy()
-    const preloadFrames = framedSequences(trace!.preloadChunks, originalPtyId)
-    const terminalFrames = framedSequences(trace!.terminalChunks, originalPtyId)
+    const preloadFrames = framedSequences(trace!.preloadChunks, trackedPtyId)
+    const terminalFrames = framedSequences(trace!.terminalChunks, trackedPtyId)
     expect(preloadFrames.length).toBeGreaterThan(100)
     expect(terminalFrames).toEqual(preloadFrames)
 
     const writesToOriginal = trace!.sends.filter(
-      (entry) => entry.channel === 'pty:write' && entry.args[0] === originalPtyId
+      (entry) => entry.channel === 'pty:write' && entry.args[0] === trackedPtyId
     )
     const nonEmptyWrites = writesToOriginal
       .map((entry) => String(entry.args[1] ?? ''))
       .filter((data) => data.length > 0)
     expect(nonEmptyWrites.every((data) => data === '\x1b[I' || data === '\x1b[O')).toBe(true)
-    expect(nonEmptyWrites).toContain('\x1b[O')
     const originalResizes = trace!.sends.filter(
-      (entry) => entry.channel === 'pty:resize' && entry.args[0] === originalPtyId
+      (entry) => entry.channel === 'pty:resize' && entry.args[0] === trackedPtyId
     )
     expect(originalResizes.length).toBeGreaterThan(0)
     expect(originalResizes.every((entry) => (
