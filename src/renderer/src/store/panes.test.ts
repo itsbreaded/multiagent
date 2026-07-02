@@ -32,6 +32,30 @@ function tabRoot(tabId: string): PaneNode | undefined {
   return usePanesStore.getState().tabs.find((t) => t.id === tabId)?.rootNode
 }
 
+describe('usePanesStore — bulk sidebar section state', () => {
+  it('expands and collapses every project section without changing Recent', () => {
+    const tabA = plantTab(makeLeaf('C:\\a'))
+    const tabB = plantTab(makeLeaf('C:\\b'))
+    usePanesStore.setState({
+      sidebarSectionOpen: { recent: true, [`tab:${tabA}`]: true, [`tab:${tabB}`]: false },
+    })
+
+    usePanesStore.getState().setAllTabSidebarSectionsOpen(false)
+    expect(usePanesStore.getState().sidebarSectionOpen).toMatchObject({
+      recent: true,
+      [`tab:${tabA}`]: false,
+      [`tab:${tabB}`]: false,
+    })
+
+    usePanesStore.getState().setAllTabSidebarSectionsOpen(true)
+    expect(usePanesStore.getState().sidebarSectionOpen).toMatchObject({
+      recent: true,
+      [`tab:${tabA}`]: true,
+      [`tab:${tabB}`]: true,
+    })
+  })
+})
+
 describe('usePanesStore — focusPaneInTab atomicity', () => {
   beforeEach(() => {
     // Two tabs, each with two stacked panes. Active tab is tab A.

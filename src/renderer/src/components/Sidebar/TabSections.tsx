@@ -289,7 +289,7 @@ export function TabSections(): JSX.Element {
             }
             headerDropActive={dropTabId === tab.id}
             headerInsertTop={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === tab.id}
-            headerInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastLocalTab}
+            sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastLocalTab}
             onHeaderDragOver={(e) => {
               // Project reorder — MIME-type check prevents collision with pane drops
               if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
@@ -460,8 +460,10 @@ function PaneRow({
   const session = pane.agentKind && pane.sessionId
     ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
     : null
-  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges, isFocused)
-  const branch = showGitBranchBadges ? displayGitBranch(cwdBranch) ?? displayGitBranch(session?.gitBranch) : null
+  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges)
+  const branch = showGitBranchBadges
+    ? displayGitBranch(cwdBranch === undefined ? session?.gitBranch : cwdBranch)
+    : null
   const isOnlyPane = !tab.rootNode || collectLeaves(tab.rootNode).length <= 1
   const isSwapTarget = swapDrag?.targetId === pane.id
 

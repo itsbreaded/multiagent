@@ -344,6 +344,7 @@ export interface IPCChannels {
 
   // --- Git ---
   'git:branch': (cwd: string) => string | null
+  'git:unwatch-branch': (cwd: string) => void
 
   // --- Dialogs ---
   'dialog:pick-directory': (title?: string, defaultPath?: string) => string | null
@@ -479,6 +480,7 @@ export type InvokeChannels =
   | 'shell:open-vscode'
   | 'shell:vscode-available'
   | 'git:branch'
+  | 'git:unwatch-branch'
   | 'layout:save'
   | 'layout:load'
   | 'dialog:pick-directory'
@@ -517,6 +519,7 @@ export type InvokeChannels =
 
 export type EventChannels =
   | 'sessions:updated'
+  | 'git:branch-updated'
   | 'layout:cwd-repaired'
   | 'pty:data'
   | 'pty:ready'

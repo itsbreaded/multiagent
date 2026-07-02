@@ -146,8 +146,10 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const session = pane.agentKind && pane.sessionId
     ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
     : null
-  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges, isFocused)
-  const branch = showGitBranchBadges ? displayGitBranch(cwdBranch) ?? displayGitBranch(session?.gitBranch) : null
+  const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges)
+  const branch = showGitBranchBadges
+    ? displayGitBranch(cwdBranch === undefined ? session?.gitBranch : cwdBranch)
+    : null
 
   return (
     <div

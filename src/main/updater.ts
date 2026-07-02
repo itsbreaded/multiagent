@@ -3,6 +3,7 @@ import { autoUpdater } from 'electron-updater'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { UpdaterStatus } from '../shared/types'
+import { publishedInstallerExists, windowsInstallerName } from './updateArtifact'
 
 const GH_UPDATE_TOKEN: string = process.env.GH_UPDATE_TOKEN ?? ''
 
@@ -74,6 +75,8 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   // When resuming an already-downloaded update we re-fetch the installer
   // silently and must not flicker the banner through the "downloading" state.
   let suppressProgress = false
+  let validatedVersion = ''
+  let downloadedVersion = ''
 
   // Defensive: clear a stale ready marker once the running app is exactly the
   // version we marked downloaded (i.e. the update was installed and we
@@ -87,7 +90,15 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   // Captured once per session: the version we already downloaded before this launch.
   const resumeReadyVersion = readPersistedState().readyVersion ?? ''
 
-  autoUpdater.on('update-available', (info) => {
+  autoUpdater.on('update-available', async (info) => {
+    validatedVersion = ''
+    const installerName = windowsInstallerName(info.files)
+    if (!installerName || !await publishedInstallerExists(info.version, installerName, GH_UPDATE_TOKEN)) {
+      suppressProgress = false
+      send({ state: 'error' })
+      return
+    }
+    validatedVersion = info.version
     if (resumeReadyVersion && resumeReadyVersion === info.version) {
       // Already downloaded this version in a previous session. Do NOT expose
       // 'ready' yet — the cached installer must be restored and validated first
@@ -108,6 +119,7 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   })
 
   autoUpdater.on('update-not-available', () => {
+    validatedVersion = ''
     clearPersistedState()
     send({ state: 'up-to-date' })
   })
@@ -122,19 +134,27 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    if (validatedVersion !== info.version) return
     suppressProgress = false
     lastPercent = -1
+    downloadedVersion = info.version
     writePersistedState({ readyVersion: info.version })
     send({ state: 'ready', version: info.version })
   })
 
   autoUpdater.on('error', () => {
     suppressProgress = false
+    validatedVersion = ''
     send({ state: 'error' })
   })
 
   ipcMain.on('updater:install', () => {
-    autoUpdater.quitAndInstall()
+    if (!downloadedVersion || downloadedVersion !== validatedVersion) return
+    try {
+      autoUpdater.quitAndInstall()
+    } catch {
+      send({ state: 'error' })
+    }
   })
 
   ipcMain.on('updater:set-enabled', (_, enabled: boolean) => {
@@ -142,6 +162,7 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   })
 
   ipcMain.on('updater:download', () => {
+    if (!validatedVersion) return
     // Immediate feedback: flip the banner to "Downloading…" without waiting for
     // the first progress chunk from electron-updater.
     suppressProgress = false

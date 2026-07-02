@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release and Publish"
+  short_description: "Bump, push, tag, and publish a release"
+  default_prompt: "Use $release-publish to increment the patch version, push master, and publish the release."

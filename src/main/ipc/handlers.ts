@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, shell, clipboard, app, dialog } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import { execFile, execFileSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
@@ -19,6 +19,7 @@ import { windowManager } from '../window/WindowManager'
 import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, PaneTransferPayload, PaneSplitTransferPayload, PaneSwapTransferPayload, SessionSearchRequest, SpawnInTabPayload, Tab } from '../../shared/types'
 import { replaceCwdPrefix } from '../../shared/cwdRepair'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
+import { GitBranchWatcher } from '../git/GitBranchWatcher'
 
 let vsCodeAvailable = false
 try {
@@ -32,7 +33,6 @@ let remoteFocusRequestSeq = 0
 let remoteSpawnRequestSeq = 0
 let focusTargetVersionSeq = 0
 let tabReleaseSeq = 0
-const GIT_BRANCH_CACHE_MS = 10_000
 
 // PTY output is relayed straight to xterm (seq=0 direct write) for both shell and
 // agent panes — no coalescing, no ack, no backpressure. node-pty + xterm handle
@@ -40,13 +40,6 @@ const GIT_BRANCH_CACHE_MS = 10_000
 // only timer left: it covers the brief window where a pane has no routable window
 // (e.g. mid cross-window move), buffering output until a window is available.
 const PTY_ROUTE_RETRY_MS = 50
-
-interface GitBranchCacheEntry {
-  branch: string | null
-  expiresAt: number
-}
-
-const gitBranchCache = new Map<string, GitBranchCacheEntry>()
 
 export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   cleanup: () => void
@@ -64,6 +57,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const pendingDirectOutput = new Map<string, string[]>()
   const directRetryTimers = new Map<string, NodeJS.Timeout>()
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
+  const gitBranchWatcher = new GitBranchWatcher((cwdKeys, branch) => {
+    windowManager.broadcastAll('git:branch-updated', cwdKeys, branch)
+  })
 
   // Relay PTY output straight to the routed window with seq=0 (the renderer writes
   // it to xterm synchronously). If no window is currently routable, buffer in order
@@ -132,47 +128,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return [...claudeSessions, ...codexSessions]
   }
 
-  function execGit(args: string[], cwd: string, timeout = 1500): Promise<string> {
-    return new Promise((resolve, reject) => {
-      execFile('git', args, { cwd, timeout, windowsHide: true }, (error, stdout) => {
-        if (error) {
-          reject(error)
-          return
-        }
-        resolve(stdout.toString().trim())
-      })
-    })
-  }
-
-  async function resolveGitBranch(cwd: string): Promise<string | null> {
-    if (typeof cwd !== 'string' || !cwd.trim()) return null
-    const normalizedCwd = normalizePath(cwd)
-    const cached = gitBranchCache.get(normalizedCwd)
-    if (cached && cached.expiresAt > Date.now()) return cached.branch
-
-    let branch: string | null = null
-    try {
-      const inside = await execGit(['rev-parse', '--is-inside-work-tree'], cwd)
-      if (inside !== 'true') {
-        gitBranchCache.set(normalizedCwd, { branch: null, expiresAt: Date.now() + GIT_BRANCH_CACHE_MS })
-        return null
-      }
-
-      const current = await execGit(['branch', '--show-current'], cwd)
-      if (current) {
-        branch = current
-      } else {
-        const head = await execGit(['rev-parse', '--short', 'HEAD'], cwd)
-        branch = head ? `detached@${head}` : null
-      }
-    } catch {
-      branch = null
-    }
-
-    gitBranchCache.set(normalizedCwd, { branch, expiresAt: Date.now() + GIT_BRANCH_CACHE_MS })
-    return branch
-  }
-
   // Per-window setup: send current session list when a new window loads,
   // and broadcast to all windows whenever this window gains OS focus.
   function registerWindowHandlers(win: BrowserWindow): void {
@@ -234,6 +189,13 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // xterm (seq=0). node-pty + xterm handle the volume; no coalescing/ack/backpressure.
   ptyManager.on('data', (ptyId: string, data: string) => {
     sendDirectPtyOutput(ptyId, data)
+    // A repository can be initialized after a pane first reports "not Git".
+    // Re-probe unresolved CWDs at command completion; established repositories
+    // remain entirely watcher-driven and incur no command-by-command Git calls.
+    if (data.includes('\x1b]633;D')) {
+      const cwd = lastPtyCwd.get(ptyId)
+      if (cwd) void gitBranchWatcher.retryUnresolvedCwd(cwd)
+    }
     if (data.includes('\x1b]7;') || data.includes('\x1b]633;P;Cwd=')) {
       const cwd = parseShellIntegrationCwd(data) ?? parseOsc7(data)
       if (cwd && lastPtyCwd.get(ptyId) !== cwd) {
@@ -398,7 +360,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('shell:vscode-available', () => vsCodeAvailable)
 
-  ipcMain.handle('git:branch', (_e, cwd: string) => resolveGitBranch(cwd))
+  ipcMain.handle('git:branch', (_e, cwd: string) => gitBranchWatcher.watchCwd(cwd))
+  ipcMain.handle('git:unwatch-branch', (_e, cwd: string) => gitBranchWatcher.unwatchCwd(cwd))
 
   ipcMain.handle('shell:open-vscode', (_e, cwd: string) => {
     shell.openExternal(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
@@ -1113,6 +1076,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       for (const timer of directRetryTimers.values()) clearTimeout(timer)
       directRetryTimers.clear()
       pendingDirectOutput.clear()
+      void gitBranchWatcher.dispose()
       index.close()
       spawner.dispose()
       ptyManager.destroy()

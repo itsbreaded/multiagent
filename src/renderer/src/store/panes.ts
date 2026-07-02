@@ -278,7 +278,6 @@ interface PanesStore {
   setVsCodeAvailable: (available: boolean) => void
   cwdGitBranches: Record<string, { status: 'loading' | 'ready'; branch: string | null }>
   requestGitBranch: (cwd: string) => void
-  refreshGitBranch: (cwd: string) => void
 
   // Tab operations
   addTab: (defaultCwd?: string, name?: string) => string
@@ -292,6 +291,7 @@ interface PanesStore {
   closeOtherTabs: (tabId: string) => void
   closeTabsToRight: (tabId: string) => void
   setSidebarSectionOpen: (sectionId: string, open: boolean) => void
+  setAllTabSidebarSectionsOpen: (open: boolean) => void
 
   // Pane operations
   focusPane: (paneId: string) => void
@@ -754,18 +754,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   requestGitBranch: (cwd) => {
     if (!cwd || typeof window === 'undefined' || !window.ipc) return
     const key = normalizeCwdKey(cwd)
-    if (get().cwdGitBranches[key]) return
-    get().refreshGitBranch(cwd)
-  },
-  refreshGitBranch: (cwd) => {
-    if (!cwd || typeof window === 'undefined' || !window.ipc) return
-    const key = normalizeCwdKey(cwd)
-    set((s) => ({
-      cwdGitBranches: {
-        ...s.cwdGitBranches,
-        [key]: { status: 'loading', branch: s.cwdGitBranches[key]?.branch ?? null },
-      },
-    }))
+    if (!get().cwdGitBranches[key]) {
+      set((s) => ({
+        cwdGitBranches: {
+          ...s.cwdGitBranches,
+          [key]: { status: 'loading', branch: null },
+        },
+      }))
+    }
     void window.ipc.invoke('git:branch', cwd)
       .then((branch) => {
         set((s) => ({
@@ -950,6 +946,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   setSidebarSectionOpen: (sectionId, open) => {
     set((s) => ({ sidebarSectionOpen: { ...s.sidebarSectionOpen, [sectionId]: open } }))
+  },
+
+  setAllTabSidebarSectionsOpen: (open) => {
+    set((s) => ({
+      sidebarSectionOpen: s.tabs.reduce(
+        (sections, tab) => ({ ...sections, [tabSidebarSectionId(tab.id)]: open }),
+        { ...s.sidebarSectionOpen }
+      ),
+    }))
   },
 
   focusPane: (paneId) => {
@@ -1914,6 +1919,17 @@ export function normalizeCwdKey(cwd: string): string {
 
 // Wire up module-level IPC listeners once at module load.
 if (typeof window !== 'undefined' && window.ipc) {
+  window.ipc.on('git:branch-updated', (cwdKeys: unknown, branch: unknown) => {
+    if (!Array.isArray(cwdKeys) || !cwdKeys.every((key) => typeof key === 'string')) return
+    const value = typeof branch === 'string' && branch.trim() ? branch : null
+    usePanesStore.setState((s) => ({
+      cwdGitBranches: cwdKeys.reduce((entries, key) => {
+        entries[key] = { status: 'ready', branch: value }
+        return entries
+      }, { ...s.cwdGitBranches }),
+    }))
+  })
+
   window.ipc.on('pty:cwd', (ptyId: unknown, cwd: unknown) => {
     if (typeof ptyId === 'string' && typeof cwd === 'string') {
       usePanesStore.getState().setPaneCwd(ptyId, cwd)

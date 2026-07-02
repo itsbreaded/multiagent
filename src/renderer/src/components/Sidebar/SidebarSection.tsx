@@ -26,7 +26,7 @@ interface SidebarSectionProps {
   onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
   headerDropActive?: boolean
   headerInsertTop?: boolean
-  headerInsertBottom?: boolean
+  sectionInsertBottom?: boolean
   titleSuffix?: React.ReactNode
   headerActionsAlways?: React.ReactNode
   headerActions?: React.ReactNode
@@ -58,7 +58,7 @@ export function SidebarSection({
   onHeaderDrop,
   headerDropActive,
   headerInsertTop,
-  headerInsertBottom,
+  sectionInsertBottom,
   titleSuffix,
   headerActionsAlways,
   headerActions,
@@ -82,7 +82,7 @@ export function SidebarSection({
   }, [renaming])
 
   return (
-    <div style={{ flexShrink: 0, ...style }}>
+    <div style={{ position: 'relative', flexShrink: 0, ...style }}>
       <div
         onContextMenu={onContextMenu}
         draggable={headerDraggable}
@@ -99,11 +99,7 @@ export function SidebarSection({
           outlineOffset: -1,
           backgroundColor: headerDropActive ? ui.color.panelRaised : 'transparent',
           // Inset box-shadow for insertion line (no layout shift, distinct from pane-drop outline)
-          boxShadow: headerInsertTop
-            ? `inset 0 2px 0 ${ui.color.accent}`
-            : headerInsertBottom
-            ? `inset 0 -2px 0 ${ui.color.accent}`
-            : 'none',
+          boxShadow: headerInsertTop ? `inset 0 2px 0 ${ui.color.accent}` : 'none',
         }}
       >
         <button
@@ -190,6 +186,21 @@ export function SidebarSection({
         )}
       </div>
       {open && <div className={contentClassName} style={contentStyle}>{children}</div>}
+      {sectionInsertBottom && (
+        <div
+          data-sidebar-insertion-edge="bottom"
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 2,
+            background: ui.color.accent,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
     </div>
   )
 }

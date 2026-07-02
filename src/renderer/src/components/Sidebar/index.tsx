@@ -1,11 +1,13 @@
 import React, { useRef, useCallback } from 'react'
-import { RECENT_SECTION_ID, usePanesStore } from '../../store/panes'
+import { RECENT_SECTION_ID, tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import { SidebarSection } from './SidebarSection'
 import { SessionRow } from './SessionRow'
 import { TabSections } from './TabSections'
 import { border, sidebarStyles, ui } from '../../styles/theme'
 import newFolderIcon from '../../assets/newfolder.png'
+import collapseAllIcon from '../../assets/collapse_all.png'
+import expandAllIcon from '../../assets/expand_all.png'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
@@ -20,6 +22,9 @@ export function Sidebar(): JSX.Element {
   const getFocusedPane = usePanesStore((s) => s.getFocusedPane)
   const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
   const setSidebarSectionOpen = usePanesStore((s) => s.setSidebarSectionOpen)
+  const setAllTabSidebarSectionsOpen = usePanesStore((s) => s.setAllTabSidebarSectionsOpen)
+  const tabs = usePanesStore((s) => s.tabs)
+  const activeTabId = usePanesStore((s) => s.activeTabId)
   const { resumable, loading } = useSessions()
 
   function activeCwd(): string {
@@ -28,6 +33,9 @@ export function Sidebar(): JSX.Element {
 
   const recentOpen = sidebarSectionOpen[RECENT_SECTION_ID] ?? true
   const recentHeight = sidebarPanelSizes[RECENT_SECTION_ID] ?? 220
+  const anyProjectOpen = tabs.some((tab) =>
+    sidebarSectionOpen[tabSidebarSectionId(tab.id)] ?? sidebarSectionOpen[tab.id] ?? tab.id === activeTabId
+  )
 
   // Resize drag
   const sidebarRef = useRef<HTMLDivElement>(null)
@@ -110,7 +118,8 @@ export function Sidebar(): JSX.Element {
             alignItems: 'center',
             justifyContent: 'center',
             gap: 6,
-            width: '100%',
+            flex: 1,
+            minWidth: 0,
             height: 26,
             flexShrink: 0,
             background: 'none',
@@ -127,6 +136,32 @@ export function Sidebar(): JSX.Element {
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             New Project Folder
           </span>
+        </button>
+        <button
+          title={anyProjectOpen ? 'Collapse all project folders' : 'Expand all project folders'}
+          aria-label={anyProjectOpen ? 'Collapse all project folders' : 'Expand all project folders'}
+          onClick={() => setAllTabSidebarSectionsOpen(!anyProjectOpen)}
+          disabled={tabs.length === 0}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 26,
+            height: 26,
+            flexShrink: 0,
+            padding: 0,
+            background: 'none',
+            border: border.default,
+            borderRadius: 5,
+            cursor: tabs.length === 0 ? 'default' : 'pointer',
+            opacity: tabs.length === 0 ? 0.4 : 1,
+          }}
+        >
+          <img
+            src={anyProjectOpen ? collapseAllIcon : expandAllIcon}
+            alt=""
+            style={{ width: 14, height: 14, opacity: 0.8 }}
+          />
         </button>
       </div>
 
