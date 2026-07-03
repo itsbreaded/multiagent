@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import * as os from 'os'
-import type { InvokeChannels, EventChannels, SendChannels } from '../shared/types'
+import type { IPCChannels, InvokeChannels, EventChannels, SendChannels, IpcBridge } from '../shared/types'
 
 type TraceRecord = { channel: string; args: unknown[] }
 const e2eTraceEnabled = !!process.env['MULTIAGENT_E2E_USER_DATA_DIR']
@@ -24,10 +24,10 @@ if (e2eTraceEnabled) {
 }
 
 // Expose typed IPC bridge to renderer
-contextBridge.exposeInMainWorld('ipc', {
-  invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown> {
+const bridge: IpcBridge = {
+  invoke<C extends InvokeChannels>(channel: C, ...args: Parameters<IPCChannels[C]>): Promise<ReturnType<IPCChannels[C]>> {
     if (e2eTraceEnabled) pushBounded(invokes, { channel, args })
-    return ipcRenderer.invoke(channel, ...args)
+    return ipcRenderer.invoke(channel, ...args) as Promise<ReturnType<IPCChannels[C]>>
   },
 
   on(channel: EventChannels, handler: (...args: unknown[]) => void): () => void {
@@ -41,11 +41,12 @@ contextBridge.exposeInMainWorld('ipc', {
     }
   },
 
-  send(channel: SendChannels, ...args: unknown[]): void {
+  send<C extends SendChannels>(channel: C, ...args: Parameters<IPCChannels[C]>): void {
     if (e2eTraceEnabled) pushBounded(sends, { channel, args })
     ipcRenderer.send(channel, ...args)
   }
-})
+}
+contextBridge.exposeInMainWorld('ipc', bridge)
 
 if (e2eTraceEnabled) {
   contextBridge.exposeInMainWorld('e2ePtyTrace', {

@@ -145,20 +145,10 @@ export default function App(): JSX.Element {
       // Primary window: restore saved layout as before.
       return window.ipc.invoke('layout:load').then((saved) => {
         const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
-        if (data?.tabs?.length) {
-          void usePanesStore.getState().applyLayout(data)
-        }
+        if (data?.tabs?.length) return usePanesStore.getState().applyLayout(data)
+        return undefined
       }).catch(() => {})
-    }).catch(() => {
-      // Fallback: treat as primary window
-      window.ipc.invoke('layout:load').then((saved) => {
-        const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
-        if (data?.tabs?.length) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          void usePanesStore.getState().applyLayout(data as any)
-        }
-      }).catch(() => {})
-    }).finally(() => setLayoutReady(true))
+    }).catch(() => {}).finally(() => setLayoutReady(true))
   }, [])
 
   // Detached window: push tab state to primary on every change (debounced).

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { createShellPty, type CreateShellPtyDeps } from './createShellPty'
+import type { IPCChannels, InvokeChannels } from '../../../../shared/types'
 
 interface InvokeController {
   invoke: Mock
@@ -17,7 +18,11 @@ function makeDeps(onPtyId: Mock = vi.fn(), onError: Mock = vi.fn(), releaseGuard
     resolve = res
     reject = rej
   })
-  const invoke = vi.fn(() => promise)
+  const invokeMock = vi.fn((...call: unknown[]) => call[0] === 'pty:create' ? promise : Promise.resolve(undefined))
+  const invoke = <C extends InvokeChannels>(
+    _channel: C,
+    ..._args: Parameters<IPCChannels[C]>
+  ): Promise<ReturnType<IPCChannels[C]>> => invokeMock(_channel, ..._args) as Promise<ReturnType<IPCChannels[C]>>
   const deps: CreateShellPtyDeps = {
     ipc: { invoke },
     getInitialSize: () => ({ cols: 100, rows: 30 }),
@@ -28,7 +33,7 @@ function makeDeps(onPtyId: Mock = vi.fn(), onError: Mock = vi.fn(), releaseGuard
   return {
     deps,
     invokeCtrl: {
-      invoke,
+      invoke: invokeMock,
       resolveInvoke: resolve,
       rejectInvoke: reject,
     },

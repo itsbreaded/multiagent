@@ -25,7 +25,7 @@ const actual = await vi.importActual<typeof import('zustand')>('zustand')
 const resets = new Set<() => void>()
 
 interface Resettable {
-  setState: (state: unknown, replace?: boolean) => void
+  setState: (state: unknown, replace: true) => void
   getState: () => unknown
 }
 

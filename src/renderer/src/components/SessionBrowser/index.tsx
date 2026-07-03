@@ -71,7 +71,7 @@ export function SessionBrowser(): JSX.Element {
     }
     setDeepSearching(true)
     try {
-      const results = (await window.ipc.invoke('sessions:search-deep', { query: q })) as SessionSearchResult[]
+      const results = await window.ipc.invoke('sessions:search-deep', { query: q })
       if (searchGenRef.current !== gen) return
       setDeepResults(results)
     } catch {

@@ -163,7 +163,7 @@ export function McpSection(): JSX.Element {
     if (entry.type !== 'stdio') return
     setProbeStates((p) => ({ ...p, [entry.id]: { status: 'probing' } }))
     try {
-      const result = await window.ipc.invoke('mcp:probe-stdio', entry.command ?? '', entry.args ?? [], entry.env) as { tools: string[] }
+      const result = await window.ipc.invoke('mcp:probe-stdio', entry.command ?? '', entry.args ?? [], entry.env)
       setProbeStates((p) => ({ ...p, [entry.id]: { status: 'done', tools: result.tools } }))
     } catch (err) {
       setProbeStates((p) => ({ ...p, [entry.id]: { status: 'error', message: (err as Error).message } }))
@@ -530,7 +530,7 @@ function ServerForm({
     if (data.type !== 'stdio' || !data.command?.trim()) return
     setFormProbe({ status: 'probing' })
     try {
-      const result = await window.ipc.invoke('mcp:probe-stdio', data.command.trim(), data.args ?? [], data.env) as { tools: string[] }
+      const result = await window.ipc.invoke('mcp:probe-stdio', data.command.trim(), data.args ?? [], data.env)
       setFormProbe({ status: 'done', tools: result.tools })
     } catch (err) {
       setFormProbe({ status: 'error', message: (err as Error).message })

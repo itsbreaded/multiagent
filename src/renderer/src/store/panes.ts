@@ -231,7 +231,7 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
           }
           return
         }
-        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd) as { ptyId?: string } | null
+        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
         if (!result?.ptyId) return
         const current = usePanesStore.getState().findPaneInAnyTab(paneId)
         if (
@@ -475,7 +475,7 @@ function liveBasePaneId(tab: Tab): string | null {
 async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: AgentKind, cwd: string, extraFailurePatch: Partial<PaneLeaf> = {}): Promise<void> {
   if (typeof window === 'undefined' || !window.ipc) return
   try {
-    const result = await window.ipc.invoke('session:new', agentKind, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
+    const result = await window.ipc.invoke('session:new', agentKind, cwd)
     const patch: Partial<PaneLeaf> = {
       agentDisconnected: undefined,
       resumeError: undefined,
@@ -1320,7 +1320,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
+        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
         if (result?.ptyId) {
           get().setPtyId(leaf.id, result.ptyId)
         }
@@ -1347,7 +1347,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }))
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
+        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
         if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
       } catch (err) {
         console.error('session:resume IPC failed', err)
@@ -1375,7 +1375,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       sessionDetectionError: undefined,
     })
     try {
-      const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd) as { ptyId: string }
+      const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
       const current = get().findPaneInAnyTab(paneId)
       if (
         current?.paneType === 'agent' &&
@@ -1466,15 +1466,18 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
           if (migrated.paneType === 'agent' && !migrated.sessionId) {
             const isRecoverablePending =
               migrated.sessionDetectionState === 'pending' &&
-              migrated.agentKind &&
+              migrated.agentKind !== undefined &&
               typeof migrated.sessionDetectionStartedAt === 'number'
 
             if (isRecoverablePending && typeof window !== 'undefined' && window.ipc) {
+              const agentKind = migrated.agentKind
+              const startedAt = migrated.sessionDetectionStartedAt
+              if (!agentKind || startedAt === undefined) return migrated
               const recovered = await window.ipc.invoke(
                 'sessions:recover-pending',
-                migrated.agentKind,
+                agentKind,
                 migrated.sessionDetectionCwd ?? migrated.cwd,
-                migrated.sessionDetectionStartedAt,
+                startedAt,
               ).catch(() => null)
               if (typeof recovered === 'string' && recovered) {
                 return {

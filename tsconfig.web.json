@@ -3,7 +3,8 @@
   "include": [
     "src/renderer/**/*",
     "src/shared/**/*",
-    "tests/**/*"
+    "tests/**/*",
+    "__mocks__/**/*"
   ],
   "compilerOptions": {
     "composite": true,
