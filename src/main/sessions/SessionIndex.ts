@@ -6,6 +6,7 @@ import type { AgentKind, Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
 import { claudeProjectDirForCwd, claudeTranscriptPathForCwd } from './claudePaths'
 import { toFtsMatchExpression, splitFtsTokens, toLikeSubstringPattern } from './ftsQuery'
+import { deriveProjectName } from './transcriptParse'
 
 /**
  * Default DB path. Computed lazily — not at module load — so the module can be
@@ -24,12 +25,19 @@ function normalizeStatus(status: string | null | undefined): Session['status'] {
   return status === 'live-attached' ? 'live-attached' : 'resumable'
 }
 
-function scannedToSession(row: DbRow): Session {
-  return {
+function makeRowMapper(exists: (cwd: string) => boolean = fs.existsSync): (row: DbRow) => Session {
+  const cache = new Map<string, boolean>()
+  return (row) => {
+    let cwdExists = cache.get(row.cwd)
+    if (cwdExists === undefined) {
+      cwdExists = exists(row.cwd)
+      cache.set(row.cwd, cwdExists)
+    }
+    return {
     agentKind: row.agentKind as AgentKind,
     sessionId: row.sessionId,
     cwd: row.cwd,
-    cwdExists: fs.existsSync(row.cwd),
+    cwdExists,
     projectName: row.projectName,
     displayName: row.displayName ?? null,
     gitBranch: row.gitBranch ?? null,
@@ -40,6 +48,7 @@ function scannedToSession(row: DbRow): Session {
     messageCount: row.messageCount,
     transcriptPath: row.filePath,
     status: normalizeStatus(row.status),
+    }
   }
 }
 
@@ -60,24 +69,36 @@ interface DbRow {
   status: string
 }
 
-function deriveProjectName(cwd: string): string {
-  const normalized = cwd.replace(/\\/g, '/')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length >= 2) return parts.slice(-2).join('/')
-  return parts[parts.length - 1] ?? cwd
-}
-
 export class SessionIndex {
   private db: Database.Database
+  private upsertStmt: Database.Statement
+  private overrideStmt: Database.Statement
+  private mtimesStmt: Database.Statement
 
   constructor(dbPath: string = defaultDbPath()) {
     this.db = new Database(dbPath)
     this.db.pragma('journal_mode = WAL')
     this.migrate()
+    this.overrideStmt = this.db.prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
+    this.mtimesStmt = this.db.prepare(`SELECT agentKind, sessionId, mtimeMs FROM sessions`)
+    this.upsertStmt = this.db.prepare(`
+      INSERT INTO sessions (
+        agentKind, sessionId, cwd, projectName, displayName, gitBranch, firstMessage, lastMessage,
+        firstActivity, lastActivity, messageCount, filePath, mtimeMs, status
+      ) VALUES (
+        @agentKind, @sessionId, @cwd, @projectName, @displayName, @gitBranch, @firstMessage, @lastMessage,
+        @firstActivity, @lastActivity, @messageCount, @filePath, @mtimeMs, 'resumable'
+      ) ON CONFLICT(agentKind, sessionId) DO UPDATE SET
+        cwd=excluded.cwd, projectName=excluded.projectName, displayName=excluded.displayName,
+        gitBranch=excluded.gitBranch, firstMessage=excluded.firstMessage, lastMessage=excluded.lastMessage,
+        firstActivity=excluded.firstActivity, lastActivity=excluded.lastActivity, messageCount=excluded.messageCount,
+        filePath=excluded.filePath, mtimeMs=excluded.mtimeMs
+    `)
   }
 
   private migrate(): void {
-    this.db.exec(`
+    const version = this.db.pragma('user_version', { simple: true }) as number
+    if (version < 1) this.db.exec(`
       DROP TRIGGER IF EXISTS sessions_ai;
       DROP TRIGGER IF EXISTS sessions_ad;
       DROP TRIGGER IF EXISTS sessions_au;
@@ -181,8 +202,11 @@ export class SessionIndex {
         VALUES (new.rowid, new.agentKind, new.sessionId, new.projectName, new.displayName, new.firstMessage, new.lastMessage);
       END;
 
-      INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild');
     `)
+    if (version < 1) {
+      this.db.exec(`INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')`)
+      this.db.pragma('user_version = 1')
+    }
   }
 
   upsert(session: ScannedSession): void {
@@ -192,29 +216,7 @@ export class SessionIndex {
     const filePath = override && session.agentKind === 'claude'
       ? existingClaudeTranscriptPathForCwd(session.sessionId, cwd) ?? session.filePath
       : session.filePath
-    const stmt = this.db.prepare(`
-      INSERT INTO sessions (
-        agentKind, sessionId, cwd, projectName, displayName, gitBranch, firstMessage, lastMessage,
-        firstActivity, lastActivity, messageCount, filePath, mtimeMs, status
-      ) VALUES (
-        @agentKind, @sessionId, @cwd, @projectName, @displayName, @gitBranch, @firstMessage, @lastMessage,
-        @firstActivity, @lastActivity, @messageCount, @filePath, @mtimeMs, 'resumable'
-      )
-      ON CONFLICT(agentKind, sessionId) DO UPDATE SET
-        cwd = excluded.cwd,
-        projectName = excluded.projectName,
-        displayName = excluded.displayName,
-        gitBranch = excluded.gitBranch,
-        firstMessage = excluded.firstMessage,
-        lastMessage = excluded.lastMessage,
-        firstActivity = excluded.firstActivity,
-        lastActivity = excluded.lastActivity,
-        messageCount = excluded.messageCount,
-        filePath = excluded.filePath,
-        mtimeMs = excluded.mtimeMs
-    `)
-
-    stmt.run({
+    this.upsertStmt.run({
       agentKind: session.agentKind,
       sessionId: session.sessionId,
       cwd,
@@ -231,10 +233,23 @@ export class SessionIndex {
     })
   }
 
+  upsertMany(sessions: ScannedSession[]): { changed: number } {
+    const stored = new Map((this.mtimesStmt.all() as Array<{ agentKind: string; sessionId: string; mtimeMs: number }>).map(
+      (row) => [`${row.agentKind}:${row.sessionId}`, row.mtimeMs],
+    ))
+    let changed = 0
+    this.db.transaction(() => {
+      for (const session of sessions) {
+        if (stored.get(`${session.agentKind}:${session.sessionId}`) === session.mtimeMs) continue
+        this.upsert(session)
+        changed++
+      }
+    })()
+    return { changed }
+  }
+
   private getCwdOverride(agentKind: AgentKind, sessionId: string): { cwd: string; projectName: string } | null {
-    const row = this.db
-      .prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
-      .get(agentKind, sessionId) as { cwd: string; projectName: string } | undefined
+    const row = this.overrideStmt.get(agentKind, sessionId) as { cwd: string; projectName: string } | undefined
     return row ?? null
   }
 
@@ -275,7 +290,7 @@ export class SessionIndex {
     const updatedRows = this.db
       .prepare(`SELECT * FROM sessions WHERE cwd = ? ORDER BY lastActivity DESC NULLS LAST`)
       .all(newCwd) as DbRow[]
-    return updatedRows.map(scannedToSession)
+    return updatedRows.map(makeRowMapper())
   }
 
   has(agentKind: AgentKind, sessionId: string): boolean {
@@ -286,7 +301,7 @@ export class SessionIndex {
     const row = this.db
       .prepare('SELECT * FROM sessions WHERE agentKind = ? AND sessionId = ?')
       .get(agentKind, sessionId) as DbRow | undefined
-    return row ? scannedToSession(row) : null
+    return row ? makeRowMapper()(row) : null
   }
 
   getAll(): Session[] {
@@ -295,14 +310,14 @@ export class SessionIndex {
         `SELECT * FROM sessions ORDER BY lastActivity DESC NULLS LAST`
       )
       .all() as DbRow[]
-    return rows.map(scannedToSession)
+    return rows.map(makeRowMapper())
   }
 
   getByProject(cwd: string): Session[] {
     const rows = this.db
       .prepare(`SELECT * FROM sessions WHERE cwd = ? ORDER BY lastActivity DESC NULLS LAST`)
       .all(cwd) as DbRow[]
-    return rows.map(scannedToSession)
+    return rows.map(makeRowMapper())
   }
 
   search(query: string): Session[] {
@@ -324,7 +339,7 @@ export class SessionIndex {
         `
         )
         .all(match) as DbRow[]
-      return rows.map(scannedToSession)
+      return rows.map(makeRowMapper())
     } catch {
       // Belt-and-braces: a residual FTS edge case degrades to a slower-but-
       // correct LIKE scan over the summary columns instead of rejecting the
@@ -355,7 +370,7 @@ export class SessionIndex {
     const rows = this.db
       .prepare(`SELECT * FROM sessions WHERE ${groups} ORDER BY lastActivity DESC NULLS LAST`)
       .all(...params) as DbRow[]
-    return rows.map(scannedToSession)
+    return rows.map(makeRowMapper())
   }
 
   delete(agentKind: AgentKind, sessionId: string): void {

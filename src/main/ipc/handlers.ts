@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as fs from 'fs'
 import { execFileSync } from 'child_process'
 import { SessionIndex } from '../sessions/SessionIndex'
+import { createSessionPoller } from '../sessions/sessionPoll'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
@@ -154,12 +155,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   registerWindowHandlers(mainWindow)
 
   // Initial full scan on startup.
-  scanAllSessions().then((sessions) => {
-    sessions.forEach((s) => {
-      try { index.upsert(s) } catch { /* skip malformed entries */ }
-    })
-    windowManager.broadcastAll('sessions:updated', index.getAll())
-  }).catch((err) => {
+  const sessionPoller = createSessionPoller({
+    scanAll: scanAllSessions,
+    index,
+    broadcast: (sessions) => windowManager.broadcastAll('sessions:updated', sessions),
+  })
+  sessionPoller.poll(true).catch((err) => {
     console.error('[MultiAgent] Session scan failed:', err)
     windowManager.broadcastAll('sessions:updated', [])
   })
@@ -167,26 +168,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const projectsDir = path.join(os.homedir(), '.claude', 'projects')
   fs.mkdirSync(projectsDir, { recursive: true })
 
-  let lastSessionsJson = ''
-
-  async function pollSessions(forceBroadcast = false): Promise<void> {
-    try {
-      const sessions = await scanAllSessions()
-      for (const session of sessions) {
-        index.upsert(session)
-      }
-      const all = index.getAll()
-      const json = JSON.stringify(all)
-      if (forceBroadcast || json !== lastSessionsJson) {
-        lastSessionsJson = json
-        windowManager.broadcastAll('sessions:updated', all)
-      }
-    } catch (err) {
-      console.error('[MultiAgent] pollSessions error:', err)
-    }
-  }
-
-  const contentTimer = setInterval(() => { void pollSessions() }, 5000)
+  const contentTimer = setInterval(() => {
+    void sessionPoller.poll().catch((err) => console.error('[MultiAgent] pollSessions error:', err))
+  }, 5000)
 
   // PTY data -> renderer. Both shell and agent panes relay output directly to
   // xterm (seq=0). node-pty + xterm handle the volume; no coalescing/ack/backpressure.
@@ -275,7 +259,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const updated = index.repairCwd(mapping.oldCwd, mapping.newCwd)
     if (updated.length > 0) {
       const all = index.getAll()
-      lastSessionsJson = JSON.stringify(all)
       windowManager.broadcastAll('sessions:updated', all)
     }
     if (layoutRepair.changed || updated.length > 0) {
@@ -291,7 +274,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   ipcMain.handle('sessions:refresh', async () => {
-    await pollSessions(true)
+    await sessionPoller.poll(true)
     return index.getAll()
   })
 
