@@ -23,6 +23,19 @@ export class BrowserViewManager extends EventEmitter {
   // No-op kept for API compatibility — window is created lazily on first use
   initialize(): void {}
 
+  /**
+   * Single shared guard for the closed-window state. Used by every interaction
+   * and query method so they fail honestly with a recovery hint instead of
+   * returning a fake-success value. The prefix `Browser window not open` is
+   * load-bearing — keep it.
+   */
+  private _requireWebContents(): Electron.WebContents {
+    if (!this.win || this.win.isDestroyed()) {
+      throw new Error('Browser window not open — call browser_navigate to open it')
+    }
+    return this.win.webContents
+  }
+
   private _ensureWindow(): BrowserWindow {
     if (!this.win || this.win.isDestroyed()) {
       this.win = new BrowserWindow({
@@ -82,8 +95,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async click(selector: string): Promise<{ url: string; title: string }> {
-    const wc = this.win?.webContents
-    if (!wc) return { url: '', title: '' }
+    const wc = this._requireWebContents()
     const urlBefore = wc.getURL()
     const pos = await wc.executeJavaScript(`
       (() => {
@@ -103,8 +115,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async type(selector: string, text: string): Promise<void> {
-    const wc = this.win?.webContents
-    if (!wc) return
+    const wc = this._requireWebContents()
     const pos = await wc.executeJavaScript(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -133,20 +144,18 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async screenshot(): Promise<string> {
-    if (!this.win || this.win.isDestroyed()) throw new Error('Browser window not open')
-    const image = await this.win.webContents.capturePage()
+    const wc = this._requireWebContents()
+    const image = await wc.capturePage()
     return image.toDataURL()
   }
 
   async evaluate(js: string): Promise<unknown> {
-    return this.win?.webContents.executeJavaScript(js, true)
+    const wc = this._requireWebContents()
+    return wc.executeJavaScript(js, true)
   }
 
   async getContent(options: BrowserContentOptions = {}): Promise<BrowserContentResult> {
-    const wc = this.win?.webContents
-    if (!wc) {
-      return { text: '', characters: 0, lines: 0, truncated: false, selector: options.selector }
-    }
+    const wc = this._requireWebContents()
 
     const text = ((await wc.executeJavaScript(`
       (() => {
@@ -169,15 +178,17 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async scroll(x: number, y: number): Promise<void> {
-    await this.win?.webContents.executeJavaScript(`window.scrollBy(${x}, ${y})`)
+    const wc = this._requireWebContents()
+    await wc.executeJavaScript(`window.scrollBy(${x}, ${y})`)
   }
 
   async waitFor(selector: string, timeoutMs = 5000): Promise<void> {
+    const wc = this._requireWebContents()
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      const found = (await this.win?.webContents.executeJavaScript(
+      const found = await wc.executeJavaScript(
         `!!document.querySelector(${JSON.stringify(selector)})`
-      )) as boolean | undefined
+      ) as boolean
       if (found) return
       await new Promise((r) => setTimeout(r, 200))
     }
@@ -185,20 +196,21 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   getCurrentUrl(): string {
-    return this.win?.webContents.getURL() ?? ''
+    const wc = this._requireWebContents()
+    return wc.getURL()
   }
 
   async goBack(): Promise<{ url: string; title: string }> {
-    const wc = this.win?.webContents
-    if (!wc?.canGoBack()) throw new Error('No previous page in history')
+    const wc = this._requireWebContents()
+    if (!wc.canGoBack()) throw new Error('No previous page in history')
     wc.goBack()
     await this._waitForNavigation()
     return { url: wc.getURL(), title: wc.getTitle() }
   }
 
   async goForward(): Promise<{ url: string; title: string }> {
-    const wc = this.win?.webContents
-    if (!wc?.canGoForward()) throw new Error('No next page in history')
+    const wc = this._requireWebContents()
+    if (!wc.canGoForward()) throw new Error('No next page in history')
     wc.goForward()
     await this._waitForNavigation()
     return { url: wc.getURL(), title: wc.getTitle() }
@@ -231,8 +243,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async hover(selector: string): Promise<void> {
-    const wc = this.win?.webContents
-    if (!wc) return
+    const wc = this._requireWebContents()
     const pos = await wc.executeJavaScript(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -257,8 +268,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async hoverAt(x: number, y: number): Promise<void> {
-    const wc = this.win?.webContents
-    if (!wc) return
+    const wc = this._requireWebContents()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wc.sendInputEvent({ type: 'mouseMove', x, y } as any)
     await wc.executeJavaScript(`
@@ -274,8 +284,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async clickAt(x: number, y: number): Promise<{ url: string; title: string }> {
-    const wc = this.win?.webContents
-    if (!wc) return { url: '', title: '' }
+    const wc = this._requireWebContents()
     const urlBefore = wc.getURL()
     this.win!.focus()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -292,8 +301,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async clickText(text: string, exact = false): Promise<{ url: string; title: string }> {
-    const wc = this.win?.webContents
-    if (!wc) return { url: '', title: '' }
+    const wc = this._requireWebContents()
     // Three-pass search: <a> first (preferred for navigation), then buttons, then
     // structural containers — for containers, walk up to the nearest <a> ancestor.
     // Returns coordinates + href so we can navigate directly for real links.
@@ -355,8 +363,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async getElements(selector: string): Promise<Array<{ tag: string; text: string; value: string; id: string; classes: string; href: string; role: string; x: number; y: number; width: number; height: number; visible: boolean }>> {
-    const wc = this.win?.webContents
-    if (!wc) return []
+    const wc = this._requireWebContents()
     return await wc.executeJavaScript(`
       (() => {
         return [...document.querySelectorAll(${JSON.stringify(selector)})].map(el => {
@@ -381,8 +388,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async getLinks(textFilter?: string): Promise<Array<{ text: string; href: string; x: number; y: number }>> {
-    const wc = this.win?.webContents
-    if (!wc) return []
+    const wc = this._requireWebContents()
     return await wc.executeJavaScript(`
       (() => {
         const filter = ${JSON.stringify(textFilter?.toLowerCase() ?? null)};
@@ -407,11 +413,12 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async waitForText(text: string, timeoutMs = 5000): Promise<void> {
+    const wc = this._requireWebContents()
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      const found = (await this.win?.webContents.executeJavaScript(
+      const found = await wc.executeJavaScript(
         `document.body.innerText.toLowerCase().includes(${JSON.stringify(text.toLowerCase())})`
-      )) as boolean | undefined
+      ) as boolean
       if (found) return
       await new Promise((r) => setTimeout(r, 200))
     }
@@ -419,8 +426,7 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async keyboard(key: string, modifiers: string[] = []): Promise<void> {
-    const wc = this.win?.webContents
-    if (!wc) return
+    const wc = this._requireWebContents()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mods = modifiers as any
     wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
@@ -428,8 +434,8 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async waitForLoad(timeoutMs = 10000): Promise<void> {
-    const wc = this.win?.webContents
-    if (!wc || !wc.isLoading()) return
+    const wc = this._requireWebContents()
+    if (!wc.isLoading()) return
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         wc.removeListener('did-stop-loading', onDone)
@@ -441,7 +447,8 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async selectOption(selector: string, value: string): Promise<void> {
-    await this.win?.webContents.executeJavaScript(`
+    const wc = this._requireWebContents()
+    await wc.executeJavaScript(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return;
