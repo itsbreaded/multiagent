@@ -2,16 +2,8 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useUpdaterStore } from '../../store/updater'
 import { usePanesStore } from '../../store/panes'
 import {
-  DEFAULT_TERMINAL_SCROLLBACK_LINES,
-  MAX_TERMINAL_SCROLLBACK_LINES,
-  MIN_TERMINAL_SCROLLBACK_LINES,
-  MIN_CONTRAST_RATIO,
-  MAX_CONTRAST_RATIO,
-  normalizeTerminalScrollbackLines,
-  normalizeContrastRatio,
   useSettingsStore,
   type SettingsSection,
-  type GpuAccelerationPref,
 } from '../../store/settings'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { overlayStyles, ui } from '../../styles/theme'
@@ -25,7 +17,7 @@ import {
 import { McpSection } from './McpSection'
 import { SectionLabel } from '../common/SectionLabel'
 import { matchesSettingQuery } from './settingsSearch'
-import { GitBranchBadgesSetting, GpuAccelerationSetting, OptimizedRendererSetting, TabOverflowSetting } from './settings/controls'
+import { ContrastRatioSetting, GitBranchBadgesSetting, GpuAccelerationSetting, OptimizedRendererSetting, RescaleGlyphsSetting, ScrollbackSetting, TabOverflowSetting } from './settings/controls'
 import { AgentProvidersSection } from './AgentProvidersSection'
 import { TerminalBindingsSection } from './TerminalBindingsSection'
 
@@ -42,20 +34,6 @@ const HOTKEY_ORDER: HotkeyId[] = [
 
 export function SettingsPanel(): JSX.Element {
   const closeOverlays = usePanesStore((s) => s.closeOverlays)
-  const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
-  const setShowGitBranchBadges = useSettingsStore((s) => s.setShowGitBranchBadges)
-  const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
-  const setTabOverflowMode = useSettingsStore((s) => s.setTabOverflowMode)
-  const optimizedTerminalRenderer = useSettingsStore((s) => s.optimizedTerminalRenderer)
-  const setOptimizedTerminalRenderer = useSettingsStore((s) => s.setOptimizedTerminalRenderer)
-  const terminalGpuAcceleration = useSettingsStore((s) => s.terminalGpuAcceleration)
-  const setTerminalGpuAcceleration = useSettingsStore((s) => s.setTerminalGpuAcceleration)
-  const terminalMinimumContrastRatio = useSettingsStore((s) => s.terminalMinimumContrastRatio)
-  const setTerminalMinimumContrastRatio = useSettingsStore((s) => s.setTerminalMinimumContrastRatio)
-  const terminalRescaleOverlappingGlyphs = useSettingsStore((s) => s.terminalRescaleOverlappingGlyphs)
-  const setTerminalRescaleOverlappingGlyphs = useSettingsStore((s) => s.setTerminalRescaleOverlappingGlyphs)
-  const terminalScrollbackLines = useSettingsStore((s) => s.terminalScrollbackLines)
-  const setTerminalScrollbackLines = useSettingsStore((s) => s.setTerminalScrollbackLines)
   const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
   const setHotkeyOverride = useSettingsStore((s) => s.setHotkeyOverride)
   const resetHotkeyOverride = useSettingsStore((s) => s.resetHotkeyOverride)
@@ -73,8 +51,6 @@ export function SettingsPanel(): JSX.Element {
   // terminal key binding. Distinct from the red `conflictLabel` refusal.
   const [hotkeyTerminalWarning, setHotkeyTerminalWarning] = useState<string | null>(null)
   const terminalKeyBindings = useSettingsStore((s) => s.terminalKeyBindings)
-  const [scrollbackDraft, setScrollbackDraft] = useState(String(terminalScrollbackLines))
-  const [contrastDraft, setContrastDraft] = useState(String(terminalMinimumContrastRatio))
   const mouseDownOnOverlay = useRef(false)
 
   // Lazily read diagnostics only when Terminal section is active to avoid any probe
@@ -178,25 +154,6 @@ export function SettingsPanel(): JSX.Element {
     return () => clearTimeout(t)
   }, [hotkeyTerminalWarning])
 
-  useEffect(() => {
-    setScrollbackDraft(String(terminalScrollbackLines))
-  }, [terminalScrollbackLines])
-
-  useEffect(() => {
-    setContrastDraft(String(terminalMinimumContrastRatio))
-  }, [terminalMinimumContrastRatio])
-
-  function commitScrollbackDraft(): void {
-    const normalized = normalizeTerminalScrollbackLines(scrollbackDraft.replaceAll(',', ''))
-    setTerminalScrollbackLines(normalized)
-    setScrollbackDraft(String(normalized))
-  }
-
-  function commitContrastDraft(): void {
-    const normalized = normalizeContrastRatio(contrastDraft)
-    setTerminalMinimumContrastRatio(normalized)
-    setContrastDraft(String(normalized))
-  }
 
   const normalizedQuery = query.trim().toLowerCase()
   const isSearching = normalizedQuery !== ''
@@ -475,105 +432,9 @@ export function SettingsPanel(): JSX.Element {
                     )}
 
                     <div style={{ marginTop: 8 }}><SectionLabel>Display</SectionLabel></div>
-                    {showContrastSetting && (
-                      <SettingRow
-                        title="Minimum contrast ratio"
-                        description={`1 = no color adjustment (preserves exact agent colors). Range ${MIN_CONTRAST_RATIO}–${MAX_CONTRAST_RATIO}. Applies immediately.`}
-                      >
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={contrastDraft}
-                          onChange={(e) => setContrastDraft(e.target.value)}
-                          onBlur={commitContrastDraft}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') { e.preventDefault(); commitContrastDraft(); e.currentTarget.blur() }
-                          }}
-                          style={{
-                            width: 60,
-                            backgroundColor: '#0e0f11',
-                            border: '1px solid #3a3b3e',
-                            borderRadius: 4,
-                            color: '#d4d4d4',
-                            fontSize: 12,
-                            padding: '5px 7px',
-                            textAlign: 'right',
-                          }}
-                        />
-                      </SettingRow>
-                    )}
-                    {showRescaleSetting && (
-                      <SettingRow
-                        title="Rescale overlapping glyphs"
-                        description="Shrink wide or ambiguous-width characters so they don't bleed into adjacent cells. WebGL renderer only — no effect on DOM renderer."
-                      >
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={terminalRescaleOverlappingGlyphs}
-                            onChange={(e) => setTerminalRescaleOverlappingGlyphs(e.target.checked)}
-                          />
-                          Enabled
-                        </label>
-                      </SettingRow>
-                    )}
-                    {showScrollbackSetting && (
-                      <SettingRow
-                        title="Scrollback lines"
-                        description="Maximum retained terminal history. Applies immediately; lowering this can trim existing scrollback."
-                      >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            min={MIN_TERMINAL_SCROLLBACK_LINES}
-                            max={MAX_TERMINAL_SCROLLBACK_LINES}
-                            value={scrollbackDraft}
-                            onChange={(e) => setScrollbackDraft(e.target.value)}
-                            onBlur={commitScrollbackDraft}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                commitScrollbackDraft()
-                                e.currentTarget.blur()
-                              }
-                            }}
-                            style={{
-                              width: 120,
-                              backgroundColor: '#0e0f11',
-                              border: '1px solid #3a3b3e',
-                              borderRadius: 4,
-                              color: '#d4d4d4',
-                              fontSize: 12,
-                              padding: '5px 7px',
-                              textAlign: 'right',
-                            }}
-                          />
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            {[50_000, 100_000, DEFAULT_TERMINAL_SCROLLBACK_LINES].map((value) => (
-                              <button
-                                key={value}
-                                onClick={() => {
-                                  setTerminalScrollbackLines(value)
-                                  setScrollbackDraft(String(value))
-                                }}
-                                style={{
-                                  background: terminalScrollbackLines === value ? ui.color.control : 'none',
-                                  border: `1px solid ${terminalScrollbackLines === value ? ui.color.accent : ui.color.border}`,
-                                  borderRadius: 4,
-                                  color: terminalScrollbackLines === value ? ui.color.text : ui.color.textMuted,
-                                  fontSize: 11,
-                                  cursor: 'pointer',
-                                  padding: '2px 6px',
-                                }}
-                              >
-                                {formatLineCount(value)}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </SettingRow>
-                    )}
+                    {showContrastSetting && <ContrastRatioSetting />}
+                    {showRescaleSetting && <RescaleGlyphsSetting />}
+                    {showScrollbackSetting && <ScrollbackSetting />}
                     {!anyTerminalSetting && (
                       <EmptyMessage>No terminal settings match your search.</EmptyMessage>
                     )}
@@ -611,25 +472,6 @@ export function SettingsPanel(): JSX.Element {
                 recording={recording}
                 conflictLabel={conflictLabel}
                 terminalClashLabelForHotkey={terminalClashLabelForHotkey}
-                showGitBranchBadges={showGitBranchBadges}
-                setShowGitBranchBadges={setShowGitBranchBadges}
-                tabOverflowMode={tabOverflowMode}
-                setTabOverflowMode={setTabOverflowMode}
-                optimizedTerminalRenderer={optimizedTerminalRenderer}
-                setOptimizedTerminalRenderer={setOptimizedTerminalRenderer}
-                terminalGpuAcceleration={terminalGpuAcceleration}
-                setTerminalGpuAcceleration={setTerminalGpuAcceleration}
-                terminalMinimumContrastRatio={terminalMinimumContrastRatio}
-                contrastDraft={contrastDraft}
-                setContrastDraft={setContrastDraft}
-                commitContrastDraft={commitContrastDraft}
-                terminalRescaleOverlappingGlyphs={terminalRescaleOverlappingGlyphs}
-                setTerminalRescaleOverlappingGlyphs={setTerminalRescaleOverlappingGlyphs}
-                terminalScrollbackLines={terminalScrollbackLines}
-                scrollbackDraft={scrollbackDraft}
-                setScrollbackDraft={setScrollbackDraft}
-                commitScrollbackDraft={commitScrollbackDraft}
-                setTerminalScrollbackLines={setTerminalScrollbackLines}
                 onStartRecording={(id) => { setRecording(id); setConflictLabel(null) }}
                 onResetHotkey={(id) => { resetHotkeyOverride(id); if (recording === id) setRecording(null) }}
                 onNavigate={(section) => { setQuery(''); setActiveSection(section) }}
@@ -658,25 +500,6 @@ function SearchResults({
   recording,
   conflictLabel,
   terminalClashLabelForHotkey,
-  showGitBranchBadges,
-  setShowGitBranchBadges,
-  tabOverflowMode,
-  setTabOverflowMode,
-  optimizedTerminalRenderer,
-  setOptimizedTerminalRenderer,
-  terminalGpuAcceleration,
-  setTerminalGpuAcceleration,
-  terminalMinimumContrastRatio: _terminalMinimumContrastRatio,
-  contrastDraft,
-  setContrastDraft,
-  commitContrastDraft,
-  terminalRescaleOverlappingGlyphs,
-  setTerminalRescaleOverlappingGlyphs,
-  terminalScrollbackLines,
-  scrollbackDraft,
-  setScrollbackDraft,
-  commitScrollbackDraft,
-  setTerminalScrollbackLines,
   onStartRecording,
   onResetHotkey,
   onNavigate,
@@ -696,25 +519,6 @@ function SearchResults({
   recording: HotkeyId | null
   conflictLabel: string | null
   terminalClashLabelForHotkey: (id: HotkeyId) => string | null
-  showGitBranchBadges: boolean
-  setShowGitBranchBadges: (v: boolean) => void
-  tabOverflowMode: 'scroll' | 'wrap'
-  setTabOverflowMode: (v: 'scroll' | 'wrap') => void
-  optimizedTerminalRenderer: boolean
-  setOptimizedTerminalRenderer: (v: boolean) => void
-  terminalGpuAcceleration: GpuAccelerationPref
-  setTerminalGpuAcceleration: (v: GpuAccelerationPref) => void
-  terminalMinimumContrastRatio: number
-  contrastDraft: string
-  setContrastDraft: (v: string) => void
-  commitContrastDraft: () => void
-  terminalRescaleOverlappingGlyphs: boolean
-  setTerminalRescaleOverlappingGlyphs: (v: boolean) => void
-  terminalScrollbackLines: number
-  scrollbackDraft: string
-  setScrollbackDraft: (v: string) => void
-  commitScrollbackDraft: () => void
-  setTerminalScrollbackLines: (v: number) => void
   onStartRecording: (id: HotkeyId) => void
   onResetHotkey: (id: HotkeyId) => void
   onNavigate: (section: SettingsSection) => void
@@ -733,51 +537,8 @@ function SearchResults({
       {hasAppearance && (
         <>
           <SectionLabel>Appearance</SectionLabel>
-          {showBranchSetting && (
-            <SettingRow
-              title="Git branch badges"
-              description="Show the current branch beside tab default directories and pane directories."
-            >
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={showGitBranchBadges}
-                  onChange={(e) => setShowGitBranchBadges(e.target.checked)}
-                />
-                Enabled
-              </label>
-            </SettingRow>
-          )}
-          {showOverflowSetting && (
-            <SettingRow
-              title="Tab overflow"
-              description="Scroll keeps tabs in a single row; Wrap grows to additional rows."
-            >
-              <div style={{ display: 'flex', gap: 6 }}>
-                {(['scroll', 'wrap'] as const).map((mode) => {
-                  const isActive = tabOverflowMode === mode
-                  return (
-                    <button
-                      key={mode}
-                      onClick={() => setTabOverflowMode(mode)}
-                      style={{
-                        padding: '4px 12px',
-                        background: isActive ? ui.color.control : 'none',
-                        border: `1px solid ${isActive ? ui.color.accent : ui.color.border}`,
-                        borderRadius: ui.radius.sm,
-                        color: isActive ? ui.color.text : ui.color.textMuted,
-                        fontSize: 12,
-                        cursor: 'pointer',
-                        fontWeight: isActive ? 500 : 400,
-                      }}
-                    >
-                      {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                    </button>
-                  )
-                })}
-              </div>
-            </SettingRow>
-          )}
+          {showBranchSetting && <GitBranchBadgesSetting />}
+          {showOverflowSetting && <TabOverflowSetting />}
         </>
       )}
       {hasHotkeys && (
@@ -831,150 +592,11 @@ function SearchResults({
       {anyTerminalSetting && (
         <>
           <SectionLabel>Terminal</SectionLabel>
-          {showOptimizedRendererSetting && (
-            <SettingRow
-              title="Optimized renderer"
-              description="Use the environment-aware backend registry. Disable to revert to legacy unconditional WebGL behavior. Applies to new panes."
-            >
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={optimizedTerminalRenderer}
-                  onChange={(e) => setOptimizedTerminalRenderer(e.target.checked)}
-                />
-                Enabled
-              </label>
-            </SettingRow>
-          )}
-          {showGpuAccelSetting && (
-            <SettingRow
-              title="GPU acceleration"
-              description="auto avoids software-rendered WebGL (the CPU spike trap). on always attempts WebGL. off always uses the DOM renderer. Applies to new panes."
-            >
-              <div style={{ display: 'flex', gap: 6 }}>
-                {(['auto', 'on', 'off'] as GpuAccelerationPref[]).map((mode) => {
-                  const isActive = terminalGpuAcceleration === mode
-                  return (
-                    <button
-                      key={mode}
-                      onClick={() => setTerminalGpuAcceleration(mode)}
-                      style={{
-                        padding: '4px 12px',
-                        background: isActive ? ui.color.control : 'none',
-                        border: `1px solid ${isActive ? ui.color.accent : ui.color.border}`,
-                        borderRadius: ui.radius.sm,
-                        color: isActive ? ui.color.text : ui.color.textMuted,
-                        fontSize: 12,
-                        cursor: 'pointer',
-                        fontWeight: isActive ? 500 : 400,
-                      }}
-                    >
-                      {mode}
-                    </button>
-                  )
-                })}
-              </div>
-            </SettingRow>
-          )}
-          {showContrastSetting && (
-            <SettingRow
-              title="Minimum contrast ratio"
-              description={`1 = no color adjustment (preserves exact agent colors). Range ${MIN_CONTRAST_RATIO}–${MAX_CONTRAST_RATIO}. Applies immediately.`}
-            >
-              <input
-                type="text"
-                inputMode="numeric"
-                value={contrastDraft}
-                onChange={(e) => setContrastDraft(e.target.value)}
-                onBlur={commitContrastDraft}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); commitContrastDraft(); e.currentTarget.blur() }
-                }}
-                style={{
-                  width: 60,
-                  backgroundColor: '#0e0f11',
-                  border: '1px solid #3a3b3e',
-                  borderRadius: 4,
-                  color: '#d4d4d4',
-                  fontSize: 12,
-                  padding: '5px 7px',
-                  textAlign: 'right',
-                }}
-              />
-            </SettingRow>
-          )}
-          {showRescaleSetting && (
-            <SettingRow
-              title="Rescale overlapping glyphs"
-              description="Shrink wide or ambiguous-width characters so they don't bleed into adjacent cells. WebGL renderer only — no effect on DOM renderer."
-            >
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={terminalRescaleOverlappingGlyphs}
-                  onChange={(e) => setTerminalRescaleOverlappingGlyphs(e.target.checked)}
-                />
-                Enabled
-              </label>
-            </SettingRow>
-          )}
-          {showScrollbackSetting && (
-            <SettingRow
-              title="Scrollback lines"
-              description="Maximum retained terminal history. Applies immediately; lowering this can trim existing scrollback."
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  min={MIN_TERMINAL_SCROLLBACK_LINES}
-                  max={MAX_TERMINAL_SCROLLBACK_LINES}
-                  value={scrollbackDraft}
-                  onChange={(e) => setScrollbackDraft(e.target.value)}
-                  onBlur={commitScrollbackDraft}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      commitScrollbackDraft()
-                      e.currentTarget.blur()
-                    }
-                  }}
-                  style={{
-                    width: 120,
-                    backgroundColor: '#0e0f11',
-                    border: '1px solid #3a3b3e',
-                    borderRadius: 4,
-                    color: '#d4d4d4',
-                    fontSize: 12,
-                    padding: '5px 7px',
-                    textAlign: 'right',
-                  }}
-                />
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {[50_000, 100_000, DEFAULT_TERMINAL_SCROLLBACK_LINES].map((value) => (
-                    <button
-                      key={value}
-                      onClick={() => {
-                        setTerminalScrollbackLines(value)
-                        setScrollbackDraft(String(value))
-                      }}
-                      style={{
-                        background: terminalScrollbackLines === value ? ui.color.control : 'none',
-                        border: `1px solid ${terminalScrollbackLines === value ? ui.color.accent : ui.color.border}`,
-                        borderRadius: 4,
-                        color: terminalScrollbackLines === value ? ui.color.text : ui.color.textMuted,
-                        fontSize: 11,
-                        cursor: 'pointer',
-                        padding: '2px 6px',
-                      }}
-                    >
-                      {formatLineCount(value)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </SettingRow>
-          )}
+          {showOptimizedRendererSetting && <OptimizedRendererSetting />}
+          {showGpuAccelSetting && <GpuAccelerationSetting />}
+          {showContrastSetting && <ContrastRatioSetting />}
+          {showRescaleSetting && <RescaleGlyphsSetting />}
+          {showScrollbackSetting && <ScrollbackSetting />}
         </>
       )}
       {hasMcp && (
@@ -1043,11 +665,6 @@ function SettingNavCard({ title, description, onNavigate }: {
       </div>
     </section>
   )
-}
-
-function formatLineCount(value: number): string {
-  if (value >= 1000 && value % 1000 === 0) return `${value / 1000}k`
-  return value.toLocaleString()
 }
 
 function HotkeyRow({
