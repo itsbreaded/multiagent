@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { overlayStyles, ui } from '../../styles/theme'
 import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import { useSessionsStore } from '../../store/sessions'
@@ -144,13 +145,8 @@ export function SessionBrowser(): JSX.Element {
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 50,
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        ...overlayStyles.backdrop,
+        zIndex: ui.z.sessionOverlay,
       }}
       onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
       onClick={() => { if (mouseDownOnOverlay.current) closeOverlays() }}
@@ -161,13 +157,10 @@ export function SessionBrowser(): JSX.Element {
           width: '85vw',
           maxWidth: 960,
           height: '75vh',
-          backgroundColor: '#1a1b1e',
-          border: '1px solid #2a2b2e',
-          borderRadius: 10,
+          ...overlayStyles.panel,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
         }}
       >
         {/* Header */}

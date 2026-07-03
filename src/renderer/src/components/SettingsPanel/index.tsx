@@ -14,7 +14,7 @@ import {
   type GpuAccelerationPref,
 } from '../../store/settings'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
-import { ui } from '../../styles/theme'
+import { overlayStyles, ui } from '../../styles/theme'
 import {
   DEFAULT_HOTKEYS,
   buildHotkeys,
@@ -23,6 +23,8 @@ import {
   type HotkeyOverride,
 } from '../../utils/hotkeys'
 import { McpSection } from './McpSection'
+import { SectionLabel } from '../common/SectionLabel'
+import { matchesSettingQuery } from './settingsSearch'
 import { AgentProvidersSection } from './AgentProvidersSection'
 import { TerminalBindingsSection } from './TerminalBindingsSection'
 
@@ -197,18 +199,18 @@ export function SettingsPanel(): JSX.Element {
 
   const normalizedQuery = query.trim().toLowerCase()
   const isSearching = normalizedQuery !== ''
-  const showBranchSetting = !normalizedQuery || 'git branch badges tabs panes'.includes(normalizedQuery)
-  const showOverflowSetting = !normalizedQuery || 'tab overflow scroll wrap rows'.includes(normalizedQuery)
-  const showOptimizedRendererSetting = !normalizedQuery || 'optimized terminal renderer feature flag webgl dom'.includes(normalizedQuery)
-  const showGpuAccelSetting = !normalizedQuery || 'gpu acceleration webgl renderer auto on off'.includes(normalizedQuery)
-  const showContrastSetting = !normalizedQuery || 'minimum contrast ratio color accuracy'.includes(normalizedQuery)
-  const showRescaleSetting = !normalizedQuery || 'rescale overlapping glyphs wide ambiguous'.includes(normalizedQuery)
-  const showScrollbackSetting = !normalizedQuery || 'terminal scrollback lines history memory buffer maximum'.includes(normalizedQuery)
+  const showBranchSetting = matchesSettingQuery(normalizedQuery, 'git branch badges tabs panes')
+  const showOverflowSetting = matchesSettingQuery(normalizedQuery, 'tab overflow scroll wrap rows')
+  const showOptimizedRendererSetting = matchesSettingQuery(normalizedQuery, 'optimized terminal renderer feature flag webgl dom')
+  const showGpuAccelSetting = matchesSettingQuery(normalizedQuery, 'gpu acceleration webgl renderer auto on off')
+  const showContrastSetting = matchesSettingQuery(normalizedQuery, 'minimum contrast ratio color accuracy')
+  const showRescaleSetting = matchesSettingQuery(normalizedQuery, 'rescale overlapping glyphs wide ambiguous')
+  const showScrollbackSetting = matchesSettingQuery(normalizedQuery, 'terminal scrollback lines history memory buffer maximum')
   const anyTerminalSetting = showOptimizedRendererSetting || showGpuAccelSetting || showContrastSetting || showRescaleSetting || showScrollbackSetting
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
-    !normalizedQuery || DEFAULT_HOTKEYS[id].label.toLowerCase().includes(normalizedQuery)
+    matchesSettingQuery(normalizedQuery, DEFAULT_HOTKEYS[id].label)
   )
   function terminalClashLabelForHotkey(id: HotkeyId): string | null {
     const h = effectiveHotkeys[id]
@@ -223,13 +225,8 @@ export function SettingsPanel(): JSX.Element {
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 60,
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        ...overlayStyles.backdrop,
+        zIndex: ui.z.overlay,
       }}
       onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
       onClick={() => { if (mouseDownOnOverlay.current) { setRecording(null); setConflictLabel(null); closeOverlays() } }}
@@ -241,10 +238,7 @@ export function SettingsPanel(): JSX.Element {
           width: '85vw',
           maxWidth: 960,
           height: '75vh',
-          backgroundColor: '#1a1b1e',
-          border: '1px solid #2a2b2e',
-          borderRadius: 10,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+          ...overlayStyles.panel,
           display: 'flex',
           overflow: 'hidden',
         }}
@@ -812,9 +806,9 @@ function SearchResults({
 }): JSX.Element {
   const hasAppearance = showBranchSetting || showOverflowSetting
   const hasHotkeys    = visibleHotkeys.length > 0
-  const hasMcp        = MCP_KEYWORDS.some(k => normalizedQuery.includes(k))
-  const hasProviders  = PROVIDER_KEYWORDS.some(k => normalizedQuery.includes(k))
-  const hasUpdates    = UPDATE_KEYWORDS.some(k => normalizedQuery.includes(k)) || normalizedQuery.includes('update')
+  const hasMcp        = matchesSettingQuery(normalizedQuery, MCP_KEYWORDS.join(' '))
+  const hasProviders  = matchesSettingQuery(normalizedQuery, PROVIDER_KEYWORDS.join(' '))
+  const hasUpdates    = matchesSettingQuery(normalizedQuery, UPDATE_KEYWORDS.join(' '))
   const hasAnything   = hasAppearance || hasHotkeys || anyTerminalSetting || hasMcp || hasProviders || hasUpdates
 
   if (!hasAnything) return <EmptyMessage>No settings match your search.</EmptyMessage>
@@ -1244,23 +1238,6 @@ function KeyBadge({ children, active, muted }: { children: React.ReactNode; acti
     >
       {children}
     </span>
-  )
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element {
-  return (
-    <div
-      style={{
-        padding: '6px 14px 3px',
-        fontSize: 10,
-        fontWeight: 600,
-        color: '#4a4b4e',
-        textTransform: 'uppercase',
-        letterSpacing: '0.08em',
-      }}
-    >
-      {children}
-    </div>
   )
 }
 

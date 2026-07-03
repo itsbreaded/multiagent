@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { McpServerEntry, McpServerType, McpSettings, McpStatus } from '../../../../shared/types'
 import { useSettingsStore } from '../../store/settings'
+import { SectionLabel } from '../common/SectionLabel'
 
 function generateId(): string {
   return `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -42,6 +43,8 @@ export function McpSection(): JSX.Element {
   const [showImport, setShowImport] = useState(false)
   const [testStates, setTestStates] = useState<Record<string, TestState>>({})
   const [probeStates, setProbeStates] = useState<Record<string, ProbeState>>({})
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const testTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   // Track whether we have ever successfully loaded status so that subsequent
   // refreshes update silently without tearing out the current display.
@@ -62,6 +65,12 @@ export function McpSection(): JSX.Element {
 
   useEffect(() => { fetchStatus() }, [fetchStatus])
 
+  useEffect(() => () => {
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+    for (const timer of testTimersRef.current.values()) clearTimeout(timer)
+    testTimersRef.current.clear()
+  }, [])
+
   useEffect(() => {
     window.ipc.invoke('mcp:get-settings').then((s) => {
       hydrateMcpSettings(s as McpSettings)
@@ -71,7 +80,8 @@ export function McpSection(): JSX.Element {
   function save(next: McpSettings): void {
     setMcpSettings(next)
     setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSaved(false), 2000)
   }
 
   function toggleBuiltin(enabled: boolean): void {
@@ -156,7 +166,12 @@ export function McpSection(): JSX.Element {
     setTestStates((p) => ({ ...p, [entry.id]: 'testing' }))
     const result = await testConnection(entry.url ?? '', entry.type)
     setTestStates((p) => ({ ...p, [entry.id]: result }))
-    setTimeout(() => setTestStates((p) => ({ ...p, [entry.id]: 'idle' })), 4000)
+    const previous = testTimersRef.current.get(entry.id)
+    if (previous) clearTimeout(previous)
+    testTimersRef.current.set(entry.id, setTimeout(() => {
+      setTestStates((p) => ({ ...p, [entry.id]: 'idle' }))
+      testTimersRef.current.delete(entry.id)
+    }, 4000))
   }
 
   async function probeServer(entry: McpServerEntry): Promise<void> {
@@ -323,6 +338,7 @@ export function McpSection(): JSX.Element {
         {showAddForm && !showImport && (
           <ServerCard>
             <ServerForm
+              key={editingId ?? 'new'}
               data={formData}
               error={formError}
               isEdit={editingId !== null}
@@ -493,6 +509,11 @@ function ServerForm({
   const [envError, setEnvError] = useState<string | null>(null)
   const [testState, setTestState] = useState<TestState>('idle')
   const [formProbe, setFormProbe] = useState<ProbeState>({ status: 'idle' })
+  const testTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (testTimerRef.current) clearTimeout(testTimerRef.current)
+  }, [])
 
   function update(patch: Partial<Omit<McpServerEntry, 'id'>>): void {
     onChange({ ...data, ...patch })
@@ -523,7 +544,8 @@ function ServerForm({
     setTestState('testing')
     const result = await testConnection(data.url.trim(), data.type)
     setTestState(result)
-    setTimeout(() => setTestState('idle'), 4000)
+    if (testTimerRef.current) clearTimeout(testTimerRef.current)
+    testTimerRef.current = setTimeout(() => setTestState('idle'), 4000)
   }
 
   async function handleProbe(): Promise<void> {
@@ -536,14 +558,6 @@ function ServerForm({
       setFormProbe({ status: 'error', message: (err as Error).message })
     }
   }
-
-  // Reset args/env text when type changes away from stdio
-  const prevType = useRef(data.type)
-  useEffect(() => {
-    if (prevType.current !== data.type) {
-      prevType.current = data.type
-    }
-  }, [data.type])
 
   return (
     <div>
@@ -866,14 +880,6 @@ function ActionButton({ children, onClick, accent }: { children: React.ReactNode
 function ServerCard({ children }: { children: React.ReactNode }): JSX.Element {
   return (
     <div style={{ padding: '10px 12px', marginBottom: 4, border: '1px solid #2a2b2e', borderRadius: 6, background: '#141517' }}>
-      {children}
-    </div>
-  )
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element {
-  return (
-    <div style={{ padding: '6px 14px 3px', fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
       {children}
     </div>
   )
