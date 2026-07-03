@@ -21,13 +21,13 @@ export interface JsonlRecord {
   }
 }
 
+export function parseJsonLine<T>(line: string): T | null {
+  try { return JSON.parse(line) as T } catch { return null }
+}
+
 /** Parse a single JSONL line; returns null for malformed JSON. */
 export function parseRecord(line: string): JsonlRecord | null {
-  try {
-    return JSON.parse(line) as JsonlRecord
-  } catch {
-    return null
-  }
+  return parseJsonLine<JsonlRecord>(line)
 }
 
 /** Extract the human-readable text from a record's message content (string or text blocks). */
