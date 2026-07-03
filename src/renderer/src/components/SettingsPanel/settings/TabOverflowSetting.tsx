@@ -1,0 +1,3 @@
+import { useSettingsStore } from '../../../store/settings'
+import { ChoiceButton, SettingControlRow } from './shared'
+export function TabOverflowSetting(): JSX.Element { const value=useSettingsStore(s=>s.tabOverflowMode), setValue=useSettingsStore(s=>s.setTabOverflowMode); return <SettingControlRow title="Tab overflow" description="Scroll keeps tabs in a single row; Wrap grows to additional rows."><div style={{display:'flex',gap:6}}>{(['scroll','wrap'] as const).map(mode=><ChoiceButton key={mode} active={value===mode} onClick={()=>setValue(mode)}>{mode[0].toUpperCase()+mode.slice(1)}</ChoiceButton>)}</div></SettingControlRow> }

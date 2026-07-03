@@ -1,0 +1,3 @@
+import { useSettingsStore, type GpuAccelerationPref } from '../../../store/settings'
+import { ChoiceButton, SettingControlRow } from './shared'
+export function GpuAccelerationSetting(): JSX.Element { const value=useSettingsStore(s=>s.terminalGpuAcceleration), setValue=useSettingsStore(s=>s.setTerminalGpuAcceleration); return <SettingControlRow title="GPU acceleration" description="auto avoids software-rendered WebGL (the CPU spike trap). on always attempts WebGL. off always uses the DOM renderer. Applies to new panes."><div style={{display:'flex',gap:6}}>{(['auto','on','off'] as GpuAccelerationPref[]).map(mode=><ChoiceButton key={mode} active={value===mode} onClick={()=>setValue(mode)}>{mode}</ChoiceButton>)}</div></SettingControlRow> }

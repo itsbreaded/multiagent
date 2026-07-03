@@ -1,0 +1,3 @@
+import { useSettingsStore } from '../../../store/settings'
+import { checkStyle, SettingControlRow } from './shared'
+export function OptimizedRendererSetting(): JSX.Element { const value=useSettingsStore(s=>s.optimizedTerminalRenderer), setValue=useSettingsStore(s=>s.setOptimizedTerminalRenderer); return <SettingControlRow title="Optimized renderer" description="Use the environment-aware backend registry. Disable to revert to legacy unconditional WebGL behavior. Applies to new panes."><label style={checkStyle}><input type="checkbox" checked={value} onChange={e=>setValue(e.target.checked)}/>Enabled</label></SettingControlRow> }
