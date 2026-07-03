@@ -11,6 +11,7 @@ import {
   updateLeaf,
   updateCwdsInTree,
   collectLeafIds,
+  collectLeaves,
   findLeafBySessionId,
 } from './paneTree'
 import { replaceCwdPrefix } from './cwdRepair'
@@ -159,5 +160,27 @@ describe('updateCwdsInTree', () => {
     const tree: PaneNode = L('L1', { cwd: 'C:\\unrelated' })
     const { changed } = updateCwdsInTree(tree, mapping, replaceCwdPrefix)
     expect(changed).toBe(false)
+  })
+})
+
+describe('collectLeaves', () => {
+  it('returns the single leaf for a leaf root', () => {
+    const leaf = L('L1')
+    expect(collectLeaves(leaf)).toEqual([leaf])
+  })
+
+  it('returns all leaves in tree order for a nested split', () => {
+    const a = L('A')
+    const b = L('B')
+    const c = L('C')
+    const tree: PaneNode = makeSplit('vertical', makeSplit('horizontal', a, b), c)
+    expect(collectLeaves(tree)).toEqual([a, b, c])
+  })
+
+  it('collectLeafIds matches collectLeaves ids', () => {
+    const a = L('A')
+    const b = L('B')
+    const tree: PaneNode = makeSplit('vertical', a, b)
+    expect(collectLeafIds(tree)).toEqual(collectLeaves(tree).map((l) => l.id))
   })
 })

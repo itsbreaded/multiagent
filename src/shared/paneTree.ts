@@ -155,6 +155,12 @@ export function collectLeafIds(node: PaneNode): string[] {
   return [...collectLeafIds(node.first), ...collectLeafIds(node.second)]
 }
 
+/** Collect all leaves (in tree order) as full PaneLeaf objects. */
+export function collectLeaves(node: PaneNode): PaneLeaf[] {
+  if (node.type === 'leaf') return [node]
+  return [...collectLeaves(node.first), ...collectLeaves(node.second)]
+}
+
 /** Find a leaf by its agent/session ID pair */
 export function findLeafBySessionId(node: PaneNode, agentKind: AgentKind, sessionId: string): PaneLeaf | null {
   if (node.type === 'leaf') {

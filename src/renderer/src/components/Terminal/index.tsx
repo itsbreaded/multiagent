@@ -16,6 +16,7 @@ import { createDirectPtyDataHandler } from '../../terminal/ptyData'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
+import { createShellPty } from './createShellPty'
 
 const XTERM_THEME = {
   background: '#0e1011',
@@ -393,34 +394,37 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   }, [pane.id, pane.paneType, pane.agentKind])
 
   // Effect 2: create a shell PTY when this pane needs one. Attachment happens
-  // in the next effect after the ptyId is committed to pane state.
+  // in the next effect after the ptyId is committed to pane state. The body is
+  // extracted into createShellPty.ts so cancel-kill and retry-unblock are
+  // unit-testable without xterm.
   useEffect(() => {
     if (status === 'mounting' || pane.paneType !== 'shell' || pane.ptyId) return
     if (shellCreatePaneRef.current === pane.id) return
 
-    let cancelled = false
     shellCreatePaneRef.current = pane.id
     setStatus('connecting')
 
-    const fitAndGetSize = (): { cols: number; rows: number } => {
-      try { fitAddonRef.current?.fit() } catch { /* ignore */ }
-      const term = xtermRef.current
-      return { cols: term?.cols ?? 80, rows: term?.rows ?? 24 }
-    }
-    const initialSize = fitAndGetSize()
-    window.ipc.invoke('pty:create', pane.cwd, initialSize.cols, initialSize.rows).then((result) => {
-      if (cancelled) return
-      const ptyId = (result as { ptyId?: unknown } | null)?.ptyId
-      if (typeof ptyId !== 'string') throw new Error('pty:create did not return a ptyId')
-      ptyIdRef.current = ptyId
-      setPtyId(pane.id, ptyId)
-    }).catch((err) => {
-      if (cancelled) return
-      setStatus('error')
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to create terminal')
+    const handle = createShellPty(pane.cwd, {
+      ipc: window.ipc,
+      getInitialSize: () => {
+        try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+        const term = xtermRef.current
+        return { cols: term?.cols ?? 80, rows: term?.rows ?? 24 }
+      },
+      onPtyId: (ptyId) => {
+        ptyIdRef.current = ptyId
+        setPtyId(pane.id, ptyId)
+      },
+      onError: (msg) => {
+        setStatus('error')
+        setErrorMsg(msg)
+      },
+      releaseGuard: () => {
+        if (shellCreatePaneRef.current === pane.id) shellCreatePaneRef.current = null
+      },
     })
     return () => {
-      cancelled = true
+      handle.cancel()
     }
   }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, status === 'mounting' ? 'mounting' : 'ready'])
 

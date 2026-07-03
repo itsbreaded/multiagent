@@ -3,9 +3,9 @@ import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf,
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
+  collectLeaves,
 } from '../../../shared/paneTree'
 import { replaceCwdPrefix } from '../../../shared/cwdRepair'
-import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
 import { PANE_DRAG_MIME } from '../utils/paneDrag'
 import type { SettingsSection } from './settings'
@@ -78,6 +78,64 @@ function removeHydratedTabs(hydratedTabIds: Record<string, true>, tabIds: string
     }
   }
   return changed ? next : hydratedTabIds
+}
+
+/**
+ * Tear down a single pane's PTY + xterm runtime. Shared by every close path so
+ * tab/bulk-close teardown matches the per-pane `closePaneInTab` model (spec 034).
+ *
+ * Returns:
+ *   - killPromise: resolves when pty:kill settles (null when there is no ptyId
+ *     or no IPC layer, e.g. in tests). Callers must NOT await this inside a
+ *     set() — it is collected and awaited after the state update.
+ *   - needsSessionRefresh: true when the pane was an agent with a known
+ *     sessionId. The caller batches one `sessions:refresh` per close action
+ *     (not per pane) after the kills settle.
+ */
+function teardownPaneRuntime(pane: PaneLeaf): {
+  killPromise: Promise<unknown> | null
+  needsSessionRefresh: boolean
+} {
+  const hasIpc = typeof window !== 'undefined' && !!window.ipc
+  const killPromise = pane.ptyId && hasIpc
+    ? window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
+    : null
+  xtermRegistry.dispose(pane.id)
+  return { killPromise, needsSessionRefresh: pane.paneType === 'agent' && !!pane.sessionId }
+}
+
+/**
+ * Tear down every leaf of a tab's tree. Returns the kill promises and the OR
+ * of `needsSessionRefresh` across all leaves, so the caller can issue a single
+ * `sessions:refresh` per close action after the kills settle.
+ */
+function teardownTabRuntime(tab: Tab): {
+  killPromises: Promise<unknown>[]
+  needsSessionRefresh: boolean
+} {
+  if (!tab.rootNode) return { killPromises: [], needsSessionRefresh: false }
+  const leaves = collectLeaves(tab.rootNode)
+  let needsSessionRefresh = false
+  const killPromises: Promise<unknown>[] = []
+  for (const leaf of leaves) {
+    const result = teardownPaneRuntime(leaf)
+    if (result.killPromise) killPromises.push(result.killPromise)
+    if (result.needsSessionRefresh) needsSessionRefresh = true
+  }
+  return { killPromises, needsSessionRefresh }
+}
+
+/**
+ * After all tab-close kill promises have settled, issue exactly one
+ * `sessions:refresh` if any closed pane was an agent with a known session.
+ * `sessions:refresh` is a full forced poll — one per close action, not per pane.
+ */
+function scheduleSessionRefreshAfter(killPromises: Promise<unknown>[], needsSessionRefresh: boolean): void {
+  if (!needsSessionRefresh) return
+  if (typeof window === 'undefined' || !window.ipc) return
+  Promise.allSettled(killPromises).then(() => {
+    window.ipc.invoke('sessions:refresh').catch(() => {})
+  })
 }
 
 function reportCurrentFocusTarget(): void {
@@ -807,9 +865,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   closeTab: (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId)
     const previousHydrated = get().hydratedTabIds
-    if (tab?.rootNode) {
-      collectLeafIds(tab.rootNode).forEach((id) => xtermRegistry.dispose(id))
-    }
+    const teardown = tab?.rootNode ? teardownTabRuntime(tab) : { killPromises: [], needsSessionRefresh: false }
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== tabId)
       const activeTabId =
@@ -821,6 +877,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
+    scheduleSessionRefreshAfter(teardown.killPromises, teardown.needsSessionRefresh)
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
@@ -891,9 +948,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   closeOtherTabs: (tabId) => {
     const wasHydrated = get().hydratedTabIds[tabId] === true
+    const killPromises: Promise<unknown>[] = []
+    let needsSessionRefresh = false
     get().tabs.forEach((t) => {
       if (t.id !== tabId && t.rootNode) {
-        collectLeafIds(t.rootNode).forEach((id) => xtermRegistry.dispose(id))
+        const teardown = teardownTabRuntime(t)
+        killPromises.push(...teardown.killPromises)
+        if (teardown.needsSessionRefresh) needsSessionRefresh = true
       }
     })
     set((s) => {
@@ -909,6 +970,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         },
       }
     })
+    scheduleSessionRefreshAfter(killPromises, needsSessionRefresh)
     if (!wasHydrated) hydrateTabRuntime(tabId, true)
   },
 
@@ -916,9 +978,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const { tabs } = get()
     const idx = tabs.findIndex((t) => t.id === tabId)
     const previousHydrated = get().hydratedTabIds
+    const killPromises: Promise<unknown>[] = []
+    let needsSessionRefresh = false
     if (idx !== -1) {
       tabs.slice(idx + 1).forEach((t) => {
-        if (t.rootNode) collectLeafIds(t.rootNode).forEach((id) => xtermRegistry.dispose(id))
+        if (!t.rootNode) return
+        const teardown = teardownTabRuntime(t)
+        killPromises.push(...teardown.killPromises)
+        if (teardown.needsSessionRefresh) needsSessionRefresh = true
       })
     }
     set((s) => {
@@ -941,6 +1008,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
+    scheduleSessionRefreshAfter(killPromises, needsSessionRefresh)
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
@@ -1067,18 +1135,16 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const tab = get().tabs.find((t) => t.id === tabId)
     const pane = tab?.rootNode ? findLeaf(tab.rootNode, paneId) : null
     if (!pane) return
-    if (pane.ptyId && typeof window !== 'undefined' && window.ipc) {
-      window.ipc.invoke('pty:kill', pane.ptyId)
-        .catch(() => {})
-        .finally(() => {
-          if (pane.paneType === 'agent' && pane.sessionId) {
-            window.ipc.invoke('sessions:refresh').catch(() => {})
-          }
-        })
-    } else if (pane.paneType === 'agent' && pane.sessionId && typeof window !== 'undefined' && window.ipc) {
-      window.ipc.invoke('sessions:refresh').catch(() => {})
+    const teardown = teardownPaneRuntime(pane)
+    // Preserve the exact pre-spec behavior: an agent pane whose PTY already
+    // exited (no ptyId) still needs its session moved to Recent on close, so
+    // schedule the refresh even when there was no kill.
+    if (teardown.needsSessionRefresh) {
+      scheduleSessionRefreshAfter(
+        teardown.killPromise ? [teardown.killPromise] : [],
+        true,
+      )
     }
-    xtermRegistry.dispose(paneId)
     set((s) => {
       const tabs = s.tabs.map((t) => {
         if (t.id !== tabId || !t.rootNode) return t

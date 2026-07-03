@@ -1,6 +1,10 @@
 import type { Tab, PaneNode, PaneLeaf, Session } from '../../../shared/types'
 import { agentLabel } from './agents'
 
+// Re-exported so existing imports keep working. The canonical home for tree ops
+// is src/shared/paneTree.ts (spec 034).
+export { collectLeaves } from '../../../shared/paneTree'
+
 export function findLeafById(node: PaneNode, id: string): PaneLeaf | null {
   if (node.type === 'leaf') return node.id === id ? node : null
   return findLeafById(node.first, id) ?? findLeafById(node.second, id)
@@ -9,11 +13,6 @@ export function findLeafById(node: PaneNode, id: string): PaneLeaf | null {
 export function firstLeaf(node: PaneNode): PaneLeaf | null {
   if (node.type === 'leaf') return node
   return firstLeaf(node.first)
-}
-
-export function collectLeaves(node: PaneNode): PaneLeaf[] {
-  if (node.type === 'leaf') return [node]
-  return [...collectLeaves(node.first), ...collectLeaves(node.second)]
 }
 
 /** Formatted display label for a single pane: "[customName · ]directory" */
