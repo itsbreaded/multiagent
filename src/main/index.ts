@@ -53,6 +53,7 @@ let cleanupFn: (() => Promise<void>) | null = null
 let browserViewManager: BrowserViewManager | null = null
 // Set by registerIpcHandlers; called during primary-window shutdown to flush detached state.
 let performShutdownSaveFn: (() => Promise<void>) | null = null
+let registerWindowHandlersFn: ((win: BrowserWindow) => void) | null = null
 
 async function createWindow(): Promise<void> {
   const state = loadWindowState()
@@ -120,9 +121,14 @@ async function createWindow(): Promise<void> {
   })
 
   // Wire IPC handlers (sessions, PTY, shell, layout)
-  const { cleanup, registerWindowHandlers, performShutdownSave } = await registerIpcHandlers(mainWindow)
-  cleanupFn = cleanup ?? null
-  performShutdownSaveFn = performShutdownSave
+  if (!registerWindowHandlersFn) {
+    const registered = await registerIpcHandlers(mainWindow)
+    cleanupFn = registered.cleanup
+    performShutdownSaveFn = registered.performShutdownSave
+    registerWindowHandlersFn = registered.registerWindowHandlers
+  } else {
+    registerWindowHandlersFn(mainWindow)
+  }
 
   // Configure WindowManager so it can create detached windows with the correct preload/renderer.
   const rendererUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
@@ -132,19 +138,20 @@ async function createWindow(): Promise<void> {
     join(__dirname, '../preload/index.js'),
     rendererUrl,
     rendererUrl ? null : join(__dirname, '../renderer/index.html'),
-    registerWindowHandlers
+    registerWindowHandlersFn
   )
   windowManager.startMoveTracking(mainWindow)
 
   // Set up browser window (MCP-controlled separate window)
-  browserViewManager = new BrowserViewManager()
-  browserViewManager.initialize()
-
-  mcpManager.start(browserViewManager).then(() => {
-    console.log(`[MultiAgent] Browser MCP server listening on port ${mcpManager.getStatus().port}`)
-  }).catch((err) => {
-    console.error('[MultiAgent] Browser MCP server failed to start:', err)
-  })
+  if (!browserViewManager) {
+    browserViewManager = new BrowserViewManager()
+    browserViewManager.initialize()
+    mcpManager.start(browserViewManager).then(() => {
+      console.log(`[MultiAgent] Browser MCP server listening on port ${mcpManager.getStatus().port}`)
+    }).catch((err) => {
+      console.error('[MultiAgent] Browser MCP server failed to start:', err)
+    })
+  }
 
   // Load renderer
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
