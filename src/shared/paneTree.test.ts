@@ -14,6 +14,7 @@ import {
   collectLeaves,
   markLeafExitedByPtyId,
   findLeafBySessionId,
+  findLeafByPtyId,
 } from './paneTree'
 import { replaceCwdPrefix } from './cwdRepair'
 
@@ -230,5 +231,16 @@ describe('collectLeaves', () => {
     const b = L('B')
     const tree: PaneNode = makeSplit('vertical', a, b)
     expect(collectLeafIds(tree)).toEqual(collectLeaves(tree).map((l) => l.id))
+  })
+})
+
+describe('findLeafByPtyId', () => {
+  it('finds nested PTYs in tree order and ignores absent ids', () => {
+    const first = L('A', { ptyId: 'shared' })
+    const second = L('B', { ptyId: 'shared' })
+    const tree = makeSplit('vertical', first, makeSplit('horizontal', L('C'), second))
+    expect(findLeafByPtyId(tree, 'shared')).toBe(first)
+    expect(findLeafByPtyId(tree, 'missing')).toBeNull()
+    expect(findLeafByPtyId(L('D'), 'missing')).toBeNull()
   })
 })

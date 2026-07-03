@@ -115,7 +115,7 @@ export function TabSections(): JSX.Element {
       startRename(pendingRenameTabId)
       setPendingRenameTabId(null)
     }
-  }, [pendingRenameTabId])
+  }, [pendingRenameTabId, tabs, startRename, setPendingRenameTabId])
 
   if (tabs.length === 0) return <></>
 

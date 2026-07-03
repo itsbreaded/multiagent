@@ -7,7 +7,7 @@ import { computeLabels } from '../../utils/tabLabels'
 import { collectLeaves } from '../../../../shared/paneTree'
 import { DirPicker } from '../DirPicker'
 import { HOTKEYS } from '../../utils/hotkeys'
-import { decodePaneDragPayload, PANE_DRAG_MIME } from '../../utils/paneDrag'
+import { absorbDroppedTab, transferDroppedPane, PANE_DRAG_MIME, TAB_DRAG_MIME } from '../../utils/paneDrag'
 import { ui, border } from '../../styles/theme'
 import searchIcon from '../../assets/search.png'
 import bookIcon from '../../assets/book.png'
@@ -21,7 +21,6 @@ import arrowLeftIcon from '../../assets/arrowleft.png'
 import arrowRightIcon from '../../assets/arrowright.png'
 import newFolderIcon from '../../assets/newfolder.png'
 
-const TAB_DRAG_MIME = 'application/x-multiagent-tab'
 const CHROME_DRAG_EXEMPT_SELECTOR = 'button, input, textarea, select, [data-window-drag-exempt="true"]'
 const TAB_HEIGHT = 28
 const NEW_TAB_BUTTON_SIZE = 24
@@ -676,6 +675,8 @@ export function TabBar(): JSX.Element {
   // Handle a cross-window tab drop onto this window's tab bar.
   // dropIndex is the visual insertion index among local tabs (undefined = append at end).
   function handleCrossWindowDrop(e: React.DragEvent, dropIndex?: number): boolean {
+    return absorbDroppedTab(e, windowId, { receiveTab, removeTabLocally: usePanesStore.getState().removeTabLocally }, dropIndex)
+    /* legacy body retained only within this patch boundary
     const data = e.dataTransfer.getData(TAB_DRAG_MIME)
     if (!data) return false
     try {
@@ -697,9 +698,14 @@ export function TabBar(): JSX.Element {
     } catch {
       return false
     }
+    */
   }
 
   function handlePaneDrop(e: React.DragEvent, targetTabId: string): boolean {
+    const handled = transferDroppedPane(e, targetTabId, windowId, { movePaneToTab })
+    if (handled) clearPaneDragHover()
+    return handled
+    /* legacy body retained only within this patch boundary
     const payload = decodePaneDragPayload(e.dataTransfer)
     if (!payload || windowId === null) return false
     e.preventDefault()
@@ -711,6 +717,7 @@ export function TabBar(): JSX.Element {
     }
     clearPaneDragHover()
     return true
+    */
   }
 
   return (

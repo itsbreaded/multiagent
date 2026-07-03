@@ -82,6 +82,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     const entry = xtermRegistry.getEntry(pane.id)
     return entry?.connected ? 'ready' : 'mounting'
   })
+  const isMounting = status === 'mounting'
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [repairPickerOpen, setRepairPickerOpen] = useState(false)
@@ -426,7 +427,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     return () => {
       handle.cancel()
     }
-  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, isMounting])
 
   // Effect 3: connect to the PTY once a ptyId is available
   useEffect(() => {
@@ -587,7 +588,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       // PTYs are killed explicitly by closePane() in the panes store.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, isMounting])
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()

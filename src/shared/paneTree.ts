@@ -184,3 +184,9 @@ export function findLeafBySessionId(node: PaneNode, agentKind: AgentKind, sessio
   }
   return findLeafBySessionId(node.first, agentKind, sessionId) ?? findLeafBySessionId(node.second, agentKind, sessionId)
 }
+
+/** Find a leaf by its live PTY id, in tree order. */
+export function findLeafByPtyId(node: PaneNode, ptyId: string): PaneLeaf | null {
+  if (node.type === 'leaf') return node.ptyId === ptyId ? node : null
+  return findLeafByPtyId(node.first, ptyId) ?? findLeafByPtyId(node.second, ptyId)
+}

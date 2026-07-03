@@ -3,7 +3,7 @@ import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf,
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
-  collectLeaves, markLeafExitedByPtyId,
+  collectLeaves, markLeafExitedByPtyId, findLeafByPtyId,
 } from '../../../shared/paneTree'
 import { replaceCwdPrefix } from '../../../shared/cwdRepair'
 import * as xtermRegistry from '../utils/xtermRegistry'
@@ -210,7 +210,17 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
 
     const { id: paneId, agentKind, sessionId, cwd } = leaf
     hydratingPaneSessions[paneId] = sessionId
-    const resumePromise = (async () => {
+    const resumePromise = resumeIntoPane(
+      () => usePanesStore.getState(), paneId, agentKind, sessionId, cwd,
+      {
+        validateFirst: true,
+        onSettled: () => {
+          if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
+        },
+      },
+    )
+    /* previous inline implementation
+    void (async () => {
       try {
         // Validate the session transcript exists before spawning a CLI process.
         // A missing transcript would cause a doomed spawn; catch it early so we get
@@ -258,6 +268,7 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
         if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
       }
     })()
+    */
     resumes.push(resumePromise)
   }
 
@@ -500,6 +511,47 @@ async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: Agen
       resumeError: message,
       ...extraFailurePatch,
     })
+  }
+}
+
+async function resumeIntoPane(
+  get: PanesGet,
+  paneId: string,
+  agentKind: AgentKind,
+  sessionId: string,
+  cwd: string,
+  opts: { validateFirst?: boolean; onSettled?: () => void; extraFailurePatch?: Partial<PaneLeaf> } = {},
+): Promise<void> {
+  try {
+    if (typeof window === 'undefined' || !window.ipc) return
+    if (opts.validateFirst) {
+      const validation = await window.ipc.invoke('sessions:validate', agentKind, sessionId, cwd).catch(() => null)
+      if (!validation?.found) {
+        const current = get().findPaneInAnyTab(paneId)
+        if (current?.paneType === 'agent' && current.agentKind === agentKind && current.sessionId === sessionId && !current.ptyId) {
+          get().updatePane(paneId, { resumeError: 'Session not found — the transcript may have been deleted' })
+        }
+        return
+      }
+    }
+    const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
+    const current = get().findPaneInAnyTab(paneId)
+    if (current?.paneType === 'agent' && current.agentKind === agentKind && current.sessionId === sessionId && !current.ptyId && result?.ptyId) {
+      get().updatePane(paneId, {
+        ptyId: result.ptyId,
+        agentDisconnected: undefined,
+        resumeError: undefined,
+        sessionDetectionError: undefined,
+      })
+    }
+  } catch (err) {
+    console.error('session:resume IPC failed', err)
+    get().updatePane(paneId, {
+      resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
+      ...opts.extraFailurePatch,
+    })
+  } finally {
+    opts.onSettled?.()
   }
 }
 
@@ -1318,21 +1370,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
       return { tabs, hydratedTabIds: s.activeTabId ? removeHydratedTabs(s.hydratedTabIds, [s.activeTabId]) : s.hydratedTabIds }
     })
-    if (typeof window !== 'undefined' && window.ipc) {
-      try {
-        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
-        if (result?.ptyId) {
-          get().setPtyId(leaf.id, result.ptyId)
-        }
-      } catch (err) {
-        console.error('session:resume IPC failed', err)
-        get().updatePane(leaf.id, { resumeError: agentIpcErrorMessage(err, 'Session resume failed') })
-      } finally {
-        if (targetTabId) markTabHydrated(targetTabId)
-      }
-    } else if (targetTabId) {
-      markTabHydrated(targetTabId)
-    }
+    await resumeIntoPane(get, leaf.id, agentKind, sessionId, cwd, {
+      onSettled: () => { if (targetTabId) markTabHydrated(targetTabId) },
+    })
   },
 
   resumeSessionInNewTab: async (agentKind, sessionId, cwd) => {
@@ -1345,19 +1385,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
       sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
     }))
-    if (typeof window !== 'undefined' && window.ipc) {
-      try {
-        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
-        if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
-      } catch (err) {
-        console.error('session:resume IPC failed', err)
-        get().updatePane(leaf.id, { resumeError: agentIpcErrorMessage(err, 'Session resume failed') })
-      } finally {
-        markTabHydrated(tab.id)
-      }
-    } else {
-      markTabHydrated(tab.id)
-    }
+    await resumeIntoPane(get, leaf.id, agentKind, sessionId, cwd, { onSettled: () => markTabHydrated(tab.id) })
   },
 
   resumeAgentPane: async (paneId) => {
@@ -1374,29 +1402,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       resumeError: undefined,
       sessionDetectionError: undefined,
     })
-    try {
-      const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
-      const current = get().findPaneInAnyTab(paneId)
-      if (
-        current?.paneType === 'agent' &&
-        current.agentKind === agentKind &&
-        current.sessionId === sessionId &&
-        result?.ptyId
-      ) {
-        get().updatePane(paneId, {
-          ptyId: result.ptyId,
-          agentDisconnected: undefined,
-          resumeError: undefined,
-          sessionDetectionError: undefined,
-        })
-      }
-    } catch (err) {
-      console.error('session:resume IPC failed', err)
-      get().updatePane(paneId, {
-        resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
-        agentDisconnected: pane.agentDisconnected,
-      })
-    }
+    await resumeIntoPane(get, paneId, agentKind, sessionId, cwd, {
+      extraFailurePatch: { agentDisconnected: pane.agentDisconnected },
+    })
   },
 
   startNewAgentInPane: async (paneId) => {
@@ -2024,18 +2032,9 @@ if (typeof window !== 'undefined' && window.ipc) {
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
       if (!tab.rootNode) continue
-      const leaves = collectLeaves(tab.rootNode)
-      const pane = leaves.find((l) => l.ptyId === ptyId)
+      const pane = findLeafByPtyId(tab.rootNode, ptyId)
       if (pane) {
-        usePanesStore.setState((s) => {
-          const tabs = patchLeafInTabs(s.tabs, pane.id, {
-            sessionId,
-            sessionDetectionState: 'detected',
-            sessionDetectionError: undefined,
-            resumeError: undefined,
-          })
-          return tabs ? { tabs } : s
-        })
+        store.setSessionId(pane.id, sessionId)
         break
       }
     }
@@ -2049,7 +2048,7 @@ if (typeof window !== 'undefined' && window.ipc) {
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
       if (!tab.rootNode) continue
-      const pane = collectLeaves(tab.rootNode).find((l) => l.ptyId === ptyId)
+      const pane = findLeafByPtyId(tab.rootNode, ptyId)
       if (!pane || pane.agentKind !== agentKind) continue
       store.updatePane(pane.id, {
         sessionDetectionState: 'failed',
