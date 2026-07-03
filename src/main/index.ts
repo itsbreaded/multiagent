@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from 'electron'
 import './e2eIsolation'
 import { join } from 'path'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { initUpdater } from './updater'
@@ -9,16 +9,8 @@ import { BrowserViewManager } from './browser/BrowserViewManager'
 import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
 import { windowManager } from './window/WindowManager'
-
-interface WindowState {
-  x: number
-  y: number
-  width: number
-  height: number
-  isMaximized: boolean
-}
-
-const DEFAULTS: WindowState = { x: 0, y: 0, width: 1280, height: 800, isMaximized: false }
+import { writeJsonAtomic } from './atomicJson'
+import { coerceWindowState, DEFAULT_WINDOW_STATE, type WindowState } from './windowState'
 
 function windowStatePath(): string {
   return join(app.getPath('userData'), 'window-state.json')
@@ -27,16 +19,16 @@ function windowStatePath(): string {
 function loadWindowState(): WindowState {
   try {
     const raw = readFileSync(windowStatePath(), 'utf-8')
-    const saved = JSON.parse(raw) as WindowState
+    const saved = coerceWindowState(JSON.parse(raw))
     // Verify the saved position is still on a connected display
     const visible = screen.getAllDisplays().some((d) => {
       const b = d.bounds
       return saved.x < b.x + b.width && saved.x + saved.width > b.x &&
              saved.y < b.y + b.height && saved.y + saved.height > b.y
     })
-    return visible ? saved : DEFAULTS
+    return visible ? saved : DEFAULT_WINDOW_STATE
   } catch {
-    return DEFAULTS
+    return DEFAULT_WINDOW_STATE
   }
 }
 
@@ -52,7 +44,7 @@ function saveWindowState(win: BrowserWindow): void {
       height: bounds?.height ?? current.height,
       isMaximized,
     }
-    writeFileSync(windowStatePath(), JSON.stringify(next))
+    writeJsonAtomic(windowStatePath(), next)
   } catch { /* ignore write errors */ }
 }
 

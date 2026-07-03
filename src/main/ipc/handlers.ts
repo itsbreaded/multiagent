@@ -20,6 +20,8 @@ import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, P
 import { replaceCwdPrefix } from '../../shared/cwdRepair'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
+import { writeJsonAtomic } from '../atomicJson'
+import { defaultAgentProviderSettings, sanitizeAgentProviderSettings } from './agentProviderSettings'
 
 let vsCodeAvailable = false
 try {
@@ -393,14 +395,14 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   ipcMain.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarPanelSizes: unknown) => {
     try {
-      fs.writeFileSync(layoutPath, JSON.stringify({
+      writeJsonAtomic(layoutPath, {
         tabs: normalizeTabsForLayout(tabs),
         sidebarWidth,
         sidebarOpen,
         activeTabId,
         sidebarSectionOpen,
         sidebarPanelSizes,
-      }))
+      })
     } catch (err) {
       console.error('[MultiAgent] layout:save failed:', err)
     }
@@ -480,26 +482,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // --- Agent provider settings ---
   const AGENT_PROVIDER_FILE = path.join(app.getPath('userData'), 'agent-provider-settings.json')
 
-  function defaultAgentProviderSettings(): AgentProviderSettings {
-    return {
-      claude: {
-        enabled: false, preset: 'native',
-        baseUrl: '', authToken: '', model: '',
-        opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
-        extraEnvVars: [],
-      },
-      codex: {
-        enabled: false, preset: 'native',
-        providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '',
-        wireApi: 'responses', extraEnvVars: [],
-      },
-    }
-  }
-
   function loadAgentProviderSettings(): AgentProviderSettings {
     try {
       const raw = fs.readFileSync(AGENT_PROVIDER_FILE, 'utf-8')
-      return JSON.parse(raw) as AgentProviderSettings
+      return sanitizeAgentProviderSettings(JSON.parse(raw))
     } catch {
       return defaultAgentProviderSettings()
     }
@@ -511,8 +497,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ipcMain.handle('settings:get-agent-providers', () => loadAgentProviderSettings())
 
   ipcMain.handle('settings:save-agent-providers', (_e, settings: AgentProviderSettings) => {
-    fs.writeFileSync(AGENT_PROVIDER_FILE, JSON.stringify(settings, null, 2), 'utf-8')
-    setAgentProviderSettings(settings)
+    // Sanitize before persisting/applying so a buggy or hostile renderer payload
+    // cannot poison the file or crash agent spawns.
+    const sanitized = sanitizeAgentProviderSettings(settings)
+    writeJsonAtomic(AGENT_PROVIDER_FILE, sanitized, 2)
+    setAgentProviderSettings(sanitized)
   })
 
   // --- GPU feature status ---
@@ -1058,14 +1047,14 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
 
     try {
-      fs.writeFileSync(layoutPath, JSON.stringify({
+      writeJsonAtomic(layoutPath, {
         tabs: normalizeTabsForLayout(mergedTabs),
         sidebarWidth: primaryState.sidebarWidth,
         sidebarOpen: primaryState.sidebarOpen,
         activeTabId: primaryState.activeTabId,
         sidebarSectionOpen: primaryState.sidebarSectionOpen,
         sidebarPanelSizes: primaryState.sidebarPanelSizes,
-      }))
+      })
     } catch (err) {
       console.error('[MultiAgent] performShutdownSave: layout write failed:', err)
     }
@@ -1167,12 +1156,6 @@ function rewritePathProperty(record: Record<string, unknown>, key: string, mappi
   if (rewritten === value) return 0
   record[key] = rewritten
   return 1
-}
-
-function writeJsonAtomic(filePath: string, value: unknown): void {
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`
-  fs.writeFileSync(tmpPath, JSON.stringify(value))
-  fs.renameSync(tmpPath, filePath)
 }
 
 function timestampForFilename(): string {
