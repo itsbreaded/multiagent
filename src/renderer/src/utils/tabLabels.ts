@@ -1,10 +1,6 @@
 import type { Tab, PaneNode, PaneLeaf, Session } from '../../../shared/types'
 import { agentLabel } from './agents'
 
-// Re-exported so existing imports keep working. The canonical home for tree ops
-// is src/shared/paneTree.ts (spec 034).
-export { collectLeaves } from '../../../shared/paneTree'
-
 export function findLeafById(node: PaneNode, id: string): PaneLeaf | null {
   if (node.type === 'leaf') return node.id === id ? node : null
   return findLeafById(node.first, id) ?? findLeafById(node.second, id)

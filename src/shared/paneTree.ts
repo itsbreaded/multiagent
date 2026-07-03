@@ -59,25 +59,16 @@ export function replaceNode(node: PaneNode, targetId: string, replacement: PaneN
 }
 
 /**
- * Remove the leaf with `removeId` from the tree.
- * Returns the updated subtree, or null if the entire subtree should be removed.
+ * Remove only the leaf with `removeId` from the tree. Split ids are ignored.
+ * Returns null if the sole leaf is removed and preserves identity on no-match.
  */
 export function removeLeaf(node: PaneNode, removeId: string): PaneNode | null {
-  if (node.type === 'leaf') {
-    return node.id === removeId ? null : node
-  }
-  // It's a split
-  if (node.first.id === removeId || (node.first.type === 'leaf' && node.first.id === removeId)) {
-    return node.second
-  }
-  if (node.second.id === removeId || (node.second.type === 'leaf' && node.second.id === removeId)) {
-    return node.first
-  }
-  const newFirst = removeLeaf(node.first, removeId)
-  const newSecond = removeLeaf(node.second, removeId)
-  if (newFirst === null) return newSecond
-  if (newSecond === null) return newFirst
-  return { ...node, first: newFirst, second: newSecond }
+  if (node.type === 'leaf') return node.id === removeId ? null : node
+  const first = removeLeaf(node.first, removeId)
+  const second = removeLeaf(node.second, removeId)
+  if (first === null) return second
+  if (second === null) return first
+  return first === node.first && second === node.second ? node : { ...node, first, second }
 }
 
 /**
@@ -110,15 +101,41 @@ export function updateRatioInTree(node: PaneNode, splitId: string, ratio: number
   }
 }
 
-/** Update a field on the leaf with the given id */
+/**
+ * Shallow-patch a leaf by id. Returns the same node when the id is absent or
+ * every patch value is Object.is-equal, and otherwise rebuilds only the path
+ * to the changed leaf.
+ */
 export function updateLeaf(node: PaneNode, leafId: string, patch: Partial<PaneLeaf>): PaneNode {
   if (node.type === 'leaf') {
-    return node.id === leafId ? { ...node, ...patch } : node
+    if (node.id !== leafId) return node
+    const keys = Object.keys(patch) as (keyof PaneLeaf)[]
+    return keys.every((key) => Object.is(node[key], patch[key])) ? node : { ...node, ...patch }
   }
+  const first = updateLeaf(node.first, leafId, patch)
+  const second = updateLeaf(node.second, leafId, patch)
+  return first === node.first && second === node.second ? node : { ...node, first, second }
+}
+
+/** Mark the agent leaf owning a PTY as exited while preserving untouched identities. */
+export function markLeafExitedByPtyId(
+  node: PaneNode,
+  ptyId: string,
+  disconnected: NonNullable<PaneLeaf['agentDisconnected']>,
+): { node: PaneNode; exitedLeaf: PaneLeaf | null } {
+  if (node.type === 'leaf') {
+    if (node.ptyId !== ptyId || node.paneType !== 'agent') return { node, exitedLeaf: null }
+    return {
+      node: { ...node, ptyId: undefined, agentDisconnected: disconnected },
+      exitedLeaf: node,
+    }
+  }
+  const first = markLeafExitedByPtyId(node.first, ptyId, disconnected)
+  const second = markLeafExitedByPtyId(node.second, ptyId, disconnected)
+  if (!first.exitedLeaf && !second.exitedLeaf) return { node, exitedLeaf: null }
   return {
-    ...node,
-    first: updateLeaf(node.first, leafId, patch),
-    second: updateLeaf(node.second, leafId, patch),
+    node: { ...node, first: first.node, second: second.node },
+    exitedLeaf: first.exitedLeaf ?? second.exitedLeaf,
   }
 }
 
@@ -151,8 +168,7 @@ export function updateCwdsInTree(
 
 /** Collect all leaf ids in tree order */
 export function collectLeafIds(node: PaneNode): string[] {
-  if (node.type === 'leaf') return [node.id]
-  return [...collectLeafIds(node.first), ...collectLeafIds(node.second)]
+  return collectLeaves(node).map((leaf) => leaf.id)
 }
 
 /** Collect all leaves (in tree order) as full PaneLeaf objects. */

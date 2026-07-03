@@ -427,3 +427,46 @@ describe('usePanesStore — tab close tears down PTYs', () => {
     })
   })
 })
+
+describe('usePanesStore — identity-preserving pane patches', () => {
+  it('changes only the targeted tab and preserves no-op array identity', () => {
+    const paneA = makeLeaf('C:\\a')
+    const paneB = makeLeaf('C:\\b')
+    const tabAId = plantTab(paneA)
+    const tabBId = plantTab(paneB)
+    const before = usePanesStore.getState().tabs
+    const tabABefore = before.find((tab) => tab.id === tabAId)!
+    const tabBBefore = before.find((tab) => tab.id === tabBId)!
+
+    usePanesStore.getState().setPtyId(paneA.id, 'pty-1')
+    const after = usePanesStore.getState().tabs
+    expect(after.find((tab) => tab.id === tabAId)).not.toBe(tabABefore)
+    expect(after.find((tab) => tab.id === tabBId)).toBe(tabBBefore)
+
+    usePanesStore.getState().setPtyId(paneA.id, 'pty-1')
+    expect(usePanesStore.getState().tabs).toBe(after)
+    usePanesStore.getState().setPtyId('missing', 'pty-x')
+    expect(usePanesStore.getState().tabs).toBe(after)
+  })
+
+  it('markPtyExited ignores shells and unknown PTYs, and changes only an agent tab', () => {
+    const shell = makeLeaf('C:\\shell')
+    shell.ptyId = 'shell-pty'
+    const agent = makeLeaf('C:\\agent', 'agent', 'claude')
+    agent.ptyId = 'agent-pty'
+    agent.sessionId = 'session-1'
+    const shellTabId = plantTab(shell)
+    const agentTabId = plantTab(agent)
+    const before = usePanesStore.getState().tabs
+
+    usePanesStore.getState().markPtyExited('missing', 1)
+    expect(usePanesStore.getState().tabs).toBe(before)
+    usePanesStore.getState().markPtyExited('shell-pty', 1)
+    expect(usePanesStore.getState().tabs).toBe(before)
+
+    usePanesStore.getState().markPtyExited('agent-pty', 1)
+    const after = usePanesStore.getState().tabs
+    expect(after.find((tab) => tab.id === shellTabId)).toBe(before.find((tab) => tab.id === shellTabId))
+    expect(after.find((tab) => tab.id === agentTabId)).not.toBe(before.find((tab) => tab.id === agentTabId))
+  })
+})

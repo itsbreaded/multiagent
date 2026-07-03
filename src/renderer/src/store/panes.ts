@@ -3,7 +3,7 @@ import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf,
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
-  collectLeaves,
+  collectLeaves, markLeafExitedByPtyId,
 } from '../../../shared/paneTree'
 import { replaceCwdPrefix } from '../../../shared/cwdRepair'
 import * as xtermRegistry from '../utils/xtermRegistry'
@@ -78,6 +78,18 @@ function removeHydratedTabs(hydratedTabIds: Record<string, true>, tabIds: string
     }
   }
   return changed ? next : hydratedTabIds
+}
+
+function patchLeafInTabs(tabs: Tab[], paneId: string, patch: Partial<PaneLeaf>): Tab[] | null {
+  let changed = false
+  const next = tabs.map((tab) => {
+    if (!tab.rootNode) return tab
+    const rootNode = updateLeaf(tab.rootNode, paneId, patch)
+    if (rootNode === tab.rootNode) return tab
+    changed = true
+    return { ...tab, rootNode }
+  })
+  return changed ? next : null
 }
 
 /**
@@ -1183,13 +1195,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   setPtyId: (paneId, ptyId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, {
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, {
         ptyId,
         agentDisconnected: undefined,
         resumeError: undefined,
-      }) } : t),
-    }))
+      })
+      return tabs ? { tabs } : s
+    })
   },
 
   setPaneCwd: (ptyId, cwd) => {
@@ -1215,52 +1228,47 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setPaneCustomName: (paneId, name) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode
-        ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { customName: name.trim() || undefined }) }
-        : t
-      ),
-    }))
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, { customName: name.trim() || undefined })
+      return tabs ? { tabs } : s
+    })
   },
 
   setSessionId: (paneId, sessionId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, {
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, {
         sessionId,
         sessionDetectionState: 'detected',
         sessionDetectionError: undefined,
         resumeError: undefined,
-      }) } : t),
-    }))
+      })
+      return tabs ? { tabs } : s
+    })
   },
 
   updatePane: (paneId, patch) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, patch) } : t),
-    }))
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, patch)
+      return tabs ? { tabs } : s
+    })
   },
 
   markPtyExited: (ptyId, exitCode, signal) => {
     let shouldRefreshSessions = false
-    set((s) => ({
-      tabs: s.tabs.map((t) => {
+    const disconnected = { exitCode, signal, at: Date.now() }
+    set((s) => {
+      let changed = false
+      const tabs = s.tabs.map((t) => {
         if (!t.rootNode) return t
-        function patchExited(node: PaneNode): PaneNode {
-          if (node.type === 'leaf') {
-            if (node.ptyId !== ptyId || node.paneType !== 'agent') return node
-            shouldRefreshSessions = !!node.sessionId
-            return {
-              ...node,
-              ptyId: undefined,
-              agentDisconnected: { exitCode, signal, at: Date.now() },
-            }
-          }
-          return { ...node, first: patchExited(node.first), second: patchExited(node.second) }
-        }
-        return { ...t, rootNode: patchExited(t.rootNode) }
-      }),
-    }))
+        const result = markLeafExitedByPtyId(t.rootNode, ptyId, disconnected)
+        if (!result.exitedLeaf) return t
+        changed = true
+        shouldRefreshSessions ||= !!result.exitedLeaf.sessionId
+        return { ...t, rootNode: result.node }
+      })
+      return changed ? { tabs } : s
+    })
     if (shouldRefreshSessions && typeof window !== 'undefined' && window.ipc) {
       window.ipc.invoke('sessions:refresh').catch(() => {})
     }
@@ -2016,14 +2024,15 @@ if (typeof window !== 'undefined' && window.ipc) {
       const leaves = collectLeaves(tab.rootNode)
       const pane = leaves.find((l) => l.ptyId === ptyId)
       if (pane) {
-        usePanesStore.setState((s) => ({
-          tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, pane.id, {
+        usePanesStore.setState((s) => {
+          const tabs = patchLeafInTabs(s.tabs, pane.id, {
             sessionId,
             sessionDetectionState: 'detected',
             sessionDetectionError: undefined,
             resumeError: undefined,
-          }) } : t),
-        }))
+          })
+          return tabs ? { tabs } : s
+        })
         break
       }
     }
