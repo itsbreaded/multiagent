@@ -219,56 +219,6 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
         },
       },
     )
-    /* previous inline implementation
-    void (async () => {
-      try {
-        // Validate the session transcript exists before spawning a CLI process.
-        // A missing transcript would cause a doomed spawn; catch it early so we get
-        // recoverable UI instead of a repeated failure loop on every startup.
-        const validation = await window.ipc.invoke('sessions:validate', agentKind, sessionId, cwd)
-          .catch(() => null) as { found: boolean; cwdMatch: boolean } | null
-        if (!validation?.found) {
-          const current = usePanesStore.getState().findPaneInAnyTab(paneId)
-          if (
-            current?.paneType === 'agent' &&
-            current.agentKind === agentKind &&
-            current.sessionId === sessionId &&
-            !current.ptyId
-          ) {
-            usePanesStore.getState().updatePane(paneId, {
-              resumeError: 'Session not found — the transcript may have been deleted',
-            })
-          }
-          return
-        }
-        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
-        if (!result?.ptyId) return
-        const current = usePanesStore.getState().findPaneInAnyTab(paneId)
-        if (
-          current?.paneType === 'agent' &&
-          current.agentKind === agentKind &&
-          current.sessionId === sessionId &&
-          !current.ptyId
-        ) {
-          usePanesStore.getState().updatePane(paneId, { ptyId: result.ptyId, resumeError: undefined })
-        }
-      } catch (err) {
-        const current = usePanesStore.getState().findPaneInAnyTab(paneId)
-        if (
-          current?.paneType === 'agent' &&
-          current.agentKind === agentKind &&
-          current.sessionId === sessionId &&
-          !current.ptyId
-        ) {
-          usePanesStore.getState().updatePane(paneId, {
-            resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
-          })
-        }
-      } finally {
-        if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
-      }
-    })()
-    */
     resumes.push(resumePromise)
   }
 

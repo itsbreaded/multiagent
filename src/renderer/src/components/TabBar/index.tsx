@@ -376,9 +376,12 @@ function tearOffTab(tabId: string, tabs: Tab[]): void {
 // --- LeftChrome ---
 // Exported so App.tsx can render it in a separate column in wrap mode.
 
-export function LeftChrome({ withBorderBottom = false }: { withBorderBottom?: boolean }): JSX.Element {
+function leftChromeWidth(sidebarOpen: boolean, sidebarWidth: number, isMac: boolean): number {
+  return sidebarOpen ? sidebarWidth : ui.chrome.controlSize * 4 + 8 + (isMac ? 80 : 0)
+}
+
+function ChromeButtonCluster(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
-  const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
   const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
   const toggleCommandPalette = usePanesStore((s) => s.toggleCommandPalette)
@@ -386,19 +389,37 @@ export function LeftChrome({ withBorderBottom = false }: { withBorderBottom?: bo
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
+  return <>
+    <BarButton onClick={toggleSidebar} title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}>
+      <img src={sidebarOpen ? leftPanelClosedIcon : leftPanelOpenedIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+    </BarButton>
+    <BarButton onClick={toggleSessionBrowser} title={`Session browser (${HOTKEYS.sessionBrowser.display})`} active={sessionBrowserOpen}>
+      <img src={bookIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+    </BarButton>
+    <BarButton onClick={toggleCommandPalette} title={`Command palette (${HOTKEYS.commandPalette.display})`} active={commandPaletteOpen}>
+      <img src={searchIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+    </BarButton>
+    <BarButton onClick={toggleSettings} title="Settings" active={settingsOpen}>
+      <img src={settingsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+    </BarButton>
+  </>
+}
+
+export function LeftChrome({ withBorderBottom = false }: { withBorderBottom?: boolean }): JSX.Element {
+  const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
+  const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
 
   const isMac = isMacPlatform()
   const leftChromePadding = 4
-  const controlClusterWidth = ui.chrome.controlSize * 4 + 8
-  const leftChromeWidth = sidebarOpen ? sidebarWidth : controlClusterWidth + (isMac ? 80 : 0)
+  const width = leftChromeWidth(sidebarOpen, sidebarWidth, isMac)
 
   return (
     <div
       onMouseDownCapture={startWindowDragFromChrome}
       onDoubleClickCapture={toggleMaximizeFromChrome}
       style={{
-        width: leftChromeWidth,
-        minWidth: leftChromeWidth,
+        width,
+        minWidth: width,
         height: ui.chrome.height,
         boxSizing: 'border-box',
         backgroundColor: ui.chrome.background,
@@ -414,33 +435,7 @@ export function LeftChrome({ withBorderBottom = false }: { withBorderBottom?: bo
         ...appRegion('drag'),
       }}
     >
-      <BarButton
-        onClick={toggleSidebar}
-        title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
-      >
-        <img src={sidebarOpen ? leftPanelClosedIcon : leftPanelOpenedIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
-      <BarButton
-        onClick={toggleSessionBrowser}
-        title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
-        active={sessionBrowserOpen}
-      >
-        <img src={bookIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
-      <BarButton
-        onClick={toggleCommandPalette}
-        title={`Command palette (${HOTKEYS.commandPalette.display})`}
-        active={commandPaletteOpen}
-      >
-        <img src={searchIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
-      <BarButton
-        onClick={toggleSettings}
-        title="Settings"
-        active={settingsOpen}
-      >
-        <img src={settingsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-      </BarButton>
+      <ChromeButtonCluster />
     </div>
   )
 }
@@ -461,13 +456,6 @@ export function TabBar(): JSX.Element {
   const closeTabsToRight = usePanesStore((s) => s.closeTabsToRight)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
-  const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
-  const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
-  const toggleCommandPalette = usePanesStore((s) => s.toggleCommandPalette)
-  const toggleSettings = usePanesStore((s) => s.toggleSettings)
-  const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
-  const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
-  const settingsOpen = usePanesStore((s) => s.settingsOpen)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
   const reorderTab = usePanesStore((s) => s.reorderTab)
@@ -479,8 +467,7 @@ export function TabBar(): JSX.Element {
   const isMac = isMacPlatform()
   const isWindows = isWindowsPlatform()
   const leftChromePadding = 4
-  const controlClusterWidth = ui.chrome.controlSize * 4 + 8
-  const leftChromeWidth = sidebarOpen ? sidebarWidth : controlClusterWidth + (isMac ? 80 : 0)
+  const chromeWidth = leftChromeWidth(sidebarOpen, sidebarWidth, isMac)
   const nativeWindowControlsWidth = isWindows ? ui.chrome.windowControlWidth * 3 : 0
 
   const labels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
@@ -676,48 +663,12 @@ export function TabBar(): JSX.Element {
   // dropIndex is the visual insertion index among local tabs (undefined = append at end).
   function handleCrossWindowDrop(e: React.DragEvent, dropIndex?: number): boolean {
     return absorbDroppedTab(e, windowId, { receiveTab, removeTabLocally: usePanesStore.getState().removeTabLocally }, dropIndex)
-    /* legacy body retained only within this patch boundary
-    const data = e.dataTransfer.getData(TAB_DRAG_MIME)
-    if (!data) return false
-    try {
-      const { tab, ptyIds, sourceWindowId } = JSON.parse(data) as {
-        tab: Tab
-        ptyIds: string[]
-        sourceWindowId: number | null
-      }
-      if (sourceWindowId === windowId) return false // Same window — let normal reorder handle it
-      e.preventDefault()
-      e.stopPropagation()
-      receiveTab(tab, dropIndex)
-      window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
-        .then((ok) => {
-          if (!ok) usePanesStore.getState().removeTabLocally(tab.id)
-        })
-        .catch(console.error)
-      return true
-    } catch {
-      return false
-    }
-    */
   }
 
   function handlePaneDrop(e: React.DragEvent, targetTabId: string): boolean {
     const handled = transferDroppedPane(e, targetTabId, windowId, { movePaneToTab })
     if (handled) clearPaneDragHover()
     return handled
-    /* legacy body retained only within this patch boundary
-    const payload = decodePaneDragPayload(e.dataTransfer)
-    if (!payload || windowId === null) return false
-    e.preventDefault()
-    e.stopPropagation()
-    if (payload.sourceWindowId === windowId) {
-      movePaneToTab(payload.pane.id, targetTabId)
-    } else {
-      window.ipc.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId: windowId }).catch(console.error)
-    }
-    clearPaneDragHover()
-    return true
-    */
   }
 
   return (
@@ -744,8 +695,8 @@ export function TabBar(): JSX.Element {
       {!isDetachedWindow && tabOverflowMode !== 'wrap' && (
         <div
           style={{
-            width: leftChromeWidth,
-            minWidth: leftChromeWidth,
+            width: chromeWidth,
+            minWidth: chromeWidth,
             height: chromeContentHeight,
             backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
             paddingLeft: isMac ? 80 : leftChromePadding,
@@ -759,33 +710,7 @@ export function TabBar(): JSX.Element {
             ...appRegion('drag'),
           }}
         >
-          <BarButton
-            onClick={toggleSidebar}
-            title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}
-          >
-            <img src={sidebarOpen ? leftPanelClosedIcon : leftPanelOpenedIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-          </BarButton>
-          <BarButton
-            onClick={toggleSessionBrowser}
-            title={`Session browser (${HOTKEYS.sessionBrowser.display})`}
-            active={sessionBrowserOpen}
-          >
-            <img src={bookIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-          </BarButton>
-          <BarButton
-            onClick={toggleCommandPalette}
-            title={`Command palette (${HOTKEYS.commandPalette.display})`}
-            active={commandPaletteOpen}
-          >
-            <img src={searchIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-          </BarButton>
-          <BarButton
-            onClick={toggleSettings}
-            title="Settings"
-            active={settingsOpen}
-          >
-            <img src={settingsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-          </BarButton>
+          <ChromeButtonCluster />
         </div>
       )}
 
