@@ -25,6 +25,7 @@ import {
 import { McpSection } from './McpSection'
 import { SectionLabel } from '../common/SectionLabel'
 import { matchesSettingQuery } from './settingsSearch'
+import { GitBranchBadgesSetting, GpuAccelerationSetting, OptimizedRendererSetting, TabOverflowSetting } from './settings/controls'
 import { AgentProvidersSection } from './AgentProvidersSection'
 import { TerminalBindingsSection } from './TerminalBindingsSection'
 
@@ -338,51 +339,8 @@ export function SettingsPanel(): JSX.Element {
                 {activeSection === 'appearance' && (
                   <>
                     <SectionLabel>Appearance</SectionLabel>
-                    {showBranchSetting && (
-                      <SettingRow
-                        title="Git branch badges"
-                        description="Show the current branch beside tab default directories and pane directories."
-                      >
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={showGitBranchBadges}
-                            onChange={(e) => setShowGitBranchBadges(e.target.checked)}
-                          />
-                          Enabled
-                        </label>
-                      </SettingRow>
-                    )}
-                    {showOverflowSetting && (
-                      <SettingRow
-                        title="Tab overflow"
-                        description="Scroll keeps tabs in a single row; Wrap grows to additional rows."
-                      >
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          {(['scroll', 'wrap'] as const).map((mode) => {
-                            const isActive = tabOverflowMode === mode
-                            return (
-                              <button
-                                key={mode}
-                                onClick={() => setTabOverflowMode(mode)}
-                                style={{
-                                  padding: '4px 12px',
-                                  background: isActive ? ui.color.control : 'none',
-                                  border: `1px solid ${isActive ? ui.color.accent : ui.color.border}`,
-                                  borderRadius: ui.radius.sm,
-                                  color: isActive ? ui.color.text : ui.color.textMuted,
-                                  fontSize: 12,
-                                  cursor: 'pointer',
-                                  fontWeight: isActive ? 500 : 400,
-                                }}
-                              >
-                                {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </SettingRow>
-                    )}
+                    {showBranchSetting && <GitBranchBadgesSetting />}
+                    {showOverflowSetting && <TabOverflowSetting />}
                     {!showBranchSetting && !showOverflowSetting && (
                       <EmptyMessage>No settings match your search.</EmptyMessage>
                     )}
@@ -490,51 +448,8 @@ export function SettingsPanel(): JSX.Element {
                 {activeSection === 'terminal' && (
                   <>
                     <SectionLabel>Renderer</SectionLabel>
-                    {showOptimizedRendererSetting && (
-                      <SettingRow
-                        title="Optimized renderer"
-                        description="Use the environment-aware backend registry. Disable to revert to legacy unconditional WebGL behavior. Applies to new panes."
-                      >
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={optimizedTerminalRenderer}
-                            onChange={(e) => setOptimizedTerminalRenderer(e.target.checked)}
-                          />
-                          Enabled
-                        </label>
-                      </SettingRow>
-                    )}
-                    {showGpuAccelSetting && (
-                      <SettingRow
-                        title="GPU acceleration"
-                        description="auto avoids software-rendered WebGL (the CPU spike trap). on always attempts WebGL. off always uses the DOM renderer. Applies to new panes."
-                      >
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          {(['auto', 'on', 'off'] as GpuAccelerationPref[]).map((mode) => {
-                            const isActive = terminalGpuAcceleration === mode
-                            return (
-                              <button
-                                key={mode}
-                                onClick={() => setTerminalGpuAcceleration(mode)}
-                                style={{
-                                  padding: '4px 12px',
-                                  background: isActive ? ui.color.control : 'none',
-                                  border: `1px solid ${isActive ? ui.color.accent : ui.color.border}`,
-                                  borderRadius: ui.radius.sm,
-                                  color: isActive ? ui.color.text : ui.color.textMuted,
-                                  fontSize: 12,
-                                  cursor: 'pointer',
-                                  fontWeight: isActive ? 500 : 400,
-                                }}
-                              >
-                                {mode}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </SettingRow>
-                    )}
+                    {showOptimizedRendererSetting && <OptimizedRendererSetting />}
+                    {showGpuAccelSetting && <GpuAccelerationSetting />}
 
                     {/* Diagnostics readout — only in section mode, never in search results */}
                     {caps && (
