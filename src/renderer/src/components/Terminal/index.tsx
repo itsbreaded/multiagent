@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -8,8 +8,8 @@ import type { PaneLeaf, PtyReadyMetadata } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store/settings'
-import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
-import { buildTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/terminalKeyBindings'
+import { getHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
+import { getTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/terminalKeyBindings'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
 import { createDirectPtyDataHandler } from '../../terminal/ptyData'
@@ -61,7 +61,7 @@ interface TerminalProps {
   layoutKey: string
 }
 
-export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
+export const Terminal = React.memo(function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -269,7 +269,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // needed when the user rebinds. On match the event is consumed (stop());
       // a 'suppress' entry consumes the key and sends nothing (a vacated default
       // trigger of a rebound signal binding).
-      const entry = buildTerminalKeyMap(useSettingsStore.getState().terminalKeyBindings).get(bindingEventKey(e))
+      const entry = getTerminalKeyMap(useSettingsStore.getState().terminalKeyBindings).get(bindingEventKey(e))
       if (entry) {
         if (entry.kind === 'suppress') return stop()
         const b = entry.binding
@@ -308,7 +308,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // Step 3 — Global app shortcuts (HotkeyId). Read overrides at call time
       // so rebinds take effect immediately.
       if (mod) {
-        const hotkeys = buildHotkeys(useSettingsStore.getState().hotkeyOverrides)
+        const hotkeys = getHotkeys(useSettingsStore.getState().hotkeyOverrides)
         const dispatch: Record<string, () => void> = {
           [hotkeyKey(hotkeys.splitVertical)]:   () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical') },
           [hotkeyKey(hotkeys.splitHorizontal)]: () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal') },
@@ -907,4 +907,4 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       )}
     </div>
   )
-}
+})

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react'
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { useSettingsStore } from '../../store/settings'
@@ -484,7 +484,7 @@ export function TabBar(): JSX.Element {
   const leftChromeWidth = sidebarOpen ? sidebarWidth : controlClusterWidth + (isMac ? 80 : 0)
   const nativeWindowControlsWidth = isWindows ? ui.chrome.windowControlWidth * 3 : 0
 
-  const labels = computeLabels(tabs, sessions)
+  const labels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
   const stripNativeAppRegion = appRegion(tabOverflowMode === 'wrap' ? 'drag' : 'no-drag')
   const tabNativeAppRegion = tabOverflowMode === 'wrap' ? appRegion('no-drag') : {}
   const chromeRowHeight = isDetachedWindow ? ui.chrome.detachedHeight : ui.chrome.height
@@ -634,10 +634,13 @@ export function TabBar(): JSX.Element {
     setRenamingTabId(null)
   }, [renamingTabId, renameValue, renameTab])
 
-  function hasAgentPane(tab: Tab): boolean {
-    if (!tab.rootNode) return false
-    return collectLeaves(tab.rootNode).some((l) => l.paneType === 'agent')
-  }
+  const agentTabIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const tab of tabs) {
+      if (tab.rootNode && collectLeaves(tab.rootNode).some((leaf) => leaf.paneType === 'agent')) ids.add(tab.id)
+    }
+    return ids
+  }, [tabs])
 
   function clearPaneDragHover(): void {
     if (hoverActivateTimer.current !== null) {
@@ -828,7 +831,7 @@ export function TabBar(): JSX.Element {
         {tabs.filter((t) => !t.detached).map((tab, idx) => {
           const isActive = tab.id === activeTabId
           const label = labels.get(tab.id) ?? 'Shell'
-          const live = hasAgentPane(tab)
+          const live = agentTabIds.has(tab.id)
           const isRenaming = renamingTabId === tab.id
 
           return (

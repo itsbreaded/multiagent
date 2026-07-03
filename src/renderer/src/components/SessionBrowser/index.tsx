@@ -91,7 +91,7 @@ export function SessionBrowser(): JSX.Element {
     }
   }, [query, mode, runDeepSearch])
 
-  const summarySessions = query ? search(query) : sessions
+  const summarySessions = useMemo(() => query ? search(query) : sessions, [query, sessions, search])
   const summaryGrouped = useMemo(() => groupByProject(summarySessions), [summarySessions])
   const deepGrouped = useMemo(() => groupResultsByProject(deepResults), [deepResults])
 

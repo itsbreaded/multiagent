@@ -10,13 +10,12 @@ interface PaneContainerProps {
 }
 
 export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Element {
-  const focusedPaneId = usePanesStore((s) => {
+  const isFocused = usePanesStore((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    return tab?.focusedPaneId ?? ''
+    return tab?.focusedPaneId === pane.id
   })
   const focusPane = usePanesStore((s) => s.focusPane)
   const isSwapTarget = usePanesStore((s) => s.swapDrag?.targetId === pane.id)
-  const isFocused = focusedPaneId === pane.id
 
   return (
     <div

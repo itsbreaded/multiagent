@@ -7,7 +7,18 @@ import {
   eventKey,
   matches,
   buildHotkeys,
+  getHotkeys,
 } from './hotkeys'
+
+describe('getHotkeys', () => {
+  it('reuses results by override reference and rebuilds for replacements', () => {
+    const overrides = {}
+    expect(getHotkeys(overrides)).toBe(getHotkeys(overrides))
+    const replacement = { newTab: { code: 'KeyZ', shift: false } }
+    expect(getHotkeys(replacement)).not.toBe(getHotkeys(overrides))
+    expect(getHotkeys(replacement).newTab.code).toBe('KeyZ')
+  })
+})
 
 function ke(code: string, opts: Partial<Pick<KeyboardEvent, 'shiftKey' | 'ctrlKey' | 'metaKey'>>): KeyboardEvent {
   return { code, shiftKey: false, ctrlKey: false, metaKey: false, ...opts } as unknown as KeyboardEvent
