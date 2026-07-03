@@ -57,13 +57,18 @@ export function SessionBrowser(): JSX.Element {
     setSelectedProject(null)
   }, [mode, query])
 
+  // Bump the generation unconditionally on every invocation — including the
+  // empty-query branch — so an in-flight response to a superseded query is
+  // always discarded. Without this bump, clearing the input leaves the gen
+  // equal to the in-flight request's, and stale results repopulate the empty
+  // view (spec 036, item 5).
   const runDeepSearch = useCallback(async (q: string) => {
+    const gen = ++searchGenRef.current
     if (!q.trim()) {
       setDeepResults([])
       setDeepSearching(false)
       return
     }
-    const gen = ++searchGenRef.current
     setDeepSearching(true)
     try {
       const results = (await window.ipc.invoke('sessions:search-deep', { query: q })) as SessionSearchResult[]

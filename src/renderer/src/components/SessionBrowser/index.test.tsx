@@ -93,4 +93,58 @@ describe('SessionBrowser - deep mode', () => {
     expect(screen.getByText('needle')).toBeInTheDocument()
     expect(screen.getByText('assistant')).toBeInTheDocument()
   })
+
+  it('discards an in-flight deep-search response after the query is cleared (spec 036 item 5)', async () => {
+    const user = userEvent.setup()
+    const matchingSession = session('console', { firstMessage: 'Investigate rendering' })
+    const staleResult: SessionSearchResult = {
+      session: matchingSession,
+      score: 10,
+      matchCount: 1,
+      matches: [{
+        transcriptPath: matchingSession.transcriptPath,
+        lineNumber: 12,
+        timestamp: null,
+        role: 'assistant',
+        snippet: 'The needle appears in this transcript.',
+      }],
+    }
+
+    // Deferred the test controls: the in-flight `needle` request stays pending
+    // until we explicitly resolve it after the query has been cleared.
+    let resolveSearch!: (r: SessionSearchResult[]) => void
+    ipc.invoke.mockImplementation(
+      () => new Promise<SessionSearchResult[]>((res) => {
+        resolveSearch = res
+      })
+    )
+
+    render(<SessionBrowser />)
+    await user.click(screen.getByRole('button', { name: 'Deep' }))
+    const input = screen.getByPlaceholderText('Search sessions...')
+    await user.type(input, 'needle')
+
+    // Request is in flight and unresolved.
+    await waitFor(() => {
+      expect(ipc.invoke).toHaveBeenCalledWith('sessions:search-deep', { query: 'needle' })
+    })
+
+    // Clear the input — the empty-query branch of runDeepSearch runs after the
+    // 300ms debounce, resetting deepResults. The generation counter must bump
+    // so the still-pending `needle` response is treated as stale.
+    await user.clear(input)
+    await waitFor(() => {
+      expect(screen.getByText('Type to search across all transcript content.')).toBeInTheDocument()
+    })
+
+    // Now resolve the stale request. Pre-fix this repopulated deepResults under
+    // an empty query; post-fix the stale check drops it.
+    resolveSearch([staleResult])
+    // Flush microtasks so the resolved promise's .then chain runs.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(screen.queryByText('1 match')).toBeNull()
+    expect(screen.getByText('Type to search across all transcript content.')).toBeInTheDocument()
+  })
 })

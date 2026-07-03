@@ -9,6 +9,7 @@ import {
   SNIPPET_MAX_LEN,
   DEFAULT_LIMIT,
   DEFAULT_MATCHES_PER_SESSION,
+  SEARCH_CONCURRENCY,
   CLAUDE_SESSION_ID_RE,
   type FileResult,
 } from './deepSearch'
@@ -31,6 +32,10 @@ describe('caps + session-id regex', () => {
     expect(DEFAULT_LIMIT).toBe(50)
     expect(DEFAULT_MATCHES_PER_SESSION).toBe(5)
     expect(SNIPPET_MAX_LEN).toBe(500)
+  })
+  it('pins SEARCH_CONCURRENCY within the spec 036 handoff band [4, 8]', () => {
+    expect(SEARCH_CONCURRENCY).toBeGreaterThanOrEqual(4)
+    expect(SEARCH_CONCURRENCY).toBeLessThanOrEqual(8)
   })
   it('accepts a UUID-shaped Claude session filename', () => {
     expect(CLAUDE_SESSION_ID_RE.test('11111111-2222-3333-4444-555555555555')).toBe(true)

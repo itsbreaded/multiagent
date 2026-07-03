@@ -5,8 +5,20 @@ import { app } from 'electron'
 import type { AgentKind, Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
 import { claudeProjectDirForCwd, claudeTranscriptPathForCwd } from './claudePaths'
+import { toFtsMatchExpression, splitFtsTokens, toLikeSubstringPattern } from './ftsQuery'
 
-const DB_PATH = path.join(app.getPath('userData'), 'session-index.db')
+/**
+ * Default DB path. Computed lazily — not at module load — so the module can be
+ * imported under `vi.mock('electron', ...)` in tests without `app` being
+ * implemented, and so an injectable path can be passed to the constructor for
+ * the in-memory integration test (spec 036, item 7).
+ */
+function defaultDbPath(): string {
+  return path.join(app.getPath('userData'), 'session-index.db')
+}
+
+/** Summary columns searched by the LIKE fallback (must match the FTS5 index). */
+const SUMMARY_LIKE_COLUMNS = ['projectName', 'displayName', 'firstMessage', 'lastMessage'] as const
 
 function normalizeStatus(status: string | null | undefined): Session['status'] {
   return status === 'live-attached' ? 'live-attached' : 'resumable'
@@ -58,8 +70,8 @@ function deriveProjectName(cwd: string): string {
 export class SessionIndex {
   private db: Database.Database
 
-  constructor() {
-    this.db = new Database(DB_PATH)
+  constructor(dbPath: string = defaultDbPath()) {
+    this.db = new Database(dbPath)
     this.db.pragma('journal_mode = WAL')
     this.migrate()
   }
@@ -294,20 +306,55 @@ export class SessionIndex {
   }
 
   search(query: string): Session[] {
-    if (!query.trim()) return this.getAll()
-
-    // FTS5 search - join back to sessions for full row data
-    const rows = this.db
-      .prepare(
+    const match = toFtsMatchExpression(query)
+    if (!match) return this.getAll()
+    try {
+      // FTS5 search - join back to sessions for full row data. The MATCH
+      // expression is built by `toFtsMatchExpression`, which quote-escapes every
+      // token so user-typed Windows paths, quotes, parens, and FTS keywords are
+      // treated as literal terms (spec 036, item 7).
+      const rows = this.db
+        .prepare(
+          `
+          SELECT s.*
+          FROM sessions s
+          JOIN sessions_fts fts ON s.rowid = fts.rowid
+          WHERE sessions_fts MATCH ?
+          ORDER BY rank
         `
-        SELECT s.*
-        FROM sessions s
-        JOIN sessions_fts fts ON s.rowid = fts.rowid
-        WHERE sessions_fts MATCH ?
-        ORDER BY rank
-      `
-      )
-      .all(query) as DbRow[]
+        )
+        .all(match) as DbRow[]
+      return rows.map(scannedToSession)
+    } catch {
+      // Belt-and-braces: a residual FTS edge case degrades to a slower-but-
+      // correct LIKE scan over the summary columns instead of rejecting the
+      // invoke. With correct escaping this branch should be unreachable.
+      return this.searchLike(query)
+    }
+  }
+
+  /**
+   * Literal LIKE fallback over the four summary columns. Each whitespace-separated
+   * token becomes an AND-ed group over all summary columns (LIKE ? ESCAPE '\').
+   * Ordered by last activity descending so the visible ordering matches getAll.
+   */
+  private searchLike(query: string): Session[] {
+    const tokens = splitFtsTokens(query)
+    if (tokens.length === 0) return this.getAll()
+
+    const groups = tokens
+      .map(() => `(${SUMMARY_LIKE_COLUMNS.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(' OR ')})`)
+      .join(' AND ')
+
+    const params: string[] = []
+    for (const token of tokens) {
+      const pattern = toLikeSubstringPattern(token)
+      for (let i = 0; i < SUMMARY_LIKE_COLUMNS.length; i++) params.push(pattern)
+    }
+
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE ${groups} ORDER BY lastActivity DESC NULLS LAST`)
+      .all(...params) as DbRow[]
     return rows.map(scannedToSession)
   }
 

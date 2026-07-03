@@ -235,7 +235,17 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   // --- IPC handlers ---
 
-  ipcMain.handle('sessions:search', (_e, query: string) => index.search(query))
+  ipcMain.handle('sessions:search', (_e, query: string) => {
+    try {
+      return index.search(query)
+    } catch (err) {
+      // search() is expected to fall back to LIKE on FTS errors (spec 036, item 7).
+      // This final guard ensures no future regression can reject the invoke —
+      // summary search degrades to an empty list rather than throwing.
+      console.error('[sessions:search] failed:', err)
+      return []
+    }
+  })
 
   ipcMain.handle('sessions:search-deep', async (_e, request: SessionSearchRequest) => {
     const allSessions = index.getAll()
