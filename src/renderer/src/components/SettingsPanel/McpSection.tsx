@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { McpServerEntry, McpServerType, McpSettings, McpStatus } from '../../../../shared/types'
 import { useSettingsStore } from '../../store/settings'
+import { border, ui } from '../../styles/theme'
 import { SectionLabel } from '../common/SectionLabel'
 
 function generateId(): string {
@@ -198,7 +199,7 @@ export function McpSection(): JSX.Element {
   return (
     <div>
       <SectionLabel>Model Context Protocol (MCP)</SectionLabel>
-      <p style={{ color: '#6b7280', fontSize: 11, padding: '0 14px 10px', lineHeight: 1.5, margin: 0 }}>
+      <p style={{ color: ui.color.textMuted, fontSize: 11, padding: '0 14px 10px', lineHeight: 1.5, margin: 0 }}>
         MCP servers are injected into each new Claude and Codex session at launch.
         Changes apply to sessions started after saving — existing sessions are not affected.
       </p>
@@ -210,7 +211,7 @@ export function McpSection(): JSX.Element {
           background: '#0f2a15',
           border: '1px solid #1a4a25',
           borderRadius: 5,
-          color: '#4ade80',
+          color: ui.color.accent,
           fontSize: 12,
         }}>
           Saved — new sessions will use the updated config.
@@ -226,13 +227,13 @@ export function McpSection(): JSX.Element {
               <StatusDot running={!statusLoading && !statusError && (status?.running ?? false)} />
               <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>multiagent-browser</span>
               <TypeBadge type="http" />
-              <span style={{ color: '#4a4b4e', fontSize: 10, background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>built-in</span>
+              <span style={{ color: ui.color.textDim, fontSize: 10, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>built-in</span>
             </div>
-            <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.5 }}>
+            <div style={{ color: ui.color.textMuted, fontSize: 11, lineHeight: 1.5 }}>
               {statusLoading ? (
-                <span style={{ color: '#4a4b4e' }}>Loading…</span>
+                <span style={{ color: ui.color.textDim }}>Loading…</span>
               ) : statusError ? (
-                <span style={{ color: '#f87171' }}>Failed to fetch status</span>
+                <span style={{ color: ui.color.danger }}>Failed to fetch status</span>
               ) : status?.running ? (
                 <>
                   Port{' '}
@@ -252,7 +253,7 @@ export function McpSection(): JSX.Element {
             <button
               onClick={fetchStatus}
               title="Refresh status"
-              style={{ background: 'none', border: '1px solid #2a2b2e', borderRadius: 4, color: '#4a4b4e', fontSize: 11, cursor: 'pointer', padding: '2px 7px' }}
+              style={{ background: 'none', border: border.default, borderRadius: 4, color: ui.color.textDim, fontSize: 11, cursor: 'pointer', padding: '2px 7px' }}
             >
               ↻
             </button>
@@ -282,7 +283,7 @@ export function McpSection(): JSX.Element {
         </div>
 
         {mcpSettings.customServers.length === 0 && !showAddForm && !showImport && (
-          <div style={{ color: '#4a4b4e', fontSize: 12, padding: '8px 14px' }}>
+          <div style={{ color: ui.color.textDim, fontSize: 12, padding: '8px 14px' }}>
             No custom servers configured.
           </div>
         )}
@@ -298,18 +299,18 @@ export function McpSection(): JSX.Element {
                     <TypeBadge type={entry.type} />
                     {!entry.enabled && <DisabledBadge />}
                   </div>
-                  <div style={{ color: '#6b7280', fontSize: 11, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ color: ui.color.textMuted, fontSize: 11, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {entry.type === 'stdio' ? entry.command : entry.url}
                   </div>
                   {/* Probe results for stdio */}
                   {entry.type === 'stdio' && probe.status === 'probing' && (
-                    <div style={{ color: '#4a4b4e', fontSize: 11, marginTop: 4 }}>Probing — spawning server…</div>
+                    <div style={{ color: ui.color.textDim, fontSize: 11, marginTop: 4 }}>Probing — spawning server…</div>
                   )}
                   {entry.type === 'stdio' && probe.status === 'done' && (
                     <ToolsCollapse tools={probe.tools} emptyLabel="Server responded but listed no tools" />
                   )}
                   {entry.type === 'stdio' && probe.status === 'error' && (
-                    <div style={{ color: '#f87171', fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>
+                    <div style={{ color: ui.color.danger, fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>
                       {probe.message}
                     </div>
                   )}
@@ -354,14 +355,14 @@ export function McpSection(): JSX.Element {
       <div style={{ marginTop: 16 }}>
         <button
           onClick={() => setShowJson((v) => !v)}
-          style={{ background: 'none', border: 'none', color: '#4a4b4e', fontSize: 11, cursor: 'pointer', padding: '0 14px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
+          style={{ background: 'none', border: 'none', color: ui.color.textDim, fontSize: 11, cursor: 'pointer', padding: '0 14px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
         >
           <span>{showJson ? '▾' : '▸'}</span>
           <span>Generated config preview</span>
         </button>
         {showJson && (
           <div>
-            <div style={{ display: 'flex', borderBottom: '1px solid #2a2b2e', marginBottom: 0 }}>
+            <div style={{ display: 'flex', borderBottom: border.default, marginBottom: 0 }}>
               {(['claude', 'codex'] as PreviewTab[]).map((tab) => (
                 <button
                   key={tab}
@@ -369,8 +370,8 @@ export function McpSection(): JSX.Element {
                   style={{
                     background: 'none',
                     border: 'none',
-                    borderBottom: previewTab === tab ? '2px solid #4ade80' : '2px solid transparent',
-                    color: previewTab === tab ? '#d4d4d4' : '#4a4b4e',
+                    borderBottom: previewTab === tab ? `2px solid ${ui.color.accent}` : '2px solid transparent',
+                    color: previewTab === tab ? '#d4d4d4' : ui.color.textDim,
                     fontSize: 11,
                     cursor: 'pointer',
                     padding: '5px 14px',
@@ -385,7 +386,7 @@ export function McpSection(): JSX.Element {
               margin: 0,
               padding: 12,
               background: '#0e0f11',
-              border: '1px solid #2a2b2e',
+              border: border.default,
               borderTop: 'none',
               borderRadius: '0 0 6px 6px',
               color: '#a0a4a8',
@@ -426,7 +427,7 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
       <div style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d4', marginBottom: 6 }}>
         Import from JSON
       </div>
-      <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
+      <div style={{ color: ui.color.textMuted, fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
         Paste a standard <code style={{ color: '#a0a4a8' }}>mcpServers</code> config object. Servers with
         duplicate names will be skipped.
       </div>
@@ -439,7 +440,7 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
         style={{
           width: '100%',
           background: '#0e0f11',
-          border: `1px solid ${error ? '#5a2020' : '#2a2b2e'}`,
+          border: `1px solid ${error ? '#5a2020' : ui.color.border}`,
           borderRadius: 4,
           color: '#d4d4d4',
           fontSize: 11,
@@ -450,9 +451,9 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
           boxSizing: 'border-box',
         }}
       />
-      {error && <div style={{ color: '#f87171', fontSize: 11, marginTop: 4 }}>{error}</div>}
+      {error && <div style={{ color: ui.color.danger, fontSize: 11, marginTop: 4 }}>{error}</div>}
       {preview.length > 0 && (
-        <div style={{ color: '#4ade80', fontSize: 11, marginTop: 4 }}>
+        <div style={{ color: ui.color.accent, fontSize: 11, marginTop: 4 }}>
           {preview.length} server{preview.length > 1 ? 's' : ''} found: {preview.map((s) => s.name).join(', ')}
         </div>
       )}
@@ -461,10 +462,10 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
           onClick={() => preview.length > 0 && onImport(preview)}
           disabled={preview.length === 0}
           style={{
-            background: preview.length > 0 ? '#1a3a1a' : '#141517',
-            border: `1px solid ${preview.length > 0 ? '#2a5a2a' : '#2a2b2e'}`,
+            background: preview.length > 0 ? ui.color.accentBg : ui.color.input,
+            border: `1px solid ${preview.length > 0 ? '#2a5a2a' : ui.color.border}`,
             borderRadius: 4,
-            color: preview.length > 0 ? '#4ade80' : '#4a4b4e',
+            color: preview.length > 0 ? ui.color.accent : ui.color.textDim,
             fontSize: 12,
             cursor: preview.length > 0 ? 'pointer' : 'default',
             padding: '5px 14px',
@@ -474,7 +475,7 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
         </button>
         <button
           onClick={onCancel}
-          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: '#6b7280', fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: ui.color.textMuted, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           Cancel
         </button>
@@ -566,7 +567,7 @@ function ServerForm({
       </div>
 
       {error && (
-        <div style={{ color: '#f87171', fontSize: 11, background: '#2a1a1a', border: '1px solid #5a2020', borderRadius: 4, padding: '5px 8px', marginBottom: 8 }}>
+        <div style={{ color: ui.color.danger, fontSize: 11, background: '#2a1a1a', border: '1px solid #5a2020', borderRadius: 4, padding: '5px 8px', marginBottom: 8 }}>
           {error}
         </div>
       )}
@@ -588,10 +589,10 @@ function ServerForm({
               key={t}
               onClick={() => update({ type: t })}
               style={{
-                background: data.type === t ? '#1a3a1a' : '#1e1f22',
-                border: `1px solid ${data.type === t ? '#4ade80' : '#3a3b3e'}`,
+                background: data.type === t ? ui.color.accentBg : '#1e1f22',
+                border: `1px solid ${data.type === t ? ui.color.accent : '#3a3b3e'}`,
                 borderRadius: 4,
-                color: data.type === t ? '#4ade80' : '#6b7280',
+                color: data.type === t ? ui.color.accent : ui.color.textMuted,
                 fontSize: 11,
                 cursor: 'pointer',
                 padding: '3px 10px',
@@ -657,7 +658,7 @@ function ServerForm({
               style={{
                 width: '100%',
                 background: '#0e0f11',
-                border: `1px solid ${envError ? '#5a2020' : '#2a2b2e'}`,
+                border: `1px solid ${envError ? '#5a2020' : ui.color.border}`,
                 borderRadius: 4,
                 color: '#d4d4d4',
                 fontSize: 11,
@@ -668,7 +669,7 @@ function ServerForm({
                 boxSizing: 'border-box',
               }}
             />
-            {envError && <div style={{ color: '#f87171', fontSize: 10, marginTop: 2 }}>{envError}</div>}
+            {envError && <div style={{ color: ui.color.danger, fontSize: 10, marginTop: 2 }}>{envError}</div>}
           </FormRow>
           <FieldHint style={{ marginTop: -4, marginBottom: 8 }}>
             Codex injection of stdio env vars uses per-key TOML overrides — complex env may require native config instead.
@@ -677,7 +678,7 @@ function ServerForm({
             <ToolsCollapse tools={formProbe.tools} emptyLabel="Server responded but listed no tools" />
           )}
           {formProbe.status === 'error' && (
-            <div style={{ color: '#f87171', fontSize: 11, marginBottom: 6, lineHeight: 1.4 }}>{formProbe.message}</div>
+            <div style={{ color: ui.color.danger, fontSize: 11, marginBottom: 6, lineHeight: 1.4 }}>{formProbe.message}</div>
           )}
         </>
       )}
@@ -689,13 +690,13 @@ function ServerForm({
       <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
         <button
           onClick={onSubmit}
-          style={{ background: '#1a3a1a', border: '1px solid #2a5a2a', borderRadius: 4, color: '#4ade80', fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+          style={{ background: ui.color.accentBg, border: '1px solid #2a5a2a', borderRadius: 4, color: ui.color.accent, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           {isEdit ? 'Save changes' : 'Add server'}
         </button>
         <button
           onClick={onCancel}
-          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: '#6b7280', fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: ui.color.textMuted, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           Cancel
         </button>
@@ -709,20 +710,20 @@ function ServerForm({
 function ToolsCollapse({ tools, emptyLabel }: { tools: string[]; emptyLabel?: string }): JSX.Element {
   const [open, setOpen] = useState(false)
   if (tools.length === 0) {
-    return <div style={{ color: '#4a4b4e', fontSize: 11, marginTop: 4 }}>{emptyLabel ?? 'No tools'}</div>
+    return <div style={{ color: ui.color.textDim, fontSize: 11, marginTop: 4 }}>{emptyLabel ?? 'No tools'}</div>
   }
   return (
     <div style={{ marginTop: 4 }}>
       <button
         onClick={() => setOpen((v) => !v)}
-        style={{ background: 'none', border: 'none', color: '#4a4b4e', fontSize: 10, cursor: 'pointer', padding: 0 }}
+        style={{ background: 'none', border: 'none', color: ui.color.textDim, fontSize: 10, cursor: 'pointer', padding: 0 }}
       >
         {open ? '▾' : '▸'} {tools.length} tool{tools.length !== 1 ? 's' : ''}
       </button>
       {open && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
           {tools.map((t) => (
-            <span key={t} style={{ fontSize: 10, fontFamily: 'monospace', color: '#6b7280', background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>
+            <span key={t} style={{ fontSize: 10, fontFamily: 'monospace', color: ui.color.textMuted, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>
               {t}
             </span>
           ))}
@@ -735,7 +736,7 @@ function ToolsCollapse({ tools, emptyLabel }: { tools: string[]; emptyLabel?: st
 function ProbeButton({ state, onClick }: { state: ProbeState['status']; onClick: () => void }): JSX.Element {
   const busy = state === 'probing'
   const label = busy ? '…' : state === 'done' ? '✓ Probed' : state === 'error' ? '✗ Error' : 'Probe'
-  const color = state === 'done' ? '#4ade80' : state === 'error' ? '#f87171' : '#6b7280'
+  const color = state === 'done' ? ui.color.accent : state === 'error' ? ui.color.danger : ui.color.textMuted
   const title = state === 'done'
     ? 'Tools fetched — click to re-probe'
     : state === 'error'
@@ -748,7 +749,7 @@ function ProbeButton({ state, onClick }: { state: ProbeState['status']; onClick:
       title={title}
       style={{
         background: 'none',
-        border: '1px solid #2a2b2e',
+        border: border.default,
         borderRadius: 4,
         color,
         fontSize: 11,
@@ -766,7 +767,7 @@ function ProbeButton({ state, onClick }: { state: ProbeState['status']; onClick:
 
 function TestButton({ state, onClick }: { state: TestState; onClick: () => void }): JSX.Element {
   const label = state === 'testing' ? '…' : state === 'ok' ? '✓' : state === 'unreachable' ? '✗' : state === 'error' ? '!' : 'Test'
-  const color = state === 'ok' ? '#4ade80' : state === 'unreachable' ? '#f87171' : state === 'error' ? '#facc15' : '#6b7280'
+  const color = state === 'ok' ? ui.color.accent : state === 'unreachable' ? ui.color.danger : state === 'error' ? '#facc15' : ui.color.textMuted
   return (
     <button
       onClick={onClick}
@@ -774,7 +775,7 @@ function TestButton({ state, onClick }: { state: TestState; onClick: () => void 
       title={state === 'ok' ? 'Reachable' : state === 'unreachable' ? 'Unreachable' : state === 'error' ? 'Server responded with error (but is running)' : 'Test connection'}
       style={{
         background: 'none',
-        border: '1px solid #2a2b2e',
+        border: border.default,
         borderRadius: 4,
         color,
         fontSize: 11,
@@ -792,7 +793,7 @@ function TestButton({ state, onClick }: { state: TestState; onClick: () => void 
 
 function StatusDot({ running }: { running: boolean }): JSX.Element {
   return (
-    <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: running ? '#4ade80' : '#4a4b4e', flexShrink: 0 }} />
+    <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: running ? ui.color.accent : ui.color.textDim, flexShrink: 0 }} />
   )
 }
 
@@ -812,7 +813,7 @@ function TypeBadge({ type }: { type: McpServerType | 'http' }): JSX.Element {
 
 function DisabledBadge(): JSX.Element {
   return (
-    <span style={{ color: '#4a4b4e', fontSize: 10, background: '#1e1f22', border: '1px solid #2a2b2e', borderRadius: 3, padding: '1px 5px' }}>
+    <span style={{ color: ui.color.textDim, fontSize: 10, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>
       disabled
     </span>
   )
@@ -823,11 +824,11 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
       <div
         onClick={() => onChange(!checked)}
-        style={{ width: 30, height: 16, borderRadius: 8, background: checked ? '#4ade80' : '#2a2b2e', position: 'relative', cursor: 'pointer', transition: 'background 0.15s', flexShrink: 0 }}
+        style={{ width: 30, height: 16, borderRadius: 8, background: checked ? ui.color.accent : ui.color.border, position: 'relative', cursor: 'pointer', transition: 'background 0.15s', flexShrink: 0 }}
       >
-        <div style={{ position: 'absolute', top: 2, left: checked ? 16 : 2, width: 12, height: 12, borderRadius: '50%', background: checked ? '#0a1f0a' : '#4a4b4e', transition: 'left 0.15s' }} />
+        <div style={{ position: 'absolute', top: 2, left: checked ? 16 : 2, width: 12, height: 12, borderRadius: '50%', background: checked ? '#0a1f0a' : ui.color.textDim, transition: 'left 0.15s' }} />
       </div>
-      {label && <span style={{ color: checked ? '#d4d4d4' : '#6b7280', fontSize: 12 }}>{label}</span>}
+      {label && <span style={{ color: checked ? '#d4d4d4' : ui.color.textMuted, fontSize: 12 }}>{label}</span>}
     </label>
   )
 }
@@ -843,9 +844,9 @@ function IconButton({ children, onClick, title, danger }: { children: React.Reac
       style={{
         background: 'none',
         border: '1px solid',
-        borderColor: hovered ? (danger ? '#5a2020' : '#4a4b4e') : '#2a2b2e',
+        borderColor: hovered ? (danger ? '#5a2020' : ui.color.textDim) : ui.color.border,
         borderRadius: 4,
-        color: hovered ? (danger ? '#f87171' : '#d4d4d4') : '#4a4b4e',
+        color: hovered ? (danger ? ui.color.danger : '#d4d4d4') : ui.color.textDim,
         fontSize: 13,
         cursor: 'pointer',
         padding: '1px 6px',
@@ -866,7 +867,7 @@ function ActionButton({ children, onClick, accent }: { children: React.ReactNode
         background: 'none',
         border: `1px solid ${accent ? '#2a5a2a' : '#3a3b3e'}`,
         borderRadius: 4,
-        color: accent ? '#4ade80' : '#6b7280',
+        color: accent ? ui.color.accent : ui.color.textMuted,
         fontSize: 11,
         cursor: 'pointer',
         padding: '2px 8px',
@@ -879,7 +880,7 @@ function ActionButton({ children, onClick, accent }: { children: React.ReactNode
 
 function ServerCard({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ padding: '10px 12px', marginBottom: 4, border: '1px solid #2a2b2e', borderRadius: 6, background: '#141517' }}>
+    <div style={{ padding: '10px 12px', marginBottom: 4, border: border.default, borderRadius: 6, background: ui.color.input }}>
       {children}
     </div>
   )
@@ -887,7 +888,7 @@ function ServerCard({ children }: { children: React.ReactNode }): JSX.Element {
 
 function SubLabel({ children, inline }: { children: React.ReactNode; inline?: boolean }): JSX.Element {
   const el = (
-    <div style={{ fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+    <div style={{ fontSize: 10, fontWeight: 600, color: ui.color.textDim, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
       {children}
     </div>
   )
@@ -898,7 +899,7 @@ function SubLabel({ children, inline }: { children: React.ReactNode; inline?: bo
 function FormRow({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div style={{ marginBottom: 8 }}>
-      <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 3 }}>{label}</div>
+      <div style={{ color: ui.color.textMuted, fontSize: 11, marginBottom: 3 }}>{label}</div>
       {children}
     </div>
   )
@@ -913,7 +914,7 @@ function FormInput({ value, placeholder, onChange, monospace }: { value: string;
       style={{
         width: '100%',
         background: '#0e0f11',
-        border: '1px solid #2a2b2e',
+        border: border.default,
         borderRadius: 4,
         color: '#d4d4d4',
         fontSize: 12,
@@ -927,7 +928,7 @@ function FormInput({ value, placeholder, onChange, monospace }: { value: string;
 }
 
 function FieldHint({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }): JSX.Element {
-  return <div style={{ color: '#4a4b4e', fontSize: 10, marginTop: 2, lineHeight: 1.4, ...style }}>{children}</div>
+  return <div style={{ color: ui.color.textDim, fontSize: 10, marginTop: 2, lineHeight: 1.4, ...style }}>{children}</div>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
