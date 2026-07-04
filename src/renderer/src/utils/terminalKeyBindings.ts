@@ -220,6 +220,18 @@ export function buildTerminalKeyMap(bindings: TerminalKeyBinding[]): Map<string,
   return map
 }
 
+let lastBindings: TerminalKeyBinding[] | null = null
+let lastMap: Map<string, ResolvedEntry> | null = null
+
+/** One-slot memo keyed by the immutable settings array reference. */
+export function getTerminalKeyMap(bindings: TerminalKeyBinding[]): Map<string, ResolvedEntry> {
+  if (bindings !== lastBindings || lastMap === null) {
+    lastBindings = bindings
+    lastMap = buildTerminalKeyMap(bindings)
+  }
+  return lastMap
+}
+
 function isRuntimeActive(b: TerminalKeyBinding): boolean {
   if (APP_HANDLED_DEFAULT_IDS.has(b.id)) return true
   if (b.action.type !== 'pty-sequence') return true

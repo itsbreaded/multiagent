@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen } from 'electron'
 import './e2eIsolation'
 import { join } from 'path'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { initUpdater } from './updater'
@@ -9,16 +9,8 @@ import { BrowserViewManager } from './browser/BrowserViewManager'
 import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
 import { windowManager } from './window/WindowManager'
-
-interface WindowState {
-  x: number
-  y: number
-  width: number
-  height: number
-  isMaximized: boolean
-}
-
-const DEFAULTS: WindowState = { x: 0, y: 0, width: 1280, height: 800, isMaximized: false }
+import { writeJsonAtomic } from './atomicJson'
+import { coerceWindowState, DEFAULT_WINDOW_STATE, type WindowState } from './windowState'
 
 function windowStatePath(): string {
   return join(app.getPath('userData'), 'window-state.json')
@@ -27,16 +19,16 @@ function windowStatePath(): string {
 function loadWindowState(): WindowState {
   try {
     const raw = readFileSync(windowStatePath(), 'utf-8')
-    const saved = JSON.parse(raw) as WindowState
+    const saved = coerceWindowState(JSON.parse(raw))
     // Verify the saved position is still on a connected display
     const visible = screen.getAllDisplays().some((d) => {
       const b = d.bounds
       return saved.x < b.x + b.width && saved.x + saved.width > b.x &&
              saved.y < b.y + b.height && saved.y + saved.height > b.y
     })
-    return visible ? saved : DEFAULTS
+    return visible ? saved : DEFAULT_WINDOW_STATE
   } catch {
-    return DEFAULTS
+    return DEFAULT_WINDOW_STATE
   }
 }
 
@@ -52,7 +44,7 @@ function saveWindowState(win: BrowserWindow): void {
       height: bounds?.height ?? current.height,
       isMaximized,
     }
-    writeFileSync(windowStatePath(), JSON.stringify(next))
+    writeJsonAtomic(windowStatePath(), next)
   } catch { /* ignore write errors */ }
 }
 
@@ -61,6 +53,7 @@ let cleanupFn: (() => Promise<void>) | null = null
 let browserViewManager: BrowserViewManager | null = null
 // Set by registerIpcHandlers; called during primary-window shutdown to flush detached state.
 let performShutdownSaveFn: (() => Promise<void>) | null = null
+let registerWindowHandlersFn: ((win: BrowserWindow) => void) | null = null
 
 async function createWindow(): Promise<void> {
   const state = loadWindowState()
@@ -128,9 +121,14 @@ async function createWindow(): Promise<void> {
   })
 
   // Wire IPC handlers (sessions, PTY, shell, layout)
-  const { cleanup, registerWindowHandlers, performShutdownSave } = await registerIpcHandlers(mainWindow)
-  cleanupFn = cleanup ?? null
-  performShutdownSaveFn = performShutdownSave
+  if (!registerWindowHandlersFn) {
+    const registered = await registerIpcHandlers(mainWindow)
+    cleanupFn = registered.cleanup
+    performShutdownSaveFn = registered.performShutdownSave
+    registerWindowHandlersFn = registered.registerWindowHandlers
+  } else {
+    registerWindowHandlersFn(mainWindow)
+  }
 
   // Configure WindowManager so it can create detached windows with the correct preload/renderer.
   const rendererUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
@@ -140,19 +138,20 @@ async function createWindow(): Promise<void> {
     join(__dirname, '../preload/index.js'),
     rendererUrl,
     rendererUrl ? null : join(__dirname, '../renderer/index.html'),
-    registerWindowHandlers
+    registerWindowHandlersFn
   )
   windowManager.startMoveTracking(mainWindow)
 
   // Set up browser window (MCP-controlled separate window)
-  browserViewManager = new BrowserViewManager()
-  browserViewManager.initialize()
-
-  mcpManager.start(browserViewManager).then(() => {
-    console.log(`[MultiAgent] Browser MCP server listening on port ${mcpManager.getStatus().port}`)
-  }).catch((err) => {
-    console.error('[MultiAgent] Browser MCP server failed to start:', err)
-  })
+  if (!browserViewManager) {
+    browserViewManager = new BrowserViewManager()
+    browserViewManager.initialize()
+    mcpManager.start(browserViewManager).then(() => {
+      console.log(`[MultiAgent] Browser MCP server listening on port ${mcpManager.getStatus().port}`)
+    }).catch((err) => {
+      console.error('[MultiAgent] Browser MCP server failed to start:', err)
+    })
+  }
 
   // Load renderer
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

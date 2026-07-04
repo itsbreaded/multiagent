@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { overlayStyles, ui } from '../../styles/theme'
+import { SectionLabel } from '../common/SectionLabel'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
@@ -123,14 +125,8 @@ export function CommandPalette(): JSX.Element {
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 60,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        paddingTop: '15vh',
+        ...overlayStyles.backdropLight,
+        zIndex: ui.z.overlay,
       }}
       onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
       onClick={() => { if (mouseDownOnOverlay.current) closeOverlays() }}
@@ -141,11 +137,7 @@ export function CommandPalette(): JSX.Element {
         style={{
           width: '100%',
           maxWidth: 600,
-          backgroundColor: '#1a1b1e',
-          border: '1px solid #2a2b2e',
-          borderRadius: 10,
-          overflow: 'hidden',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+          ...overlayStyles.panel,
         }}
       >
         <div
@@ -240,23 +232,6 @@ export function CommandPalette(): JSX.Element {
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element {
-  return (
-    <div
-      style={{
-        padding: '6px 14px 3px',
-        fontSize: 10,
-        fontWeight: 600,
-        color: '#4a4b4e',
-        textTransform: 'uppercase',
-        letterSpacing: '0.08em',
-      }}
-    >
-      {children}
     </div>
   )
 }

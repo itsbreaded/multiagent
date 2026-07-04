@@ -345,6 +345,7 @@ export interface IPCChannels {
   // --- Git ---
   'git:branch': (cwd: string) => string | null
   'git:unwatch-branch': (cwd: string) => void
+  'git:branch-updated': (cwdKeys: string[], branch: string | null) => void
 
   // --- Dialogs ---
   'dialog:pick-directory': (title?: string, defaultPath?: string) => string | null
@@ -397,6 +398,8 @@ export interface IPCChannels {
   'window:snap-zones': (zones: { targetWindowId: number; side: string; x: number; y: number; width: number; height: number }[]) => void
   'window:maximized-changed': (isMaximized: boolean) => void
   'window:focus-state-request': () => void
+  'window:focus-for-tab': (tabId: string) => boolean
+  'window:became-active': (windowId: number) => void
 
   // --- Multi-window: tab transfer ---
   // Renderer asks main to create a detached window carrying a tab
@@ -410,6 +413,9 @@ export interface IPCChannels {
   // Main confirms to the source window that an absorb committed (PTYs transferred); only now
   // may the source finalize removal/detach of the released tab. Mirrors pane:remove-remote.
   'tab:absorb-committed': (tabId: string, ownerWindowId?: number) => void
+  'tab:return': (tabId: string) => void
+  'tab:detached-ready': (tabId: string) => void
+  'tab:release-applied': (releaseId: string) => void
 
   // --- Multi-window: live sync & pane transfer ---
   // Detached window pushes its full tab list to main; main forwards to all other windows
@@ -456,12 +462,21 @@ export interface IPCChannels {
   // Main tells a window's renderer to activate a tab/pane (cross-window pane click)
   'pane:focus-remote': (tabId: string, paneId: string, requestId?: string) => void
   'focus:target-changed': (target: FocusTarget) => void
+  'pane:focus-changed': (windowId: number, tabId: string, paneId: string) => void
+  'focus:target-report': (tabId: string, paneId: string) => void
+  'pane:received-applied': (transferId: string) => void
+  'pane:focus-remote-applied': (requestId: string) => void
+  'tab:spawn-in-project-applied': (requestId: string, ok: boolean) => void
+  'renderer:insert-at-split-applied': (transferId: string) => void
+  'renderer:replace-pane-applied': (transferId: string) => void
 
 }
 
 // Helper type for extracting invoke vs event channels
 // (used in preload.ts to type window.ipc correctly)
-export type InvokeChannels =
+type ChannelSubset<K extends keyof IPCChannels> = K
+
+export type InvokeChannels = ChannelSubset<
   | 'sessions:search'
   | 'sessions:search-deep'
   | 'sessions:delete'
@@ -515,9 +530,9 @@ export type InvokeChannels =
   | 'window:focus-pane'
   | 'tab:spawn-in-project'
   | 'pane:split-transfer'
-  | 'pane:swap-transfer'
+  | 'pane:swap-transfer'>
 
-export type EventChannels =
+export type EventChannels = ChannelSubset<
   | 'sessions:updated'
   | 'git:branch-updated'
   | 'layout:cwd-repaired'
@@ -551,9 +566,9 @@ export type EventChannels =
   // Shutdown layout collection: main requests state snapshots for a final authoritative save
   | 'layout:request-state'
   | 'layout:collect-detached-state'
-  | 'updater:status'
+  | 'updater:status'>
 
-export type SendChannels =
+export type SendChannels = ChannelSubset<
   | 'pty:write'
   | 'pty:resize'
   | 'tab:state-sync'
@@ -571,10 +586,10 @@ export type SendChannels =
   | 'layout:detached-state-response'
   | 'updater:install'
   | 'updater:set-enabled'
-  | 'updater:download'
+  | 'updater:download'>
 
 export interface IpcBridge {
-  invoke(channel: InvokeChannels, ...args: unknown[]): Promise<unknown>
+  invoke<C extends InvokeChannels>(channel: C, ...args: Parameters<IPCChannels[C]>): Promise<ReturnType<IPCChannels[C]>>
   on(channel: EventChannels, handler: (...args: unknown[]) => void): () => void
-  send(channel: SendChannels, ...args: unknown[]): void
+  send<C extends SendChannels>(channel: C, ...args: Parameters<IPCChannels[C]>): void
 }

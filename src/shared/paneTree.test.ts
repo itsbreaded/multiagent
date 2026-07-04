@@ -11,7 +11,10 @@ import {
   updateLeaf,
   updateCwdsInTree,
   collectLeafIds,
+  collectLeaves,
+  markLeafExitedByPtyId,
   findLeafBySessionId,
+  findLeafByPtyId,
 } from './paneTree'
 import { replaceCwdPrefix } from './cwdRepair'
 
@@ -86,7 +89,13 @@ describe('removeLeaf', () => {
   })
   it('leaves an unrelated leaf untouched', () => {
     const tree: PaneNode = makeSplit('vertical', L('L1'), L('L2'))
-    expect(removeLeaf(tree, 'missing'))?.toEqual(tree)
+    expect(removeLeaf(tree, 'missing')).toBe(tree)
+  })
+  it('ignores split ids', () => {
+    const inner = makeSplit('horizontal', L('L2'), L('L3'))
+    const tree: PaneNode = makeSplit('vertical', L('L1'), inner)
+    expect(removeLeaf(tree, inner.id)).toBe(tree)
+    expect(collectLeafIds(tree)).toEqual(['L1', 'L2', 'L3'])
   })
 })
 
@@ -122,6 +131,47 @@ describe('updateRatioInTree / updateLeaf', () => {
     const tree: PaneNode = L('L1')
     const next = updateLeaf(tree, 'L1', { customName: 'Build' })
     expect(findLeaf(next, 'L1')?.customName).toBe('Build')
+  })
+
+  it('preserves identity for missing and identical patches', () => {
+    const tree = makeSplit('vertical', L('L1'), L('L2'))
+    expect(updateLeaf(tree, 'missing', { customName: 'x' })).toBe(tree)
+    expect(updateLeaf(tree, 'L1', { cwd: 'C:\\proj', ptyId: undefined })).toBe(tree)
+  })
+
+  it('rebuilds only the changed path', () => {
+    const inner = makeSplit('horizontal', L('L2'), L('L3'))
+    const tree = makeSplit('vertical', L('L1'), inner)
+    const next = updateLeaf(tree, 'L3', { customName: 'Build' })
+    expect(next).not.toBe(tree)
+    expect(next.type).toBe('split')
+    if (next.type === 'split') {
+      expect(next.first).toBe(tree.first)
+      expect(next.second).not.toBe(tree.second)
+      if (next.second.type === 'split') expect(next.second.first).toBe(inner.first)
+    }
+  })
+})
+
+describe('markLeafExitedByPtyId', () => {
+  const disconnected = { exitCode: 1, signal: 9, at: 123 }
+
+  it('marks an agent and preserves its sibling', () => {
+    const agent = L('A', { paneType: 'agent', agentKind: 'claude', ptyId: 'pty-1', sessionId: 's-1' })
+    const sibling = L('B')
+    const tree = makeSplit('vertical', agent, sibling)
+    const result = markLeafExitedByPtyId(tree, 'pty-1', disconnected)
+    expect(result.exitedLeaf).toBe(agent)
+    expect(result.node).not.toBe(tree)
+    expect(result.node.type).toBe('split')
+    if (result.node.type === 'split') expect(result.node.second).toBe(sibling)
+    expect(findLeaf(result.node, 'A')).toMatchObject({ ptyId: undefined, agentDisconnected: disconnected })
+  })
+
+  it('is a no-op for unknown PTYs and shell panes', () => {
+    const shell = L('S', { ptyId: 'pty-shell' })
+    expect(markLeafExitedByPtyId(shell, 'missing', disconnected)).toEqual({ node: shell, exitedLeaf: null })
+    expect(markLeafExitedByPtyId(shell, 'pty-shell', disconnected)).toEqual({ node: shell, exitedLeaf: null })
   })
 })
 
@@ -159,5 +209,38 @@ describe('updateCwdsInTree', () => {
     const tree: PaneNode = L('L1', { cwd: 'C:\\unrelated' })
     const { changed } = updateCwdsInTree(tree, mapping, replaceCwdPrefix)
     expect(changed).toBe(false)
+  })
+})
+
+describe('collectLeaves', () => {
+  it('returns the single leaf for a leaf root', () => {
+    const leaf = L('L1')
+    expect(collectLeaves(leaf)).toEqual([leaf])
+  })
+
+  it('returns all leaves in tree order for a nested split', () => {
+    const a = L('A')
+    const b = L('B')
+    const c = L('C')
+    const tree: PaneNode = makeSplit('vertical', makeSplit('horizontal', a, b), c)
+    expect(collectLeaves(tree)).toEqual([a, b, c])
+  })
+
+  it('collectLeafIds matches collectLeaves ids', () => {
+    const a = L('A')
+    const b = L('B')
+    const tree: PaneNode = makeSplit('vertical', a, b)
+    expect(collectLeafIds(tree)).toEqual(collectLeaves(tree).map((l) => l.id))
+  })
+})
+
+describe('findLeafByPtyId', () => {
+  it('finds nested PTYs in tree order and ignores absent ids', () => {
+    const first = L('A', { ptyId: 'shared' })
+    const second = L('B', { ptyId: 'shared' })
+    const tree = makeSplit('vertical', first, makeSplit('horizontal', L('C'), second))
+    expect(findLeafByPtyId(tree, 'shared')).toBe(first)
+    expect(findLeafByPtyId(tree, 'missing')).toBeNull()
+    expect(findLeafByPtyId(L('D'), 'missing')).toBeNull()
   })
 })

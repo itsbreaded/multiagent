@@ -25,7 +25,7 @@ interface PaneHeaderProps {
   isFocused: boolean
 }
 
-export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
+export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const splitPane = usePanesStore((s) => s.splitPane)
   const closePane = usePanesStore((s) => s.closePane)
   const zoomPane = usePanesStore((s) => s.zoomPane)
@@ -38,7 +38,12 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
   const clearSwapDrag = usePanesStore((s) => s.clearSwapDrag)
   const swapPanes = usePanesStore((s) => s.swapPanes)
   const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
-  const sessions = useSessionsStore((s) => s.sessions)
+  const label = useSessionsStore((s) => paneLabelText(pane, s.sessions))
+  const sessionGitBranch = useSessionsStore((s) =>
+    pane.agentKind && pane.sessionId
+      ? s.sessions.find((session) => session.agentKind === pane.agentKind && session.sessionId === pane.sessionId)?.gitBranch
+      : undefined
+  )
   const showGitBranchBadges = useSettingsStore((s) => s.showGitBranchBadges)
 
   const activeTab = usePanesStore((s) => s.activeTab())
@@ -140,15 +145,11 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
     setRenaming(false)
   }
 
-  const label = paneLabelText(pane, sessions)
   const isZoomed = zoomedPaneId === pane.id
   const isAgent = pane.paneType === 'agent'
-  const session = pane.agentKind && pane.sessionId
-    ? sessions.find((s) => s.agentKind === pane.agentKind && s.sessionId === pane.sessionId)
-    : null
   const cwdBranch = useGitBranch(pane.cwd, showGitBranchBadges)
   const branch = showGitBranchBadges
-    ? displayGitBranch(cwdBranch === undefined ? session?.gitBranch : cwdBranch)
+    ? displayGitBranch(cwdBranch === undefined ? sessionGitBranch : cwdBranch)
     : null
 
   return (
@@ -351,7 +352,7 @@ export function PaneHeader({ pane, isFocused }: PaneHeaderProps): JSX.Element {
       )}
     </div>
   )
-}
+})
 
 function SessionIdBadge({ sessionId }: { sessionId: string }): JSX.Element {
   const [copied, setCopied] = useState(false)

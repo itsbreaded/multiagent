@@ -50,6 +50,18 @@ export function buildHotkeys(overrides: Partial<Record<HotkeyId, HotkeyOverride>
   return result as Record<HotkeyId, Hotkey>
 }
 
+let lastOverrides: Partial<Record<HotkeyId, HotkeyOverride>> | null = null
+let lastHotkeys: Record<HotkeyId, Hotkey> | null = null
+
+/** One-slot memo keyed by the immutable settings object reference. */
+export function getHotkeys(overrides: Partial<Record<HotkeyId, HotkeyOverride>>): Record<HotkeyId, Hotkey> {
+  if (overrides !== lastOverrides || lastHotkeys === null) {
+    lastOverrides = overrides
+    lastHotkeys = buildHotkeys(overrides)
+  }
+  return lastHotkeys
+}
+
 export function matches(e: KeyboardEvent, hotkey: Hotkey): boolean {
   return (
     e.code === hotkey.code &&

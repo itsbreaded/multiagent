@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { usePanesStore } from './panes'
 import {
   makeLeaf,
@@ -277,5 +277,196 @@ describe('usePanesStore — cwd-repair mapping (spec 009/015)', () => {
     usePanesStore.getState().applyCwdRepair({ oldCwd: 'C:\\old', newCwd: 'C:\\new' })
 
     expect(findLeaf(tabRoot(tabId)!, leaf.id)!.cwd).toBe('C:\\other')
+  })
+})
+
+describe('usePanesStore — tab close tears down PTYs', () => {
+  const invoke = vi.fn().mockResolvedValue(undefined)
+
+  beforeEach(() => {
+    invoke.mockClear()
+    invoke.mockResolvedValue(undefined)
+    ;(window as unknown as { ipc: unknown }).ipc = {
+      invoke,
+      on: vi.fn(),
+      send: vi.fn(),
+    }
+  })
+  afterEach(() => {
+    delete (window as unknown as { ipc?: unknown }).ipc
+  })
+
+  function plantLeavesTab(leaves: PaneNode[]): string {
+    if (leaves.length === 0) throw new Error('plantLeavesTab needs >=1 leaf')
+    let tree: PaneNode = leaves[0]
+    for (let i = 1; i < leaves.length; i++) tree = makeSplit('vertical', tree, leaves[i])
+    return plantTab(tree, leaves[0].type === 'leaf' ? leaves[0].id : '')
+  }
+
+  function shellLeaf(ptyId?: string): PaneNode {
+    const l = makeLeaf('C:\shell')
+    if (ptyId) l.ptyId = ptyId
+    return l
+  }
+  function agentLeaf(ptyId: string, sessionId: string): PaneNode {
+    const l = makeLeaf('C:\agent', 'agent', 'claude')
+    l.ptyId = ptyId
+    l.sessionId = sessionId
+    return l
+  }
+
+  it('closeTab kills every leaf PTY in the closed tab', async () => {
+    const keep = plantLeavesTab([shellLeaf('keep-1')])
+    const close = plantLeavesTab([shellLeaf('c-1'), shellLeaf('c-2')])
+
+    usePanesStore.getState().closeTab(close)
+
+    // Microtasks for the synchronous invoke call sites.
+    await Promise.resolve()
+    const killed = invoke.mock.calls.filter((c) => c[0] === 'pty:kill').map((c) => c[1])
+    expect(killed.sort()).toEqual(['c-1', 'c-2'])
+    // Kept tab's PTY is not killed.
+    expect(killed).not.toContain('keep-1')
+    // The closed tab is gone.
+    expect(usePanesStore.getState().tabs.find((t) => t.id === close)).toBeUndefined()
+    expect(usePanesStore.getState().tabs.find((t) => t.id === keep)).toBeDefined()
+    void keep
+  })
+
+  it('closeTab on a tab with an agent session refreshes sessions once after kills settle', async () => {
+    const close = plantLeavesTab([agentLeaf('c-1', 'sess-1')])
+
+    usePanesStore.getState().closeTab(close)
+
+    // Refresh should only fire after kill promises settle.
+    expect(invoke.mock.calls.filter((c) => c[0] === 'sessions:refresh')).toHaveLength(0)
+    await vi.waitFor(() => {
+      expect(invoke.mock.calls.filter((c) => c[0] === 'sessions:refresh')).toHaveLength(1)
+    })
+    // Exactly one refresh.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(invoke.mock.calls.filter((c) => c[0] === 'sessions:refresh')).toHaveLength(1)
+  })
+
+  it('closeTab on a tab with only shell leaves kills PTYs but does not refresh sessions', async () => {
+    const close = plantLeavesTab([shellLeaf('c-1'), shellLeaf('c-2')])
+
+    usePanesStore.getState().closeTab(close)
+
+    await new Promise((r) => setTimeout(r, 10))
+    expect(invoke.mock.calls.some((c) => c[0] === 'pty:kill')).toBe(true)
+    expect(invoke.mock.calls.some((c) => c[0] === 'sessions:refresh')).toBe(false)
+  })
+
+  it('closeTab on agent-without-sessionId does not refresh', async () => {
+    const l = makeLeaf('C:\agent', 'agent', 'claude')
+    l.ptyId = 'a-1' // no sessionId
+    const close = plantLeavesTab([l])
+
+    usePanesStore.getState().closeTab(close)
+
+    await new Promise((r) => setTimeout(r, 10))
+    expect(invoke.mock.calls.some((c) => c[0] === 'sessions:refresh')).toBe(false)
+  })
+
+  it('closeOtherTabs kills every PTY outside the kept tab and none inside it', async () => {
+    const keep = plantLeavesTab([shellLeaf('keep-1')])
+    const other1 = plantLeavesTab([shellLeaf('o1-1')])
+    const other2 = plantLeavesTab([agentLeaf('o2-1', 'sess-2')])
+    void other1; void other2
+
+    usePanesStore.getState().closeOtherTabs(keep)
+
+    await new Promise((r) => setTimeout(r, 10))
+    const killed = invoke.mock.calls.filter((c) => c[0] === 'pty:kill').map((c) => c[1])
+    expect(killed.sort()).toEqual(['o1-1', 'o2-1'])
+    expect(killed).not.toContain('keep-1')
+    // One refresh at most (other2 had a session).
+    expect(invoke.mock.calls.filter((c) => c[0] === 'sessions:refresh').length).toBeLessThanOrEqual(1)
+  })
+
+  it('closeTabsToRight kills only PTYs in tabs after the given index', async () => {
+    const t1 = plantLeavesTab([shellLeaf('t1-1')])
+    const t2 = plantLeavesTab([shellLeaf('t2-1')])
+    const t3 = plantLeavesTab([shellLeaf('t3-1')])
+    void t1; void t3
+
+    usePanesStore.getState().closeTabsToRight(t2)
+
+    await new Promise((r) => setTimeout(r, 10))
+    const killed = invoke.mock.calls.filter((c) => c[0] === 'pty:kill').map((c) => c[1])
+    expect(killed).toEqual(['t3-1'])
+    expect(killed).not.toContain('t2-1')
+  })
+
+  it('with window.ipc absent, all three actions still update state without throwing', () => {
+    delete (window as unknown as { ipc?: unknown }).ipc
+    const t1 = plantLeavesTab([shellLeaf('a-1')])
+    const t2 = plantLeavesTab([shellLeaf('b-1')])
+    const t3 = plantLeavesTab([shellLeaf('c-1')])
+
+    expect(() => usePanesStore.getState().closeTab(t1)).not.toThrow()
+    expect(() => usePanesStore.getState().closeOtherTabs(t2)).not.toThrow()
+    expect(() => usePanesStore.getState().closeTabsToRight(t2)).not.toThrow()
+    // t3 was the only one to the right of t2; both should still be present otherwise.
+    const ids = usePanesStore.getState().tabs.map((t) => t.id)
+    expect(ids).toContain(t2)
+    expect(ids).not.toContain(t1)
+    expect(ids).not.toContain(t3)
+  })
+
+  it('closePaneInTab on agent-with-sessionId-but-no-ptyId still refreshes', async () => {
+    const l = makeLeaf('C:\agent', 'agent', 'claude')
+    l.sessionId = 'sess-x' // no ptyId (already exited)
+    const tabId = plantLeavesTab([l])
+
+    usePanesStore.getState().closePaneInTab(tabId, l.id)
+
+    await vi.waitFor(() => {
+      expect(invoke.mock.calls.filter((c) => c[0] === 'sessions:refresh')).toHaveLength(1)
+    })
+  })
+})
+
+describe('usePanesStore — identity-preserving pane patches', () => {
+  it('changes only the targeted tab and preserves no-op array identity', () => {
+    const paneA = makeLeaf('C:\\a')
+    const paneB = makeLeaf('C:\\b')
+    const tabAId = plantTab(paneA)
+    const tabBId = plantTab(paneB)
+    const before = usePanesStore.getState().tabs
+    const tabABefore = before.find((tab) => tab.id === tabAId)!
+    const tabBBefore = before.find((tab) => tab.id === tabBId)!
+
+    usePanesStore.getState().setPtyId(paneA.id, 'pty-1')
+    const after = usePanesStore.getState().tabs
+    expect(after.find((tab) => tab.id === tabAId)).not.toBe(tabABefore)
+    expect(after.find((tab) => tab.id === tabBId)).toBe(tabBBefore)
+
+    usePanesStore.getState().setPtyId(paneA.id, 'pty-1')
+    expect(usePanesStore.getState().tabs).toBe(after)
+    usePanesStore.getState().setPtyId('missing', 'pty-x')
+    expect(usePanesStore.getState().tabs).toBe(after)
+  })
+
+  it('markPtyExited ignores shells and unknown PTYs, and changes only an agent tab', () => {
+    const shell = makeLeaf('C:\\shell')
+    shell.ptyId = 'shell-pty'
+    const agent = makeLeaf('C:\\agent', 'agent', 'claude')
+    agent.ptyId = 'agent-pty'
+    agent.sessionId = 'session-1'
+    const shellTabId = plantTab(shell)
+    const agentTabId = plantTab(agent)
+    const before = usePanesStore.getState().tabs
+
+    usePanesStore.getState().markPtyExited('missing', 1)
+    expect(usePanesStore.getState().tabs).toBe(before)
+    usePanesStore.getState().markPtyExited('shell-pty', 1)
+    expect(usePanesStore.getState().tabs).toBe(before)
+
+    usePanesStore.getState().markPtyExited('agent-pty', 1)
+    const after = usePanesStore.getState().tabs
+    expect(after.find((tab) => tab.id === shellTabId)).toBe(before.find((tab) => tab.id === shellTabId))
+    expect(after.find((tab) => tab.id === agentTabId)).not.toBe(before.find((tab) => tab.id === agentTabId))
   })
 })

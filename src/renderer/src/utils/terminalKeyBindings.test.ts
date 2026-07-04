@@ -12,10 +12,23 @@ import {
   isValidTrigger,
   findClaimant,
   buildTerminalKeyMap,
+  getTerminalKeyMap,
   mergeBindings,
   type TerminalKeyBinding,
   type Trigger,
 } from './terminalKeyBindings'
+
+describe('getTerminalKeyMap', () => {
+  it('reuses the map for one bindings reference and rebuilds for a replacement', () => {
+    const bindings = defaultTerminalKeyBindings()
+    expect(getTerminalKeyMap(bindings)).toBe(getTerminalKeyMap(bindings))
+    const replacement = bindings.map((binding, index) => index === 0
+      ? { ...binding, trigger: { ...binding.trigger, code: 'KeyZ' } }
+      : binding)
+    expect(getTerminalKeyMap(replacement)).not.toBe(getTerminalKeyMap(bindings))
+    expect(getTerminalKeyMap(replacement).get(bindingKey(replacement[0].trigger))?.kind).toBe('action')
+  })
+})
 
 describe('defaultTerminalKeyBindings', () => {
   it('returns a row for every well-known id in canonical order', () => {

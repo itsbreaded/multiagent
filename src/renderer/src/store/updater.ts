@@ -19,8 +19,12 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
 }))
 
 // Wire IPC at module level — fires once, no component re-registration
-window.ipc.on('updater:status', (s: unknown) => {
-  const status = s as UpdaterStatus
-  const store = useUpdaterStore.getState()
-  store.setStatus(status)
-})
+const UPDATER_STATES = new Set(['available', 'preparing', 'downloading', 'ready', 'up-to-date', 'error'])
+if (typeof window !== 'undefined' && window.ipc) {
+  window.ipc.on('updater:status', (s: unknown) => {
+    if (!s || typeof s !== 'object') return
+    const state = (s as { state?: unknown }).state
+    if (typeof state !== 'string' || !UPDATER_STATES.has(state)) return
+    useUpdaterStore.getState().setStatus(s as UpdaterStatus)
+  })
+}

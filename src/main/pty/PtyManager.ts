@@ -16,7 +16,6 @@ import { join } from 'path'
 import { defaultShell } from './shell'
 import { shellIntegrationCommand } from './terminalEnvironment'
 import { buildEnv } from './buildEnv'
-import type { AgentKind } from '../../shared/types'
 
 export interface PtyReadyEvent {
   id: string
@@ -66,6 +65,9 @@ export class PtyManager extends EventEmitter {
   private readyEvents = new Map<string, PtyReadyEvent>()
   private destroyPromise: Promise<void> | null = null
   private destroying = false
+  // Latched the first time the worker exits unexpectedly while we are not
+  // destroying. Once true, post-crash creates fail loudly instead of hanging.
+  private workerDead = false
 
   constructor() {
     super()
@@ -137,11 +139,40 @@ export class PtyManager extends EventEmitter {
 
     this.worker.on('error', (err) => {
       console.error('[PtyManager] worker error:', err)
+      this._handleWorkerCrash(null)
     })
 
     this.worker.on('exit', (code) => {
-      if (!this.destroying) console.error('[PtyManager] worker exited with code', code)
+      if (this.destroying) return
+      console.error('[PtyManager] worker exited with code', code)
+      this._handleWorkerCrash(code)
     })
+  }
+
+  /**
+   * Fan out a worker crash to every live PTY and pending spawn. Called once from
+   * the worker `exit` handler (latched via `workerDead`). Each spawned id gets an
+   * `exit` event so handlers.ts can show the per-pane exited banner, send
+   * `pty:exit`, unroute, and clean direct-output buffers — the existing surfacing
+   * path. Pending deferred spawns never reached the worker, so they fail as
+   * `error`, matching the existing missing-cwd spawn-error path the renderer
+   * already renders as a spawn failure. Respawning the worker is out of scope.
+   */
+  private _handleWorkerCrash(code: number | null): void {
+    if (this.destroying || this.workerDead) return
+    this.workerDead = true
+    const exitCode = typeof code === 'number' ? code : 1
+    for (const [id, entry] of this.pendingSpawns) {
+      if (entry.timeout !== null) clearTimeout(entry.timeout)
+      this.emit('error', id, new Error(`Terminal host process exited unexpectedly (code ${exitCode})`))
+    }
+    this.pendingSpawns.clear()
+    const ids = [...this.spawnedIds]
+    this.spawnedIds.clear()
+    this.readyIds.clear()
+    this.readyEvents.clear()
+    this.pendingResizes.clear()
+    for (const id of ids) this.emit('exit', id, exitCode)
   }
 
   private _send(msg: WorkerMessage) {
@@ -158,6 +189,15 @@ export class PtyManager extends EventEmitter {
     deferSpawn = false,
   ): string {
     const id = randomUUID()
+
+    if (this.workerDead) {
+      // The worker host is gone; refuse to queue another silent-hang spawn.
+      // setImmediate preserves the contract that callers attach listeners
+      // before events fire.
+      const deadId = id
+      setImmediate(() => this.emit('error', deadId, new Error('Terminal host process is not running')))
+      return id
+    }
 
     if (deferSpawn) {
       // Register the pending entry synchronously so that a pty:resize arriving
@@ -236,15 +276,6 @@ export class PtyManager extends EventEmitter {
     // Shell panes may fall back to the home directory for deleted cwd paths.
     // Agent panes validate cwd before spawning and should fail loudly instead.
     return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize, true)
-  }
-
-  createClaude(cwd: string): string {
-    return this.createDeferred(cwd, this._shellCmd())
-  }
-
-  createAgent(cwd: string, agentKind: AgentKind): string {
-    if (agentKind === 'claude') return this.createClaude(cwd)
-    return this.createDeferred(cwd, this._shellCmd())
   }
 
   write(ptyId: string, data: string): void {

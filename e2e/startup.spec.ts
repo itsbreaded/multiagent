@@ -104,6 +104,23 @@ test.describe('cold-start layout restore', () => {
       timestamp: '2026-06-29T12:00:00.000Z',
       message: { role: 'user', content: 'The quasarneedle appears only in this fixture.' },
     })}\n`, 'utf8')
+    // Multi-term fixture for the implicit-AND summary-search assertion (spec 036, item 7).
+    await writeFile(join(transcriptDir, 'multi-term-session.jsonl'), `${JSON.stringify({
+      type: 'user',
+      sessionId: 'multi-term-session',
+      cwd: projectCwd,
+      gitBranch: 'main',
+      timestamp: '2026-06-29T12:00:00.000Z',
+      message: { role: 'user', content: 'alpha bravo charlie — contains both tokens.' },
+    })}\n`, 'utf8')
+    await writeFile(join(transcriptDir, 'alpha-only-session.jsonl'), `${JSON.stringify({
+      type: 'user',
+      sessionId: 'alpha-only-session',
+      cwd: projectCwd,
+      gitBranch: 'main',
+      timestamp: '2026-06-29T12:00:00.000Z',
+      message: { role: 'user', content: 'alpha without the other token.' },
+    })}\n`, 'utf8')
     const fixture = {
       tabs: [
         { id: 'tab-alpha', focusedPaneId: '', customLabel: 'Alpha' },
@@ -159,6 +176,48 @@ test.describe('cold-start layout restore', () => {
       firstMessage: 'The quasarneedle appears only in this fixture.',
     })
     expect(misses).toEqual([])
+  })
+
+  test('summary search never rejects on FTS-adversarial queries (spec 036 item 7)', async () => {
+    await page.evaluate(() => window.ipc.invoke('sessions:refresh'))
+    // Each of these used to throw SqliteError from the raw FTS5 MATCH expression.
+    // After spec 036 (tokenize + quote-escape, LIKE fallback, handler try/catch),
+    // every invoke must resolve to an array — never reject.
+    const adversarial = [
+      'C:\\Code\\multiagent', // FTS5 column filter on a nonexistent column `C`
+      '"unbalanced', // unbalanced quote
+      'foo AND', // dangling operator
+      'foo(', // unbalanced paren
+      '-foo', // leading NOT-without-operand
+      'NEAR(', // operator + paren
+      'a:b:c', // multiple colons
+    ]
+    for (const q of adversarial) {
+      const result = await page.evaluate(
+        (query) => window.ipc.invoke('sessions:search', query),
+        q
+      )
+      expect(Array.isArray(result)).toBe(true)
+    }
+  })
+
+  test('summary search preserves implicit-AND multi-term semantics (spec 036 item 7)', async () => {
+    await page.evaluate(() => window.ipc.invoke('sessions:refresh'))
+    const both = await page.evaluate(
+      (q) => window.ipc.invoke('sessions:search', q),
+      'alpha bravo'
+    ) as Array<{ sessionId: string }>
+    const onlyAlpha = await page.evaluate(
+      (q) => window.ipc.invoke('sessions:search', q),
+      'alpha'
+    ) as Array<{ sessionId: string }>
+
+    const bothIds = new Set(both.map((r) => r.sessionId))
+    expect(bothIds.has('multi-term-session')).toBe(true)
+    // A row containing only `alpha` must NOT match the AND query.
+    expect(bothIds.has('alpha-only-session')).toBe(false)
+    // The single-term query is strictly broader.
+    expect(onlyAlpha.map((r) => r.sessionId)).toContain('alpha-only-session')
   })
 
   test('persists cwd overrides when the original transcript is reindexed after restart', async () => {

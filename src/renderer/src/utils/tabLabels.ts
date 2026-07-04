@@ -11,11 +11,6 @@ export function firstLeaf(node: PaneNode): PaneLeaf | null {
   return firstLeaf(node.first)
 }
 
-export function collectLeaves(node: PaneNode): PaneLeaf[] {
-  if (node.type === 'leaf') return [node]
-  return [...collectLeaves(node.first), ...collectLeaves(node.second)]
-}
-
 /** Formatted display label for a single pane: "[customName · ]directory" */
 export function paneLabelText(pane: PaneLeaf, sessions: Session[]): string {
   let base: string

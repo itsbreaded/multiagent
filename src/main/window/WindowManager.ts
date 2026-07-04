@@ -15,7 +15,7 @@ export interface SnapZone {
   height: number
 }
 
-class WindowManager {
+export class WindowManager {
   private windows = new Map<number, BrowserWindow>()
   private ptyToWebContentsId = new Map<string, number>()
   public pendingInitData = new Map<number, WindowInitData>()
@@ -214,6 +214,10 @@ class WindowManager {
 
   ownsPty(ptyId: string, webContentsId: number): boolean {
     return this.ptyToWebContentsId.get(ptyId) === webContentsId
+  }
+
+  getPtyOwner(ptyId: string): number | undefined {
+    return this.ptyToWebContentsId.get(ptyId)
   }
 
   sendToWindowForPty(ptyId: string, channel: string, ...args: unknown[]): boolean {

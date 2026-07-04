@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import type { PaneLeaf, Session, SpawnInTabPayload, SplitDirection, Tab } from '../../../../shared/types'
 import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
-import { computeLabels, collectLeaves, paneLabelText } from '../../utils/tabLabels'
+import { computeLabels, paneLabelText } from '../../utils/tabLabels'
+import { collectLeaves } from '../../../../shared/paneTree'
 import { displayGitBranch } from '../../utils/git'
 import { decodePaneDragPayload, paneDragSourceId, PANE_DRAG_MIME, setPaneDragData, type PaneDragPayload } from '../../utils/paneDrag'
 import { DirPicker } from '../DirPicker'
@@ -51,7 +52,11 @@ export function TabSections(): JSX.Element {
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
 
-  const tabLabels = computeLabels(tabs, sessions)
+  const tabLabels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
+  const leavesByTab = useMemo(
+    () => new Map(tabs.map((tab) => [tab.id, tab.rootNode ? collectLeaves(tab.rootNode) : []])),
+    [tabs],
+  )
 
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
   const [dirPickerTabId, setDirPickerTabId] = useState<string | null>(null)
@@ -110,7 +115,7 @@ export function TabSections(): JSX.Element {
       startRename(pendingRenameTabId)
       setPendingRenameTabId(null)
     }
-  }, [pendingRenameTabId])
+  }, [pendingRenameTabId, tabs, startRename, setPendingRenameTabId])
 
   if (tabs.length === 0) return <></>
 
@@ -147,7 +152,7 @@ export function TabSections(): JSX.Element {
       >
       {tabs.map((tab) => {
         const label = tabLabels.get(tab.id) ?? 'Tab'
-        const leaves = tab.rootNode ? collectLeaves(tab.rootNode) : []
+        const leaves = leavesByTab.get(tab.id) ?? []
         const isActive = tab.id === activeTabId
         const isRenaming = renamingTabId === tab.id
         const sectionId = tabSidebarSectionId(tab.id)
@@ -231,6 +236,7 @@ export function TabSections(): JSX.Element {
                   tab={tab}
                   sourceWindowId={ownerWindowNumId}
                   isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === (focusTargetForTab?.paneId ?? tab.focusedPaneId)}
+                  isOnlyPane={leaves.length <= 1}
                   sessions={sessions}
                   onMouseDownOverride={() => {
                     if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id, pane.id)
@@ -344,6 +350,7 @@ export function TabSections(): JSX.Element {
                 tab={tab}
                 sourceWindowId={windowId ?? undefined}
                 isFocused={localWindowActive && localFocusArmed && isActive && pane.id === tab.focusedPaneId}
+                isOnlyPane={leaves.length <= 1}
                 sessions={sessions}
                 onMouseDownOverride={() => focusLocalPaneFromSidebar(tab.id, pane.id)}
                 onClickOverride={() => focusLocalPaneFromSidebar(tab.id, pane.id)}
@@ -422,6 +429,7 @@ function PaneRow({
   tab,
   sourceWindowId,
   isFocused,
+  isOnlyPane,
   sessions,
   onMouseDownOverride,
   onClickOverride,
@@ -430,6 +438,7 @@ function PaneRow({
   tab: Tab
   sourceWindowId?: number
   isFocused: boolean
+  isOnlyPane: boolean
   sessions: Session[]
   onMouseDownOverride?: () => void
   onClickOverride?: () => void
@@ -464,7 +473,6 @@ function PaneRow({
   const branch = showGitBranchBadges
     ? displayGitBranch(cwdBranch === undefined ? session?.gitBranch : cwdBranch)
     : null
-  const isOnlyPane = !tab.rootNode || collectLeaves(tab.rootNode).length <= 1
   const isSwapTarget = swapDrag?.targetId === pane.id
 
   React.useEffect(() => {

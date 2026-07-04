@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useSettingsStore } from '../../store/settings'
+import { SectionLabel } from '../common/SectionLabel'
 import { DEFAULT_HOTKEYS, buildHotkeys, type HotkeyId } from '../../utils/hotkeys'
 import {
   TERMINAL_BINDING_ORDER,
@@ -592,21 +593,6 @@ function EditBtn({ onClick }: { onClick: () => void }): JSX.Element {
     >
       Edit
     </button>
-  )
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element {
-  return (
-    <div style={{
-      padding: '6px 14px 3px',
-      fontSize: 10,
-      fontWeight: 600,
-      color: '#4a4b4e',
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-    }}>
-      {children}
-    </div>
   )
 }
 

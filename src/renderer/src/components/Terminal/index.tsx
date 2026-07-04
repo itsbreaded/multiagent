@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -8,14 +8,15 @@ import type { PaneLeaf, PtyReadyMetadata } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES, useSettingsStore } from '../../store/settings'
-import { buildHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
-import { buildTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/terminalKeyBindings'
+import { getHotkeys, hotkeyKey, eventKey } from '../../utils/hotkeys'
+import { getTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/terminalKeyBindings'
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
 import { createDirectPtyDataHandler } from '../../terminal/ptyData'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
+import { createShellPty } from './createShellPty'
 
 const XTERM_THEME = {
   background: '#0e1011',
@@ -60,7 +61,7 @@ interface TerminalProps {
   layoutKey: string
 }
 
-export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
+export const Terminal = React.memo(function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -81,6 +82,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
     const entry = xtermRegistry.getEntry(pane.id)
     return entry?.connected ? 'ready' : 'mounting'
   })
+  const isMounting = status === 'mounting'
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [repairPickerOpen, setRepairPickerOpen] = useState(false)
@@ -268,7 +270,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // needed when the user rebinds. On match the event is consumed (stop());
       // a 'suppress' entry consumes the key and sends nothing (a vacated default
       // trigger of a rebound signal binding).
-      const entry = buildTerminalKeyMap(useSettingsStore.getState().terminalKeyBindings).get(bindingEventKey(e))
+      const entry = getTerminalKeyMap(useSettingsStore.getState().terminalKeyBindings).get(bindingEventKey(e))
       if (entry) {
         if (entry.kind === 'suppress') return stop()
         const b = entry.binding
@@ -307,7 +309,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // Step 3 — Global app shortcuts (HotkeyId). Read overrides at call time
       // so rebinds take effect immediately.
       if (mod) {
-        const hotkeys = buildHotkeys(useSettingsStore.getState().hotkeyOverrides)
+        const hotkeys = getHotkeys(useSettingsStore.getState().hotkeyOverrides)
         const dispatch: Record<string, () => void> = {
           [hotkeyKey(hotkeys.splitVertical)]:   () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'vertical') },
           [hotkeyKey(hotkeys.splitHorizontal)]: () => { const p = store.getFocusedPane(); if (p) store.splitPane(p.id, 'horizontal') },
@@ -393,36 +395,39 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
   }, [pane.id, pane.paneType, pane.agentKind])
 
   // Effect 2: create a shell PTY when this pane needs one. Attachment happens
-  // in the next effect after the ptyId is committed to pane state.
+  // in the next effect after the ptyId is committed to pane state. The body is
+  // extracted into createShellPty.ts so cancel-kill and retry-unblock are
+  // unit-testable without xterm.
   useEffect(() => {
     if (status === 'mounting' || pane.paneType !== 'shell' || pane.ptyId) return
     if (shellCreatePaneRef.current === pane.id) return
 
-    let cancelled = false
     shellCreatePaneRef.current = pane.id
     setStatus('connecting')
 
-    const fitAndGetSize = (): { cols: number; rows: number } => {
-      try { fitAddonRef.current?.fit() } catch { /* ignore */ }
-      const term = xtermRef.current
-      return { cols: term?.cols ?? 80, rows: term?.rows ?? 24 }
-    }
-    const initialSize = fitAndGetSize()
-    window.ipc.invoke('pty:create', pane.cwd, initialSize.cols, initialSize.rows).then((result) => {
-      if (cancelled) return
-      const ptyId = (result as { ptyId?: unknown } | null)?.ptyId
-      if (typeof ptyId !== 'string') throw new Error('pty:create did not return a ptyId')
-      ptyIdRef.current = ptyId
-      setPtyId(pane.id, ptyId)
-    }).catch((err) => {
-      if (cancelled) return
-      setStatus('error')
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to create terminal')
+    const handle = createShellPty(pane.cwd, {
+      ipc: window.ipc,
+      getInitialSize: () => {
+        try { fitAddonRef.current?.fit() } catch { /* ignore */ }
+        const term = xtermRef.current
+        return { cols: term?.cols ?? 80, rows: term?.rows ?? 24 }
+      },
+      onPtyId: (ptyId) => {
+        ptyIdRef.current = ptyId
+        setPtyId(pane.id, ptyId)
+      },
+      onError: (msg) => {
+        setStatus('error')
+        setErrorMsg(msg)
+      },
+      releaseGuard: () => {
+        if (shellCreatePaneRef.current === pane.id) shellCreatePaneRef.current = null
+      },
     })
     return () => {
-      cancelled = true
+      handle.cancel()
     }
-  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, isMounting])
 
   // Effect 3: connect to the PTY once a ptyId is available
   useEffect(() => {
@@ -583,7 +588,7 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       // PTYs are killed explicitly by closePane() in the panes store.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, status === 'mounting' ? 'mounting' : 'ready'])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, isMounting])
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -903,4 +908,4 @@ export function Terminal({ pane, layoutKey }: TerminalProps): JSX.Element {
       )}
     </div>
   )
-}
+})

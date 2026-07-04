@@ -197,6 +197,10 @@ export class SessionSpawner {
 
   private async _readNewCodexCandidates(pending: PendingCodexDetection[]): Promise<CodexRolloutCandidate[]> {
     const paths = await listCodexSessionFilePaths()
+    const existingPaths = new Set(paths)
+    for (const claimed of this.claimedCodexFiles) {
+      if (!existingPaths.has(claimed)) this.claimedCodexFiles.delete(claimed)
+    }
     const newPaths = paths.filter((filePath) =>
       !this.claimedCodexFiles.has(filePath) &&
       pending.some((p) => !p.baselinePaths.has(filePath))

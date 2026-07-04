@@ -4,6 +4,8 @@ import * as path from 'path'
 import * as os from 'os'
 import * as readline from 'readline'
 import type { ScannedSession } from './TranscriptScanner'
+import { deriveProjectName, parseJsonLine, truncate } from './transcriptParse'
+import { walkJsonlFiles } from './fsWalk'
 
 interface CodexRecord {
   timestamp?: string
@@ -33,50 +35,11 @@ interface SessionIndexRecord {
   updated_at?: string
 }
 
-const scanCache = new Map<string, ScannedSession>()
-
 function codexHome(): string {
   return process.env['CODEX_HOME'] || path.join(os.homedir(), '.codex')
 }
 
-function deriveProjectName(cwd: string): string {
-  const normalized = cwd.replace(/\\/g, '/')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length >= 2) return parts.slice(-2).join('/')
-  return parts[parts.length - 1] ?? cwd
-}
-
-function truncate(text: string, maxLen = 200): string {
-  return text.length > maxLen ? text.slice(0, maxLen) : text
-}
-
-function parseRecord(line: string): CodexRecord | null {
-  try {
-    return JSON.parse(line) as CodexRecord
-  } catch {
-    return null
-  }
-}
-
-async function walkJsonlFiles(dir: string): Promise<string[]> {
-  const results: string[] = []
-  let entries: fs.Dirent[]
-  try {
-    entries = await fsPromises.readdir(dir, { withFileTypes: true })
-  } catch {
-    return results
-  }
-
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
-      results.push(...await walkJsonlFiles(entryPath))
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      results.push(entryPath)
-    }
-  }
-  return results
-}
+const parseRecord = (line: string): CodexRecord | null => parseJsonLine<CodexRecord>(line)
 
 export async function listCodexSessionFilePaths(): Promise<string[]> {
   return walkJsonlFiles(codexSessionsDir())
@@ -139,6 +102,8 @@ async function readSessionIndex(): Promise<Map<string, SessionIndexRecord>> {
 }
 
 export class CodexSessionScanner {
+  private scanCache = new Map<string, ScannedSession>()
+
   async scanAll(): Promise<ScannedSession[]> {
     const sessionsDir = path.join(codexHome(), 'sessions')
     const titles = await readSessionIndex()
@@ -148,6 +113,10 @@ export class CodexSessionScanner {
     for (const filePath of files) {
       const session = await this.scanFile(filePath, titles)
       if (session) results.push(session)
+    }
+    for (const key of this.scanCache.keys()) {
+      const separator = key.lastIndexOf(':')
+      if (separator >= 0 && !files.includes(key.slice(0, separator))) this.scanCache.delete(key)
     }
 
     return results
@@ -166,11 +135,11 @@ export class CodexSessionScanner {
     }
 
     const cacheKey = `${filePath}:${mtimeMs}`
-    const cached = scanCache.get(cacheKey)
+    const cached = this.scanCache.get(cacheKey)
     if (cached) return cached
 
-    for (const key of scanCache.keys()) {
-      if (key.startsWith(`${filePath}:`)) scanCache.delete(key)
+    for (const key of this.scanCache.keys()) {
+      if (key.startsWith(`${filePath}:`)) this.scanCache.delete(key)
     }
 
     return new Promise((resolve) => {
@@ -234,7 +203,7 @@ export class CodexSessionScanner {
           transcriptPath: filePath,
           mtimeMs
         }
-        scanCache.set(cacheKey, session)
+        this.scanCache.set(cacheKey, session)
         resolve(session)
       })
       rl.on('error', () => resolve(null))

@@ -5,19 +5,39 @@ import { app } from 'electron'
 import type { AgentKind, Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
 import { claudeProjectDirForCwd, claudeTranscriptPathForCwd } from './claudePaths'
+import { toFtsMatchExpression, splitFtsTokens, toLikeSubstringPattern } from './ftsQuery'
+import { deriveProjectName } from './transcriptParse'
 
-const DB_PATH = path.join(app.getPath('userData'), 'session-index.db')
+/**
+ * Default DB path. Computed lazily — not at module load — so the module can be
+ * imported under `vi.mock('electron', ...)` in tests without `app` being
+ * implemented, and so an injectable path can be passed to the constructor for
+ * the in-memory integration test (spec 036, item 7).
+ */
+function defaultDbPath(): string {
+  return path.join(app.getPath('userData'), 'session-index.db')
+}
+
+/** Summary columns searched by the LIKE fallback (must match the FTS5 index). */
+const SUMMARY_LIKE_COLUMNS = ['projectName', 'displayName', 'firstMessage', 'lastMessage'] as const
 
 function normalizeStatus(status: string | null | undefined): Session['status'] {
   return status === 'live-attached' ? 'live-attached' : 'resumable'
 }
 
-function scannedToSession(row: DbRow): Session {
-  return {
+function makeRowMapper(exists: (cwd: string) => boolean = fs.existsSync): (row: DbRow) => Session {
+  const cache = new Map<string, boolean>()
+  return (row) => {
+    let cwdExists = cache.get(row.cwd)
+    if (cwdExists === undefined) {
+      cwdExists = exists(row.cwd)
+      cache.set(row.cwd, cwdExists)
+    }
+    return {
     agentKind: row.agentKind as AgentKind,
     sessionId: row.sessionId,
     cwd: row.cwd,
-    cwdExists: fs.existsSync(row.cwd),
+    cwdExists,
     projectName: row.projectName,
     displayName: row.displayName ?? null,
     gitBranch: row.gitBranch ?? null,
@@ -28,6 +48,7 @@ function scannedToSession(row: DbRow): Session {
     messageCount: row.messageCount,
     transcriptPath: row.filePath,
     status: normalizeStatus(row.status),
+    }
   }
 }
 
@@ -48,24 +69,36 @@ interface DbRow {
   status: string
 }
 
-function deriveProjectName(cwd: string): string {
-  const normalized = cwd.replace(/\\/g, '/')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length >= 2) return parts.slice(-2).join('/')
-  return parts[parts.length - 1] ?? cwd
-}
-
 export class SessionIndex {
   private db: Database.Database
+  private upsertStmt: Database.Statement
+  private overrideStmt: Database.Statement
+  private mtimesStmt: Database.Statement
 
-  constructor() {
-    this.db = new Database(DB_PATH)
+  constructor(dbPath: string = defaultDbPath()) {
+    this.db = new Database(dbPath)
     this.db.pragma('journal_mode = WAL')
     this.migrate()
+    this.overrideStmt = this.db.prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
+    this.mtimesStmt = this.db.prepare(`SELECT agentKind, sessionId, mtimeMs FROM sessions`)
+    this.upsertStmt = this.db.prepare(`
+      INSERT INTO sessions (
+        agentKind, sessionId, cwd, projectName, displayName, gitBranch, firstMessage, lastMessage,
+        firstActivity, lastActivity, messageCount, filePath, mtimeMs, status
+      ) VALUES (
+        @agentKind, @sessionId, @cwd, @projectName, @displayName, @gitBranch, @firstMessage, @lastMessage,
+        @firstActivity, @lastActivity, @messageCount, @filePath, @mtimeMs, 'resumable'
+      ) ON CONFLICT(agentKind, sessionId) DO UPDATE SET
+        cwd=excluded.cwd, projectName=excluded.projectName, displayName=excluded.displayName,
+        gitBranch=excluded.gitBranch, firstMessage=excluded.firstMessage, lastMessage=excluded.lastMessage,
+        firstActivity=excluded.firstActivity, lastActivity=excluded.lastActivity, messageCount=excluded.messageCount,
+        filePath=excluded.filePath, mtimeMs=excluded.mtimeMs
+    `)
   }
 
   private migrate(): void {
-    this.db.exec(`
+    const version = this.db.pragma('user_version', { simple: true }) as number
+    if (version < 1) this.db.exec(`
       DROP TRIGGER IF EXISTS sessions_ai;
       DROP TRIGGER IF EXISTS sessions_ad;
       DROP TRIGGER IF EXISTS sessions_au;
@@ -169,8 +202,11 @@ export class SessionIndex {
         VALUES (new.rowid, new.agentKind, new.sessionId, new.projectName, new.displayName, new.firstMessage, new.lastMessage);
       END;
 
-      INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild');
     `)
+    if (version < 1) {
+      this.db.exec(`INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')`)
+      this.db.pragma('user_version = 1')
+    }
   }
 
   upsert(session: ScannedSession): void {
@@ -180,29 +216,7 @@ export class SessionIndex {
     const filePath = override && session.agentKind === 'claude'
       ? existingClaudeTranscriptPathForCwd(session.sessionId, cwd) ?? session.filePath
       : session.filePath
-    const stmt = this.db.prepare(`
-      INSERT INTO sessions (
-        agentKind, sessionId, cwd, projectName, displayName, gitBranch, firstMessage, lastMessage,
-        firstActivity, lastActivity, messageCount, filePath, mtimeMs, status
-      ) VALUES (
-        @agentKind, @sessionId, @cwd, @projectName, @displayName, @gitBranch, @firstMessage, @lastMessage,
-        @firstActivity, @lastActivity, @messageCount, @filePath, @mtimeMs, 'resumable'
-      )
-      ON CONFLICT(agentKind, sessionId) DO UPDATE SET
-        cwd = excluded.cwd,
-        projectName = excluded.projectName,
-        displayName = excluded.displayName,
-        gitBranch = excluded.gitBranch,
-        firstMessage = excluded.firstMessage,
-        lastMessage = excluded.lastMessage,
-        firstActivity = excluded.firstActivity,
-        lastActivity = excluded.lastActivity,
-        messageCount = excluded.messageCount,
-        filePath = excluded.filePath,
-        mtimeMs = excluded.mtimeMs
-    `)
-
-    stmt.run({
+    this.upsertStmt.run({
       agentKind: session.agentKind,
       sessionId: session.sessionId,
       cwd,
@@ -219,10 +233,27 @@ export class SessionIndex {
     })
   }
 
+  upsertMany(sessions: ScannedSession[]): { changed: number } {
+    const stored = new Map((this.mtimesStmt.all() as Array<{ agentKind: string; sessionId: string; mtimeMs: number }>).map(
+      (row) => [`${row.agentKind}:${row.sessionId}`, row.mtimeMs],
+    ))
+    let changed = 0
+    this.db.transaction(() => {
+      for (const session of sessions) {
+        if (stored.get(`${session.agentKind}:${session.sessionId}`) === session.mtimeMs) continue
+        try {
+          this.upsert(session)
+          changed++
+        } catch (err) {
+          console.warn(`[SessionIndex] Skipping malformed session ${session.agentKind}:${session.sessionId}:`, err)
+        }
+      }
+    })()
+    return { changed }
+  }
+
   private getCwdOverride(agentKind: AgentKind, sessionId: string): { cwd: string; projectName: string } | null {
-    const row = this.db
-      .prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
-      .get(agentKind, sessionId) as { cwd: string; projectName: string } | undefined
+    const row = this.overrideStmt.get(agentKind, sessionId) as { cwd: string; projectName: string } | undefined
     return row ?? null
   }
 
@@ -263,7 +294,7 @@ export class SessionIndex {
     const updatedRows = this.db
       .prepare(`SELECT * FROM sessions WHERE cwd = ? ORDER BY lastActivity DESC NULLS LAST`)
       .all(newCwd) as DbRow[]
-    return updatedRows.map(scannedToSession)
+    return updatedRows.map(makeRowMapper())
   }
 
   has(agentKind: AgentKind, sessionId: string): boolean {
@@ -274,7 +305,7 @@ export class SessionIndex {
     const row = this.db
       .prepare('SELECT * FROM sessions WHERE agentKind = ? AND sessionId = ?')
       .get(agentKind, sessionId) as DbRow | undefined
-    return row ? scannedToSession(row) : null
+    return row ? makeRowMapper()(row) : null
   }
 
   getAll(): Session[] {
@@ -283,32 +314,67 @@ export class SessionIndex {
         `SELECT * FROM sessions ORDER BY lastActivity DESC NULLS LAST`
       )
       .all() as DbRow[]
-    return rows.map(scannedToSession)
+    return rows.map(makeRowMapper())
   }
 
   getByProject(cwd: string): Session[] {
     const rows = this.db
       .prepare(`SELECT * FROM sessions WHERE cwd = ? ORDER BY lastActivity DESC NULLS LAST`)
       .all(cwd) as DbRow[]
-    return rows.map(scannedToSession)
+    return rows.map(makeRowMapper())
   }
 
   search(query: string): Session[] {
-    if (!query.trim()) return this.getAll()
-
-    // FTS5 search - join back to sessions for full row data
-    const rows = this.db
-      .prepare(
+    const match = toFtsMatchExpression(query)
+    if (!match) return this.getAll()
+    try {
+      // FTS5 search - join back to sessions for full row data. The MATCH
+      // expression is built by `toFtsMatchExpression`, which quote-escapes every
+      // token so user-typed Windows paths, quotes, parens, and FTS keywords are
+      // treated as literal terms (spec 036, item 7).
+      const rows = this.db
+        .prepare(
+          `
+          SELECT s.*
+          FROM sessions s
+          JOIN sessions_fts fts ON s.rowid = fts.rowid
+          WHERE sessions_fts MATCH ?
+          ORDER BY rank
         `
-        SELECT s.*
-        FROM sessions s
-        JOIN sessions_fts fts ON s.rowid = fts.rowid
-        WHERE sessions_fts MATCH ?
-        ORDER BY rank
-      `
-      )
-      .all(query) as DbRow[]
-    return rows.map(scannedToSession)
+        )
+        .all(match) as DbRow[]
+      return rows.map(makeRowMapper())
+    } catch {
+      // Belt-and-braces: a residual FTS edge case degrades to a slower-but-
+      // correct LIKE scan over the summary columns instead of rejecting the
+      // invoke. With correct escaping this branch should be unreachable.
+      return this.searchLike(query)
+    }
+  }
+
+  /**
+   * Literal LIKE fallback over the four summary columns. Each whitespace-separated
+   * token becomes an AND-ed group over all summary columns (LIKE ? ESCAPE '\').
+   * Ordered by last activity descending so the visible ordering matches getAll.
+   */
+  private searchLike(query: string): Session[] {
+    const tokens = splitFtsTokens(query)
+    if (tokens.length === 0) return this.getAll()
+
+    const groups = tokens
+      .map(() => `(${SUMMARY_LIKE_COLUMNS.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(' OR ')})`)
+      .join(' AND ')
+
+    const params: string[] = []
+    for (const token of tokens) {
+      const pattern = toLikeSubstringPattern(token)
+      for (let i = 0; i < SUMMARY_LIKE_COLUMNS.length; i++) params.push(pattern)
+    }
+
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE ${groups} ORDER BY lastActivity DESC NULLS LAST`)
+      .all(...params) as DbRow[]
+    return rows.map(makeRowMapper())
   }
 
   delete(agentKind: AgentKind, sessionId: string): void {

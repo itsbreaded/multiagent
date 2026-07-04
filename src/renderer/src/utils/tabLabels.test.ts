@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   findLeafById,
   firstLeaf,
-  collectLeaves,
   paneLabelText,
   computeLabels,
 } from './tabLabels'
@@ -37,12 +36,6 @@ describe('findLeafById', () => {
 describe('firstLeaf', () => {
   it('returns the first leaf in tree order', () => {
     expect(firstLeaf(split)?.id).toBe('L1')
-  })
-})
-
-describe('collectLeaves', () => {
-  it('returns leaves in tree order', () => {
-    expect(collectLeaves(split).map((l) => l.id)).toEqual(['L1', 'L2'])
   })
 })
 

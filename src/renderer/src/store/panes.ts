@@ -3,15 +3,13 @@ import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf,
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
+  collectLeaves, markLeafExitedByPtyId,
 } from '../../../shared/paneTree'
 import { replaceCwdPrefix } from '../../../shared/cwdRepair'
-import { collectLeaves } from '../utils/tabLabels'
 import * as xtermRegistry from '../utils/xtermRegistry'
-import { PANE_DRAG_MIME } from '../utils/paneDrag'
 import type { SettingsSection } from './settings'
-
-let pendingRemoteFocusWindowId: number | null = null
-let pendingRemoteFocusTimer: ReturnType<typeof setTimeout> | null = null
+import { focusArming, SKIP_DISARM_TTL_MS } from './focusArming'
+import { wirePanesIpc } from './panesIpc'
 
 // Local sidebar focus arming. When OS focus moves into this window FROM another
 // window, the local sidebar highlight is disarmed until we know which pane is
@@ -19,25 +17,20 @@ let pendingRemoteFocusTimer: ReturnType<typeof setTimeout> | null = null
 // click resolves (and two windows can briefly highlight at once during the
 // cross-window became-active skew). It is re-armed by an explicit local focus
 // action, or by a short grace timer for plain window activation.
-let localRearmTimer: ReturnType<typeof setTimeout> | null = null
 // One-shot: set on a local sidebar pane mousedown so the became-active that the OS
 // fires for this same click does not disarm the highlight we are about to set.
 // became-active consumes it; the timer is a backstop so it can never linger and
 // wrongly suppress a later, unrelated cross-window disarm (e.g. when the pane was
 // clicked while this window was already active, so no became-active follows).
-let skipNextActivationDisarm = false
-let skipDisarmClearTimer: ReturnType<typeof setTimeout> | null = null
-const LOCAL_REARM_MS = 150
-const SKIP_DISARM_TTL_MS = 400
 const hydratingPaneSessions: Record<string, string> = {}
 const hydratingTabs = new Map<string, Promise<void>>()
 const DEFAULT_AGENT_KIND: AgentKind = 'claude'
 
-function clearPendingRemoteFocus(): void {
-  pendingRemoteFocusWindowId = null
-  if (pendingRemoteFocusTimer !== null) {
-    clearTimeout(pendingRemoteFocusTimer)
-    pendingRemoteFocusTimer = null
+export function clearPendingRemoteFocus(): void {
+  focusArming.pendingRemoteFocusWindowId = null
+  if (focusArming.pendingRemoteFocusTimer !== null) {
+    clearTimeout(focusArming.pendingRemoteFocusTimer)
+    focusArming.pendingRemoteFocusTimer = null
   }
   // pendingFocusTarget is intentionally not cleared here — it should remain visible
   // until focus:target-changed arrives with the confirmed target, or the timeout fires.
@@ -80,7 +73,77 @@ function removeHydratedTabs(hydratedTabIds: Record<string, true>, tabIds: string
   return changed ? next : hydratedTabIds
 }
 
-function reportCurrentFocusTarget(): void {
+function patchLeafInTabs(tabs: Tab[], paneId: string, patch: Partial<PaneLeaf>): Tab[] | null {
+  let changed = false
+  const next = tabs.map((tab) => {
+    if (!tab.rootNode) return tab
+    const rootNode = updateLeaf(tab.rootNode, paneId, patch)
+    if (rootNode === tab.rootNode) return tab
+    changed = true
+    return { ...tab, rootNode }
+  })
+  return changed ? next : null
+}
+
+/**
+ * Tear down a single pane's PTY + xterm runtime. Shared by every close path so
+ * tab/bulk-close teardown matches the per-pane `closePaneInTab` model (spec 034).
+ *
+ * Returns:
+ *   - killPromise: resolves when pty:kill settles (null when there is no ptyId
+ *     or no IPC layer, e.g. in tests). Callers must NOT await this inside a
+ *     set() — it is collected and awaited after the state update.
+ *   - needsSessionRefresh: true when the pane was an agent with a known
+ *     sessionId. The caller batches one `sessions:refresh` per close action
+ *     (not per pane) after the kills settle.
+ */
+function teardownPaneRuntime(pane: PaneLeaf): {
+  killPromise: Promise<unknown> | null
+  needsSessionRefresh: boolean
+} {
+  const hasIpc = typeof window !== 'undefined' && !!window.ipc
+  const killPromise = pane.ptyId && hasIpc
+    ? window.ipc.invoke('pty:kill', pane.ptyId).catch(() => {})
+    : null
+  xtermRegistry.dispose(pane.id)
+  return { killPromise, needsSessionRefresh: pane.paneType === 'agent' && !!pane.sessionId }
+}
+
+/**
+ * Tear down every leaf of a tab's tree. Returns the kill promises and the OR
+ * of `needsSessionRefresh` across all leaves, so the caller can issue a single
+ * `sessions:refresh` per close action after the kills settle.
+ */
+function teardownTabRuntime(tab: Tab): {
+  killPromises: Promise<unknown>[]
+  needsSessionRefresh: boolean
+} {
+  if (!tab.rootNode) return { killPromises: [], needsSessionRefresh: false }
+  const leaves = collectLeaves(tab.rootNode)
+  let needsSessionRefresh = false
+  const killPromises: Promise<unknown>[] = []
+  for (const leaf of leaves) {
+    const result = teardownPaneRuntime(leaf)
+    if (result.killPromise) killPromises.push(result.killPromise)
+    if (result.needsSessionRefresh) needsSessionRefresh = true
+  }
+  return { killPromises, needsSessionRefresh }
+}
+
+/**
+ * After all tab-close kill promises have settled, issue exactly one
+ * `sessions:refresh` if any closed pane was an agent with a known session.
+ * `sessions:refresh` is a full forced poll — one per close action, not per pane.
+ */
+function scheduleSessionRefreshAfter(killPromises: Promise<unknown>[], needsSessionRefresh: boolean): void {
+  if (!needsSessionRefresh) return
+  if (typeof window === 'undefined' || !window.ipc) return
+  Promise.allSettled(killPromises).then(() => {
+    window.ipc.invoke('sessions:refresh').catch(() => {})
+  })
+}
+
+export function reportCurrentFocusTarget(): void {
   if (typeof window === 'undefined' || !window.ipc) return
   const store = usePanesStore.getState()
   if (store.windowId === null || !store.activeTabId) return
@@ -140,54 +203,15 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
 
     const { id: paneId, agentKind, sessionId, cwd } = leaf
     hydratingPaneSessions[paneId] = sessionId
-    const resumePromise = (async () => {
-      try {
-        // Validate the session transcript exists before spawning a CLI process.
-        // A missing transcript would cause a doomed spawn; catch it early so we get
-        // recoverable UI instead of a repeated failure loop on every startup.
-        const validation = await window.ipc.invoke('sessions:validate', agentKind, sessionId, cwd)
-          .catch(() => null) as { found: boolean; cwdMatch: boolean } | null
-        if (!validation?.found) {
-          const current = usePanesStore.getState().findPaneInAnyTab(paneId)
-          if (
-            current?.paneType === 'agent' &&
-            current.agentKind === agentKind &&
-            current.sessionId === sessionId &&
-            !current.ptyId
-          ) {
-            usePanesStore.getState().updatePane(paneId, {
-              resumeError: 'Session not found — the transcript may have been deleted',
-            })
-          }
-          return
-        }
-        const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd) as { ptyId?: string } | null
-        if (!result?.ptyId) return
-        const current = usePanesStore.getState().findPaneInAnyTab(paneId)
-        if (
-          current?.paneType === 'agent' &&
-          current.agentKind === agentKind &&
-          current.sessionId === sessionId &&
-          !current.ptyId
-        ) {
-          usePanesStore.getState().updatePane(paneId, { ptyId: result.ptyId, resumeError: undefined })
-        }
-      } catch (err) {
-        const current = usePanesStore.getState().findPaneInAnyTab(paneId)
-        if (
-          current?.paneType === 'agent' &&
-          current.agentKind === agentKind &&
-          current.sessionId === sessionId &&
-          !current.ptyId
-        ) {
-          usePanesStore.getState().updatePane(paneId, {
-            resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
-          })
-        }
-      } finally {
-        if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
-      }
-    })()
+    const resumePromise = resumeIntoPane(
+      () => usePanesStore.getState(), paneId, agentKind, sessionId, cwd,
+      {
+        validateFirst: true,
+        onSettled: () => {
+          if (hydratingPaneSessions[paneId] === sessionId) delete hydratingPaneSessions[paneId]
+        },
+      },
+    )
     resumes.push(resumePromise)
   }
 
@@ -209,7 +233,7 @@ function hydrateTabForActivation(tabId: string, previousHydrated?: Record<string
   if (!hydrated) void hydrateTabRuntime(tabId, true)
 }
 
-function isSpawnInTabPayload(value: unknown): value is SpawnInTabPayload {
+export function isSpawnInTabPayload(value: unknown): value is SpawnInTabPayload {
   if (!value || typeof value !== 'object') return false
   const payload = value as SpawnInTabPayload
   return (
@@ -405,7 +429,7 @@ function liveBasePaneId(tab: Tab): string | null {
 async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: AgentKind, cwd: string, extraFailurePatch: Partial<PaneLeaf> = {}): Promise<void> {
   if (typeof window === 'undefined' || !window.ipc) return
   try {
-    const result = await window.ipc.invoke('session:new', agentKind, cwd) as { ptyId: string; sessionId: string | null; detectionStartedAt?: number }
+    const result = await window.ipc.invoke('session:new', agentKind, cwd)
     const patch: Partial<PaneLeaf> = {
       agentDisconnected: undefined,
       resumeError: undefined,
@@ -430,6 +454,50 @@ async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: Agen
       resumeError: message,
       ...extraFailurePatch,
     })
+  }
+}
+
+async function resumeIntoPane(
+  get: PanesGet,
+  paneId: string,
+  agentKind: AgentKind,
+  sessionId: string,
+  cwd: string,
+  opts: { validateFirst?: boolean; onSettled?: () => void; extraFailurePatch?: Partial<PaneLeaf> } = {},
+): Promise<void> {
+  try {
+    if (typeof window === 'undefined' || !window.ipc) return
+    if (opts.validateFirst) {
+      const validation = await window.ipc.invoke('sessions:validate', agentKind, sessionId, cwd).catch(() => null)
+      if (!validation?.found) {
+        const current = get().findPaneInAnyTab(paneId)
+        if (current?.paneType === 'agent' && current.agentKind === agentKind && current.sessionId === sessionId && !current.ptyId) {
+          get().updatePane(paneId, { resumeError: 'Session not found — the transcript may have been deleted' })
+        }
+        return
+      }
+    }
+    const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)
+    const current = get().findPaneInAnyTab(paneId)
+    if (current?.paneType === 'agent' && current.agentKind === agentKind && current.sessionId === sessionId && !current.ptyId && result?.ptyId) {
+      get().updatePane(paneId, {
+        ptyId: result.ptyId,
+        agentDisconnected: undefined,
+        resumeError: undefined,
+        sessionDetectionError: undefined,
+      })
+    }
+  } catch (err) {
+    console.error('session:resume IPC failed', err)
+    const current = get().findPaneInAnyTab(paneId)
+    if (current?.paneType === 'agent' && current.agentKind === agentKind && current.sessionId === sessionId && !current.ptyId) {
+      get().updatePane(paneId, {
+        resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
+        ...opts.extraFailurePatch,
+      })
+    }
+  } finally {
+    opts.onSettled?.()
   }
 }
 
@@ -807,9 +875,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   closeTab: (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId)
     const previousHydrated = get().hydratedTabIds
-    if (tab?.rootNode) {
-      collectLeafIds(tab.rootNode).forEach((id) => xtermRegistry.dispose(id))
-    }
+    const teardown = tab?.rootNode ? teardownTabRuntime(tab) : { killPromises: [], needsSessionRefresh: false }
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== tabId)
       const activeTabId =
@@ -821,6 +887,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
+    scheduleSessionRefreshAfter(teardown.killPromises, teardown.needsSessionRefresh)
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
@@ -891,9 +958,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   closeOtherTabs: (tabId) => {
     const wasHydrated = get().hydratedTabIds[tabId] === true
+    const killPromises: Promise<unknown>[] = []
+    let needsSessionRefresh = false
     get().tabs.forEach((t) => {
       if (t.id !== tabId && t.rootNode) {
-        collectLeafIds(t.rootNode).forEach((id) => xtermRegistry.dispose(id))
+        const teardown = teardownTabRuntime(t)
+        killPromises.push(...teardown.killPromises)
+        if (teardown.needsSessionRefresh) needsSessionRefresh = true
       }
     })
     set((s) => {
@@ -909,6 +980,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         },
       }
     })
+    scheduleSessionRefreshAfter(killPromises, needsSessionRefresh)
     if (!wasHydrated) hydrateTabRuntime(tabId, true)
   },
 
@@ -916,9 +988,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const { tabs } = get()
     const idx = tabs.findIndex((t) => t.id === tabId)
     const previousHydrated = get().hydratedTabIds
+    const killPromises: Promise<unknown>[] = []
+    let needsSessionRefresh = false
     if (idx !== -1) {
       tabs.slice(idx + 1).forEach((t) => {
-        if (t.rootNode) collectLeafIds(t.rootNode).forEach((id) => xtermRegistry.dispose(id))
+        if (!t.rootNode) return
+        const teardown = teardownTabRuntime(t)
+        killPromises.push(...teardown.killPromises)
+        if (teardown.needsSessionRefresh) needsSessionRefresh = true
       })
     }
     set((s) => {
@@ -941,6 +1018,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       )
       return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
     })
+    scheduleSessionRefreshAfter(killPromises, needsSessionRefresh)
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
@@ -997,21 +1075,21 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   // Local sidebar pane click. Mark the upcoming OS activation as click-driven so
   // it does not disarm the highlight, then focus the pane (which arms it).
   focusLocalPaneFromSidebar: (tabId, paneId) => {
-    skipNextActivationDisarm = true
-    if (skipDisarmClearTimer !== null) clearTimeout(skipDisarmClearTimer)
-    skipDisarmClearTimer = setTimeout(() => {
-      skipNextActivationDisarm = false
-      skipDisarmClearTimer = null
+    focusArming.skipNextActivationDisarm = true
+    if (focusArming.skipDisarmClearTimer !== null) clearTimeout(focusArming.skipDisarmClearTimer)
+    focusArming.skipDisarmClearTimer = setTimeout(() => {
+      focusArming.skipNextActivationDisarm = false
+      focusArming.skipDisarmClearTimer = null
     }, SKIP_DISARM_TTL_MS)
     get().focusPaneInTab(tabId, paneId)
   },
 
   focusDetachedPaneOptimistically: (windowId, tabId, paneId) => {
-    pendingRemoteFocusWindowId = windowId
-    if (pendingRemoteFocusTimer !== null) clearTimeout(pendingRemoteFocusTimer)
-    pendingRemoteFocusTimer = setTimeout(() => {
-      pendingRemoteFocusWindowId = null
-      pendingRemoteFocusTimer = null
+    focusArming.pendingRemoteFocusWindowId = windowId
+    if (focusArming.pendingRemoteFocusTimer !== null) clearTimeout(focusArming.pendingRemoteFocusTimer)
+    focusArming.pendingRemoteFocusTimer = setTimeout(() => {
+      focusArming.pendingRemoteFocusWindowId = null
+      focusArming.pendingRemoteFocusTimer = null
       usePanesStore.setState({ pendingFocusTarget: null })
     }, 1000)
 
@@ -1067,18 +1145,16 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const tab = get().tabs.find((t) => t.id === tabId)
     const pane = tab?.rootNode ? findLeaf(tab.rootNode, paneId) : null
     if (!pane) return
-    if (pane.ptyId && typeof window !== 'undefined' && window.ipc) {
-      window.ipc.invoke('pty:kill', pane.ptyId)
-        .catch(() => {})
-        .finally(() => {
-          if (pane.paneType === 'agent' && pane.sessionId) {
-            window.ipc.invoke('sessions:refresh').catch(() => {})
-          }
-        })
-    } else if (pane.paneType === 'agent' && pane.sessionId && typeof window !== 'undefined' && window.ipc) {
-      window.ipc.invoke('sessions:refresh').catch(() => {})
+    const teardown = teardownPaneRuntime(pane)
+    // Preserve the exact pre-spec behavior: an agent pane whose PTY already
+    // exited (no ptyId) still needs its session moved to Recent on close, so
+    // schedule the refresh even when there was no kill.
+    if (teardown.needsSessionRefresh) {
+      scheduleSessionRefreshAfter(
+        teardown.killPromise ? [teardown.killPromise] : [],
+        true,
+      )
     }
-    xtermRegistry.dispose(paneId)
     set((s) => {
       const tabs = s.tabs.map((t) => {
         if (t.id !== tabId || !t.rootNode) return t
@@ -1117,13 +1193,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   setPtyId: (paneId, ptyId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, {
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, {
         ptyId,
         agentDisconnected: undefined,
         resumeError: undefined,
-      }) } : t),
-    }))
+      })
+      return tabs ? { tabs } : s
+    })
   },
 
   setPaneCwd: (ptyId, cwd) => {
@@ -1149,52 +1226,47 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   setPaneCustomName: (paneId, name) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode
-        ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, { customName: name.trim() || undefined }) }
-        : t
-      ),
-    }))
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, { customName: name.trim() || undefined })
+      return tabs ? { tabs } : s
+    })
   },
 
   setSessionId: (paneId, sessionId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, {
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, {
         sessionId,
         sessionDetectionState: 'detected',
         sessionDetectionError: undefined,
         resumeError: undefined,
-      }) } : t),
-    }))
+      })
+      return tabs ? { tabs } : s
+    })
   },
 
   updatePane: (paneId, patch) => {
-    set((s) => ({
-      tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, paneId, patch) } : t),
-    }))
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, patch)
+      return tabs ? { tabs } : s
+    })
   },
 
   markPtyExited: (ptyId, exitCode, signal) => {
     let shouldRefreshSessions = false
-    set((s) => ({
-      tabs: s.tabs.map((t) => {
+    const disconnected = { exitCode, signal, at: Date.now() }
+    set((s) => {
+      let changed = false
+      const tabs = s.tabs.map((t) => {
         if (!t.rootNode) return t
-        function patchExited(node: PaneNode): PaneNode {
-          if (node.type === 'leaf') {
-            if (node.ptyId !== ptyId || node.paneType !== 'agent') return node
-            shouldRefreshSessions = !!node.sessionId
-            return {
-              ...node,
-              ptyId: undefined,
-              agentDisconnected: { exitCode, signal, at: Date.now() },
-            }
-          }
-          return { ...node, first: patchExited(node.first), second: patchExited(node.second) }
-        }
-        return { ...t, rootNode: patchExited(t.rootNode) }
-      }),
-    }))
+        const result = markLeafExitedByPtyId(t.rootNode, ptyId, disconnected)
+        if (!result.exitedLeaf) return t
+        changed = true
+        shouldRefreshSessions ||= !!result.exitedLeaf.sessionId
+        return { ...t, rootNode: result.node }
+      })
+      return changed ? { tabs } : s
+    })
     if (shouldRefreshSessions && typeof window !== 'undefined' && window.ipc) {
       window.ipc.invoke('sessions:refresh').catch(() => {})
     }
@@ -1244,21 +1316,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       })
       return { tabs, hydratedTabIds: s.activeTabId ? removeHydratedTabs(s.hydratedTabIds, [s.activeTabId]) : s.hydratedTabIds }
     })
-    if (typeof window !== 'undefined' && window.ipc) {
-      try {
-        const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
-        if (result?.ptyId) {
-          get().setPtyId(leaf.id, result.ptyId)
-        }
-      } catch (err) {
-        console.error('session:resume IPC failed', err)
-        get().updatePane(leaf.id, { resumeError: agentIpcErrorMessage(err, 'Session resume failed') })
-      } finally {
-        if (targetTabId) markTabHydrated(targetTabId)
-      }
-    } else if (targetTabId) {
-      markTabHydrated(targetTabId)
-    }
+    await resumeIntoPane(get, leaf.id, agentKind, sessionId, cwd, {
+      onSettled: () => { if (targetTabId) markTabHydrated(targetTabId) },
+    })
   },
 
   resumeSessionInNewTab: async (agentKind, sessionId, cwd) => {
@@ -1271,19 +1331,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
       sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
     }))
-    if (typeof window !== 'undefined' && window.ipc) {
-      try {
-        const result = (await window.ipc.invoke('session:resume', agentKind, sessionId, cwd)) as { ptyId: string }
-        if (result?.ptyId) get().setPtyId(leaf.id, result.ptyId)
-      } catch (err) {
-        console.error('session:resume IPC failed', err)
-        get().updatePane(leaf.id, { resumeError: agentIpcErrorMessage(err, 'Session resume failed') })
-      } finally {
-        markTabHydrated(tab.id)
-      }
-    } else {
-      markTabHydrated(tab.id)
-    }
+    await resumeIntoPane(get, leaf.id, agentKind, sessionId, cwd, { onSettled: () => markTabHydrated(tab.id) })
   },
 
   resumeAgentPane: async (paneId) => {
@@ -1300,29 +1348,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       resumeError: undefined,
       sessionDetectionError: undefined,
     })
-    try {
-      const result = await window.ipc.invoke('session:resume', agentKind, sessionId, cwd) as { ptyId: string }
-      const current = get().findPaneInAnyTab(paneId)
-      if (
-        current?.paneType === 'agent' &&
-        current.agentKind === agentKind &&
-        current.sessionId === sessionId &&
-        result?.ptyId
-      ) {
-        get().updatePane(paneId, {
-          ptyId: result.ptyId,
-          agentDisconnected: undefined,
-          resumeError: undefined,
-          sessionDetectionError: undefined,
-        })
-      }
-    } catch (err) {
-      console.error('session:resume IPC failed', err)
-      get().updatePane(paneId, {
-        resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
-        agentDisconnected: pane.agentDisconnected,
-      })
-    }
+    await resumeIntoPane(get, paneId, agentKind, sessionId, cwd, {
+      extraFailurePatch: { agentDisconnected: pane.agentDisconnected },
+    })
   },
 
   startNewAgentInPane: async (paneId) => {
@@ -1392,15 +1420,18 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
           if (migrated.paneType === 'agent' && !migrated.sessionId) {
             const isRecoverablePending =
               migrated.sessionDetectionState === 'pending' &&
-              migrated.agentKind &&
+              migrated.agentKind !== undefined &&
               typeof migrated.sessionDetectionStartedAt === 'number'
 
             if (isRecoverablePending && typeof window !== 'undefined' && window.ipc) {
+              const agentKind = migrated.agentKind
+              const startedAt = migrated.sessionDetectionStartedAt
+              if (!agentKind || startedAt === undefined) return migrated
               const recovered = await window.ipc.invoke(
                 'sessions:recover-pending',
-                migrated.agentKind,
+                agentKind,
                 migrated.sessionDetectionCwd ?? migrated.cwd,
-                migrated.sessionDetectionStartedAt,
+                startedAt,
               ).catch(() => null)
               if (typeof recovered === 'string' && recovered) {
                 return {
@@ -1917,367 +1948,5 @@ export function normalizeCwdKey(cwd: string): string {
   return cwd.replace(/\//g, '\\').toLowerCase()
 }
 
-// Wire up module-level IPC listeners once at module load.
-if (typeof window !== 'undefined' && window.ipc) {
-  window.ipc.on('git:branch-updated', (cwdKeys: unknown, branch: unknown) => {
-    if (!Array.isArray(cwdKeys) || !cwdKeys.every((key) => typeof key === 'string')) return
-    const value = typeof branch === 'string' && branch.trim() ? branch : null
-    usePanesStore.setState((s) => ({
-      cwdGitBranches: cwdKeys.reduce((entries, key) => {
-        entries[key] = { status: 'ready', branch: value }
-        return entries
-      }, { ...s.cwdGitBranches }),
-    }))
-  })
-
-  window.ipc.on('pty:cwd', (ptyId: unknown, cwd: unknown) => {
-    if (typeof ptyId === 'string' && typeof cwd === 'string') {
-      usePanesStore.getState().setPaneCwd(ptyId, cwd)
-    }
-  })
-
-  window.ipc.on('pty:exit', (ptyId: unknown, exitCode: unknown, signal: unknown) => {
-    if (typeof ptyId !== 'string') return
-    const code = typeof exitCode === 'number' ? exitCode : null
-    usePanesStore.getState().markPtyExited(ptyId, code, typeof signal === 'number' ? signal : undefined)
-  })
-
-  window.ipc.on('session:detected', (ptyId: unknown, agentKind: unknown, sessionId: unknown) => {
-    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex') || typeof sessionId !== 'string') return
-    const store = usePanesStore.getState()
-    for (const tab of store.tabs) {
-      if (!tab.rootNode) continue
-      const leaves = collectLeaves(tab.rootNode)
-      const pane = leaves.find((l) => l.ptyId === ptyId)
-      if (pane) {
-        usePanesStore.setState((s) => ({
-          tabs: s.tabs.map((t) => t.rootNode ? { ...t, rootNode: updateLeaf(t.rootNode, pane.id, {
-            sessionId,
-            sessionDetectionState: 'detected',
-            sessionDetectionError: undefined,
-            resumeError: undefined,
-          }) } : t),
-        }))
-        break
-      }
-    }
-  })
-
-  window.ipc.on('session:detection-failed', (ptyId: unknown, agentKind: unknown, reason: unknown, mode: unknown) => {
-    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex')) return
-    const message = mode === 'resume'
-      ? 'Session resumed, but the live session id could not be confirmed'
-      : 'Session detection timed out'
-    const store = usePanesStore.getState()
-    for (const tab of store.tabs) {
-      if (!tab.rootNode) continue
-      const pane = collectLeaves(tab.rootNode).find((l) => l.ptyId === ptyId)
-      if (!pane || pane.agentKind !== agentKind) continue
-      store.updatePane(pane.id, {
-        sessionDetectionState: 'failed',
-        sessionDetectionError: typeof reason === 'string' ? `${message}: ${reason}` : message,
-        ...(mode === 'resume' ? {} : { resumeError: message }),
-      })
-      break
-    }
-  })
-
-  window.ipc.on('layout:cwd-repaired', (mapping: unknown) => {
-    if (
-      !mapping ||
-      typeof mapping !== 'object' ||
-      typeof (mapping as CwdRepairMapping).oldCwd !== 'string' ||
-      typeof (mapping as CwdRepairMapping).newCwd !== 'string'
-    ) return
-    usePanesStore.getState().applyCwdRepair(mapping as CwdRepairMapping)
-  })
-
-  // Main tells this window to release a tab (it moved to another window).
-  // In a detached window: just remove it locally (PTYs stay alive in the destination).
-  // In the primary window: mark it as detached so the sidebar still shows it.
-  //
-  // Two-phase (absorb) vs one-phase (bring-home / reattach-home):
-  // - With a releaseId, this is the absorb handshake. We only ACK here and DEFER the actual
-  //   removal/detach to tab:absorb-committed. Acting now would permanently lose the tab (and
-  //   orphan its PTYs) if the absorb later timed out — the source dropped its copy and the
-  //   absorber rolled back its optimistic copy. See specs/atomic-state-audit-followup #1.
-  // - Without a releaseId (bring-home / reattach-home), there is no commit step, so apply
-  //   immediately as before.
-  window.ipc.on('tab:release', (tabId: unknown, ownerWindowId: unknown, releaseId: unknown) => {
-    if (typeof tabId !== 'string') return
-    if (typeof releaseId === 'string') {
-      window.ipc.send('tab:release-applied', releaseId)
-      return
-    }
-    const store = usePanesStore.getState()
-    if (store.isDetachedWindow) {
-      store.removeTabLocally(tabId)
-    } else {
-      store.detachTab(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined)
-    }
-  })
-
-  // Absorb committed: the PTYs have been transferred to the absorbing window, so it is now
-  // safe to finalize releasing our copy of the tab (deferred from tab:release above).
-  window.ipc.on('tab:absorb-committed', (tabId: unknown, ownerWindowId: unknown) => {
-    if (typeof tabId !== 'string') return
-    const store = usePanesStore.getState()
-    if (store.isDetachedWindow) {
-      store.removeTabLocally(tabId)
-    } else {
-      store.detachTab(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined)
-    }
-  })
-
-  // Main tells the primary window to un-mark a tab and move it to the end of the tab bar.
-  window.ipc.on('tab:return', (tabId: unknown) => {
-    if (typeof tabId !== 'string') return
-    usePanesStore.getState().returnTab(tabId)
-    // Re-adopt the PTYs for this tab so main routes PTY output to this window again.
-    // (PTY routing was deleted by unregister() when the detached window closed.)
-    const tab = usePanesStore.getState().tabs.find((t) => t.id === tabId)
-    if (tab?.rootNode) {
-      const ptyIds = collectLeaves(tab.rootNode)
-        .map((l) => l.ptyId)
-        .filter((id): id is string => typeof id === 'string')
-      if (ptyIds.length > 0) {
-        void window.ipc.invoke('tab:adopt', ptyIds)
-      }
-    }
-  })
-
-  // Cross-window pane click: activate the correct tab and pane in this window's renderer.
-  window.ipc.on('pane:focus-remote', (tabId: unknown, paneId: unknown, requestId: unknown) => {
-    if (typeof tabId !== 'string' || typeof paneId !== 'string') return
-    const store = usePanesStore.getState()
-    store.focusPaneInTab(tabId, paneId)
-    if (typeof requestId === 'string') {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.ipc.send('pane:focus-remote-applied', requestId)
-        })
-      })
-    }
-  })
-
-  window.ipc.on('tab:spawn-in-project-remote', (tabId: unknown, payload: unknown, requestId: unknown) => {
-    if (typeof tabId !== 'string' || typeof requestId !== 'string' || !isSpawnInTabPayload(payload)) return
-    usePanesStore.getState().spawnInTab(tabId, payload)
-      .then(() => {
-        window.ipc.send('tab:spawn-in-project-applied', requestId, true)
-      })
-      .catch((err) => {
-        console.error('tab:spawn-in-project-remote failed', err)
-        window.ipc.send('tab:spawn-in-project-applied', requestId, false)
-      })
-  })
-
-  // Immediate focus update from a detached window — updates the synced tab's
-  // focusedPaneId without waiting for the debounced tab:state-sync.
-  window.ipc.on('pane:focus-changed', (windowId: unknown, tabId: unknown, paneId: unknown) => {
-    if (typeof windowId !== 'number' || typeof tabId !== 'string' || typeof paneId !== 'string') return
-    const store = usePanesStore.getState()
-    if (store.isDetachedWindow) return
-    usePanesStore.setState((s) => ({
-      tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
-      detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [String(windowId)]: tabId },
-    }))
-  })
-
-  // Track which OS window currently has focus — used to show exactly one focused pane.
-  window.ipc.on('window:became-active', (winId: unknown) => {
-    if (typeof winId !== 'number') return
-    const { windowId, activeWindowId: prevActive } = usePanesStore.getState()
-
-    // Disarm the local sidebar highlight only when focus genuinely moves into THIS
-    // window from a different window. Plain re-focus of an already-active window and
-    // first focus at startup (prevActive === null) keep the highlight armed, so the
-    // single-window case is never affected. A click on a local sidebar pane sets
-    // skipNextActivationDisarm so the activation it triggers does not disarm.
-    const movedHereFromOtherWindow =
-      winId === windowId && prevActive !== null && prevActive !== windowId
-    const disarm = movedHereFromOtherWindow && !skipNextActivationDisarm
-    if (winId === windowId) skipNextActivationDisarm = false
-
-    if (disarm) {
-      // Re-arm shortly after, so plain window activation still restores the last
-      // focused pane. An intervening explicit focus arms it immediately and the
-      // guard below leaves that alone. The content focus ring stays visible
-      // throughout, so this only briefly defers the sidebar row highlight.
-      if (localRearmTimer !== null) clearTimeout(localRearmTimer)
-      localRearmTimer = setTimeout(() => {
-        localRearmTimer = null
-        const s = usePanesStore.getState()
-        if (s.activeWindowId === s.windowId && !s.localFocusArmed) {
-          usePanesStore.setState({ localFocusArmed: true })
-        }
-      }, LOCAL_REARM_MS)
-    }
-
-    if (pendingRemoteFocusWindowId !== null) {
-      if (winId === pendingRemoteFocusWindowId) {
-        // The correct remote window received OS focus. Clear the guard but keep
-        // pendingFocusTarget visible — focus:target-changed will replace it with
-        // the confirmed target once the detached window acks the focused pane.
-        clearPendingRemoteFocus()
-        usePanesStore.setState({ activeWindowId: winId })
-        return
-      } else if (winId === windowId) {
-        if (disarm) usePanesStore.setState({ localFocusArmed: false })
-        return
-      } else {
-        // A third window got focus; the pending focus request is stale.
-        clearPendingRemoteFocus()
-        usePanesStore.setState({ activeWindowId: winId, pendingFocusTarget: null })
-        return
-      }
-    }
-    usePanesStore.setState({
-      activeWindowId: winId,
-      pendingFocusTarget: null,
-      ...(disarm ? { localFocusArmed: false } : {}),
-    })
-    if (winId === windowId) reportCurrentFocusTarget()
-  })
-
-  window.ipc.on('window:focus-state-request', () => {
-    reportCurrentFocusTarget()
-  })
-
-  window.ipc.on('focus:target-changed', (target: unknown) => {
-    if (
-      typeof target !== 'object' ||
-      target === null ||
-      typeof (target as FocusTarget).windowId !== 'number' ||
-      typeof (target as FocusTarget).tabId !== 'string' ||
-      typeof (target as FocusTarget).paneId !== 'string' ||
-      typeof (target as FocusTarget).version !== 'number'
-    ) return
-    const next = target as FocusTarget
-    const currentVersion = usePanesStore.getState().confirmedFocusTarget?.version ?? 0
-    if (next.version <= currentVersion) return
-    usePanesStore.setState((s) => ({
-      activeWindowId: next.windowId,
-      confirmedFocusTarget: next,
-      // Only clear pendingFocusTarget when the confirmed target is for the same window
-      // we were targeting. If a stale self-focus report from the main window arrives
-      // after the user has already clicked a detached pane (pendingFocusTarget set),
-      // leave pendingFocusTarget intact so the sidebar doesn't flash the wrong pane.
-      pendingFocusTarget: s.pendingFocusTarget?.windowId === next.windowId ? null : s.pendingFocusTarget,
-      // Only sync focusedPaneId for tabs owned by a different window.
-      // For the local window, focusPaneInTab is the ground truth — overwriting here
-      // with a stale self-focus report would revert a pane click that already fired.
-      tabs: next.paneId && next.windowId !== s.windowId
-        ? s.tabs.map((t) => t.id === next.tabId ? { ...t, focusedPaneId: next.paneId } : t)
-        : s.tabs,
-      detachedWindowActiveTabIds: { ...s.detachedWindowActiveTabIds, [String(next.windowId)]: next.tabId },
-    }))
-  })
-
-  // Live sync from a detached window — only the primary window processes this.
-  window.ipc.on('tab:state-sync', (windowId: unknown, tabsJson: unknown, activeTabId: unknown) => {
-    if (typeof windowId !== 'number' || typeof tabsJson !== 'string') return
-    const store = usePanesStore.getState()
-    if (store.isDetachedWindow) return  // only primary merges syncs
-    try {
-      const tabs = JSON.parse(tabsJson) as Tab[]
-      store.syncDetachedTabs(windowId, tabs, typeof activeTabId === 'string' ? activeTabId : undefined)
-    } catch { /* ignore malformed */ }
-  })
-
-  // A pane has been transferred to this window from another window.
-  window.ipc.on('pane:received', (paneJson: unknown, targetTabId: unknown, transferId: unknown) => {
-    if (typeof paneJson !== 'string' || typeof targetTabId !== 'string') return
-    try {
-      const pane = JSON.parse(paneJson) as PaneLeaf
-      const ok = usePanesStore.getState().addPaneToTab(pane, targetTabId)
-      // Ack only if the target tab existed and the pane was added. If it no-ops (tab vanished
-      // mid-drag), staying silent makes main time out and discard instead of removing the source.
-      if (ok && typeof transferId === 'string') {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            window.ipc.send('pane:received-applied', transferId)
-          })
-        })
-      }
-    } catch { /* ignore */ }
-  })
-
-  window.ipc.on('pane:remove-remote', (paneId: unknown) => {
-    if (typeof paneId !== 'string') return
-    usePanesStore.getState().removePaneKeepTab(paneId)
-  })
-
-  // The transfer that delivered this pane (via pane:received) never committed; discard the
-  // optimistically-added pane so it does not linger without PTY output.
-  window.ipc.on('pane:transfer-rolledback', (paneId: unknown) => {
-    if (typeof paneId !== 'string') return
-    usePanesStore.getState().removePaneKeepTab(paneId)
-  })
-
-  window.ipc.on('pane:move-remote', (paneId: unknown, targetTabId: unknown) => {
-    if (typeof paneId !== 'string' || typeof targetTabId !== 'string') return
-    usePanesStore.getState().movePaneToTab(paneId, targetTabId)
-  })
-
-  // Track whether a pane drag is currently over this window. Document-level listeners fire
-  // regardless of any element's pointer-events, so this works for cross-window drags (where
-  // draggedPaneId is null in this renderer). The always-mounted sidebar split overlay reads
-  // this to enable pointer events; without it, an overlay with pointerEvents:none can never
-  // receive onDragEnter and the cross-window split silently no-ops.
-  const setPaneDragActive = (active: boolean): void => {
-    if (usePanesStore.getState().paneDragActive !== active) usePanesStore.setState({ paneDragActive: active })
-  }
-  window.addEventListener('dragover', (e: DragEvent) => {
-    if (e.dataTransfer?.types?.includes(PANE_DRAG_MIME)) setPaneDragActive(true)
-  }, true)
-  window.addEventListener('drop', () => setPaneDragActive(false), true)
-  window.addEventListener('dragend', () => setPaneDragActive(false), true)
-
-  window.ipc.on('renderer:remove-pane', (paneId: unknown) => {
-    if (typeof paneId !== 'string') return
-    usePanesStore.getState().removePaneById(paneId)
-  })
-
-  window.ipc.on('renderer:insert-at-split', (paneJson: unknown, targetPaneId: unknown, direction: unknown, sourceBefore: unknown, transferId: unknown) => {
-    if (
-      typeof paneJson !== 'string' ||
-      typeof targetPaneId !== 'string' ||
-      (direction !== 'horizontal' && direction !== 'vertical') ||
-      typeof sourceBefore !== 'boolean'
-    ) return
-    let ok = false
-    try {
-      const pane = JSON.parse(paneJson) as PaneLeaf
-      ok = usePanesStore.getState().insertPaneAtSplit(pane, targetPaneId, direction, sourceBefore)
-    } catch { return }
-    // Ack only on a real insert. A no-op insert (self-drop, or target vanished mid-drag) must not
-    // ack — otherwise main proceeds to remove the source pane and it is lost.
-    if (ok && typeof transferId === 'string') {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.ipc.send('renderer:insert-at-split-applied', transferId)
-        })
-      })
-    }
-  })
-
-  window.ipc.on('renderer:replace-pane', (paneId: unknown, replacementJson: unknown, transferId: unknown) => {
-    if (typeof paneId !== 'string' || typeof replacementJson !== 'string') return
-    let ok = false
-    try {
-      const replacement = JSON.parse(replacementJson) as PaneLeaf
-      ok = usePanesStore.getState().replacePaneById(paneId, replacement)
-    } catch { return }
-    // Ack only on a real replace, so a swap where one side's pane vanished does not half-apply:
-    // the unacked side triggers the main-side rollback of the side that did apply.
-    if (ok && typeof transferId === 'string') {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.ipc.send('renderer:replace-pane-applied', transferId)
-        })
-      })
-    }
-  })
-}
+wirePanesIpc()
 

@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import * as readline from 'readline'
-import { readdir } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import type { AgentKind, Session, SessionSearchRequest, SessionSearchMatch, SessionSearchResult } from '../../shared/types'
 import type { SessionIndex } from './SessionIndex'
 import type { TranscriptScanner } from './TranscriptScanner'
@@ -18,10 +18,17 @@ import {
   DEFAULT_LIMIT,
   DEFAULT_MATCHES_PER_SESSION,
   CLAUDE_SESSION_ID_RE,
+  SEARCH_CONCURRENCY,
   type FileResult,
   type ClaudeRecord,
   type CodexRecord,
 } from './deepSearch'
+
+interface FileJob {
+  filePath: string
+  agentKind: AgentKind
+  mtimeMs: number
+}
 
 function claudeRoot(): string {
   return path.join(os.homedir(), '.claude', 'projects')
@@ -33,8 +40,14 @@ function codexRoot(): string {
     : path.join(os.homedir(), '.codex', 'sessions')
 }
 
-async function walkJsonlFiles(dir: string): Promise<string[]> {
-  const results: string[] = []
+/**
+ * Walk `dir` for `.jsonl` files and return each with its mtime. Returns entries
+ * shaped for reuse by `CodexSessionScanner` (backlog item 38 wants the two
+ * walks deduplicated — keeping `mtimeMs` on the returned shape serves both).
+ * Transcript files deleted mid-walk are tolerated and skipped.
+ */
+async function walkJsonlFiles(dir: string): Promise<Array<{ path: string; mtimeMs: number }>> {
+  const results: Array<{ path: string; mtimeMs: number }> = []
   let entries: fs.Dirent[]
   try {
     entries = await readdir(dir, { withFileTypes: true })
@@ -46,7 +59,12 @@ async function walkJsonlFiles(dir: string): Promise<string[]> {
     if (entry.isDirectory()) {
       results.push(...(await walkJsonlFiles(fullPath)))
     } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      results.push(fullPath)
+      try {
+        const s = await stat(fullPath)
+        results.push({ path: fullPath, mtimeMs: s.mtimeMs })
+      } catch {
+        // File was deleted between readdir and stat — skip.
+      }
     }
   }
   return results
@@ -108,7 +126,18 @@ async function searchFile(
         // Fall through — also check if the meta line itself is a match
       }
 
-      if (matches.length >= matchesPerSession) return
+      if (matches.length >= matchesPerSession) {
+        // Cap reached — stop draining the file. Safe for both agent kinds:
+        // Claude sessionId comes from the filename (set before the stream
+        // opens); Codex sessionId comes from the session_meta first line, which
+        // has necessarily been processed before the cap can be hit (the cap is
+        // checked after the meta parse on line 1). rl.close() fires the
+        // existing 'close' -> finish() path so the promise resolves with the
+        // collected matches (spec 036, item 12).
+        rl.close()
+        stream.destroy()
+        return
+      }
       if (!matcher(line)) return
 
       try {
@@ -152,7 +181,8 @@ export class DeepSearcher {
   constructor(
     private claudeScanner: TranscriptScanner,
     private codexScanner: CodexSessionScanner,
-    private index: SessionIndex
+    private index: SessionIndex,
+    private onIndexMutation: () => void = () => {},
   ) {}
 
   async search(request: SessionSearchRequest, allSessions: Session[]): Promise<SessionSearchResult[]> {
@@ -174,30 +204,48 @@ export class DeepSearcher {
     if (kinds.includes('claude')) roots.push({ dir: claudeRoot(), agentKind: 'claude' })
     if (kinds.includes('codex')) roots.push({ dir: codexRoot(), agentKind: 'codex' })
 
-    const fileJobs: Array<{ filePath: string; agentKind: AgentKind }> = []
+    const fileJobs: FileJob[] = []
     for (const root of roots) {
       const files = await walkJsonlFiles(root.dir)
-      for (const f of files) fileJobs.push({ filePath: f, agentKind: root.agentKind })
+      for (const f of files) fileJobs.push({ filePath: f.path, agentKind: root.agentKind, mtimeMs: f.mtimeMs })
     }
+
+    // Sort newest-first so the `limit * 2` candidate pool fills from the most
+    // recently modified transcripts across both roots (interleaved by mtime,
+    // not "all Claude in walk order, then all Codex"). Stale sessions can no
+    // longer crowd out recent ones inside the pool (spec 036, item 12).
+    fileJobs.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
     const resultsByKey = new Map<string, FileResult>()
 
-    for (const job of fileJobs) {
-      // Collect up to 2× limit to account for unindexed sessions being skipped
-      if (resultsByKey.size >= limit * 2) break
-
-      const fileResult = await searchFile(job.filePath, job.agentKind, matcher, request)
-      if (!fileResult) continue
-
-      const key = `${fileResult.agentKind}:${fileResult.sessionId}`
-      const existing = resultsByKey.get(key)
-      if (existing) {
-        // Two files sharing a sessionId (shouldn't happen, but merge gracefully)
-        existing.matches.push(...fileResult.matches)
-      } else {
-        resultsByKey.set(key, fileResult)
+    // Fixed-size concurrency pool pulling from a shared cursor over the sorted
+    // jobs. Each worker re-checks the candidate cap before starting a job so the
+    // pool only overshoots `limit * 2` by at most pool-size − 1 in-flight
+    // results — acceptable, the final slice(0, limit) still applies. Stays a
+    // pure Node streamer on the main process; no worker threads, no rg.
+    let cursor = 0
+    async function worker(): Promise<void> {
+      while (true) {
+        if (resultsByKey.size >= limit * 2) return
+        const job = fileJobs[cursor++]
+        if (!job) return
+        const fileResult = await searchFile(job.filePath, job.agentKind, matcher, request)
+        if (!fileResult) continue
+        const key = `${fileResult.agentKind}:${fileResult.sessionId}`
+        const existing = resultsByKey.get(key)
+        if (existing) {
+          // Two files sharing a sessionId (Codex rollouts) — merge gracefully.
+          existing.matches.push(...fileResult.matches)
+        } else {
+          resultsByKey.set(key, fileResult)
+        }
       }
     }
+    const workers: Promise<void>[] = []
+    for (let i = 0; i < Math.min(SEARCH_CONCURRENCY, Math.max(1, fileJobs.length)); i++) {
+      workers.push(worker())
+    }
+    await Promise.all(workers)
 
     const results: SessionSearchResult[] = []
 
@@ -213,6 +261,7 @@ export class DeepSearcher {
               : await this.codexScanner.scanFile(fileResult.filePath)
           if (scanned) {
             this.index.upsert(scanned)
+            this.onIndexMutation()
             session = this.index.get(fileResult.agentKind, fileResult.sessionId) ?? undefined
           }
         } catch {

@@ -3,6 +3,7 @@
   "include": [
     "electron.vite.config.*",
     "playwright.config.ts",
+    "vitest.config.ts",
     "e2e/**/*",
     "src/main/**/*",
     "src/preload/**/*",

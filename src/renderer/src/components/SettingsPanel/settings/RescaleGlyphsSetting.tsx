@@ -1,0 +1,3 @@
+import { useSettingsStore } from '../../../store/settings'
+import { checkStyle, SettingControlRow } from './shared'
+export function RescaleGlyphsSetting(): JSX.Element { const value=useSettingsStore(s=>s.terminalRescaleOverlappingGlyphs), setValue=useSettingsStore(s=>s.setTerminalRescaleOverlappingGlyphs); return <SettingControlRow title="Rescale overlapping glyphs" description="Shrink wide or ambiguous-width characters so they don't bleed into adjacent cells. WebGL renderer only — no effect on DOM renderer."><label style={checkStyle}><input type="checkbox" checked={value} onChange={e=>setValue(e.target.checked)}/>Enabled</label></SettingControlRow> }

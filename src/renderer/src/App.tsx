@@ -13,7 +13,7 @@ import { usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
-import { decodePaneDragPayload, PANE_DRAG_MIME } from './utils/paneDrag'
+import { absorbDroppedTab, transferDroppedPane, PANE_DRAG_MIME, TAB_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
 import type { Tab } from '../../shared/types'
 
@@ -75,8 +75,6 @@ function useGlobalKeyboard() {
     hotkeyOverrides,
   ])
 }
-
-const TAB_DRAG_MIME = 'application/x-multiagent-tab'
 
 export default function App(): JSX.Element {
   useGlobalKeyboard()
@@ -145,20 +143,10 @@ export default function App(): JSX.Element {
       // Primary window: restore saved layout as before.
       return window.ipc.invoke('layout:load').then((saved) => {
         const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
-        if (data?.tabs?.length) {
-          void usePanesStore.getState().applyLayout(data)
-        }
+        if (data?.tabs?.length) return usePanesStore.getState().applyLayout(data)
+        return undefined
       }).catch(() => {})
-    }).catch(() => {
-      // Fallback: treat as primary window
-      window.ipc.invoke('layout:load').then((saved) => {
-        const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean } | null
-        if (data?.tabs?.length) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          void usePanesStore.getState().applyLayout(data as any)
-        }
-      }).catch(() => {})
-    }).finally(() => setLayoutReady(true))
+    }).catch(() => {}).finally(() => setLayoutReady(true))
   }, [])
 
   // Detached window: push tab state to primary on every change (debounced).
@@ -240,33 +228,8 @@ export default function App(): JSX.Element {
         if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(PANE_DRAG_MIME)) e.preventDefault()
       }}
       onDrop={(e) => {
-        const panePayload = decodePaneDragPayload(e.dataTransfer)
-        if (panePayload && activeTabId && windowId !== null) {
-          e.preventDefault()
-          e.stopPropagation()
-          if (panePayload.sourceWindowId === windowId) {
-            movePaneToTab(panePayload.pane.id, activeTabId)
-          } else {
-            window.ipc.invoke('pane:transfer', { ...panePayload, targetTabId: activeTabId, targetWindowId: windowId }).catch(console.error)
-          }
-          return
-        }
-        const data = e.dataTransfer.getData(TAB_DRAG_MIME)
-        if (!data) return
-        try {
-          const { tab, ptyIds, sourceWindowId } = JSON.parse(data) as {
-            tab: Tab; ptyIds: string[]; sourceWindowId: number | null
-          }
-          if (sourceWindowId === windowId) return // intra-window drag
-          e.preventDefault()
-          e.stopPropagation()
-          receiveTab(tab)
-          window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
-            .then((ok) => {
-              if (!ok) usePanesStore.getState().removeTabLocally(tab.id)
-            })
-            .catch(console.error)
-        } catch { /* ignore */ }
+        if (activeTabId && transferDroppedPane(e, activeTabId, windowId, { movePaneToTab })) return
+        absorbDroppedTab(e, windowId, { receiveTab, removeTabLocally: usePanesStore.getState().removeTabLocally })
       }}
     >
       {isWrapLayout ? (

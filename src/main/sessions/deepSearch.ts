@@ -15,6 +15,11 @@ import type { AgentKind, Session, SessionSearchMatch } from '../../shared/types'
 export const SNIPPET_MAX_LEN = 500
 export const DEFAULT_LIMIT = 50
 export const DEFAULT_MATCHES_PER_SESSION = 5
+/**
+ * Fixed-size concurrency pool for the deep-search file walk (spec 036, item 12).
+ * Within the 4-8 band; do not make it configurable or adaptive.
+ */
+export const SEARCH_CONCURRENCY = 6
 export const CLAUDE_SESSION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 

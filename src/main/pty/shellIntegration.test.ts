@@ -3,6 +3,7 @@ import {
   parseOsc7,
   parseShellIntegrationCwd,
   unescapeShellIntegrationValue,
+  unterminatedOscTail,
 } from './shellIntegration'
 
 // Shell-integration CWD reporting — OSC 633;P;Cwd= (primary, emitted by
@@ -25,6 +26,17 @@ describe('unescapeShellIntegrationValue', () => {
   })
   it('leaves a value with no escapes untouched', () => {
     expect(unescapeShellIntegrationValue('/home/user')).toBe('/home/user')
+  })
+})
+
+describe('unterminatedOscTail', () => {
+  it('keeps a split OSC sequence and drops completed sequences', () => {
+    expect(unterminatedOscTail('text\x1b]633;P;Cwd=C:\\pro')).toBe('\x1b]633;P;Cwd=C:\\pro')
+    expect(unterminatedOscTail('text\x1b]633;D\x07prompt')).toBe('')
+  })
+
+  it('keeps a trailing ESC that may begin an OSC in the next chunk', () => {
+    expect(unterminatedOscTail('text\x1b')).toBe('\x1b')
   })
 })
 

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useSessionsStore } from '../store/sessions'
 import { usePanesStore } from '../store/panes'
 import type { AgentKind, Session, PaneNode } from '../../../shared/types'
@@ -38,20 +38,26 @@ export function useSessions() {
     [sessions, liveIds]
   )
 
+  const resumable = useMemo(
+    () => withLive.filter((s) => s.status === 'resumable' && !liveIds.has(sessionKey(s.agentKind, s.sessionId))),
+    [withLive, liveIds],
+  )
+  const search = useCallback((query: string): Session[] => {
+    const q = query.toLowerCase()
+    return withLive.filter(
+      (s) =>
+        s.projectName.toLowerCase().includes(q) ||
+        s.agentKind.toLowerCase().includes(q) ||
+        s.displayName?.toLowerCase().includes(q) ||
+        s.firstMessage?.toLowerCase().includes(q) ||
+        s.lastMessage?.toLowerCase().includes(q)
+    )
+  }, [withLive])
+
   return {
     sessions: withLive,
     loading,
-    resumable: withLive.filter((s) => s.status === 'resumable' && !liveIds.has(sessionKey(s.agentKind, s.sessionId))),
-    search: (query: string): Session[] => {
-      const q = query.toLowerCase()
-      return withLive.filter(
-        (s) =>
-          s.projectName.toLowerCase().includes(q) ||
-          s.agentKind.toLowerCase().includes(q) ||
-          s.displayName?.toLowerCase().includes(q) ||
-          s.firstMessage?.toLowerCase().includes(q) ||
-          s.lastMessage?.toLowerCase().includes(q)
-      )
-    },
+    resumable,
+    search,
   }
 }

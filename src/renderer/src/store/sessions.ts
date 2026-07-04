@@ -20,7 +20,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   searchSessions: async (query) => {
     if (typeof window !== 'undefined' && window.ipc) {
       try {
-        return (await window.ipc.invoke('sessions:search', query)) as Session[]
+        return await window.ipc.invoke('sessions:search', query)
       } catch {
         // fall through to local filter
       }
@@ -44,7 +44,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   repairSessionCwd: async (oldCwd, newCwd) => {
     let result: SessionRepairCwdResult = { ok: false, sessions: [], error: 'Repair is unavailable' }
     if (typeof window !== 'undefined' && window.ipc) {
-      result = await window.ipc.invoke('sessions:repair-cwd', oldCwd, newCwd) as SessionRepairCwdResult
+      result = await window.ipc.invoke('sessions:repair-cwd', oldCwd, newCwd)
     }
     const updated = result.sessions
     if (updated.length > 0) {

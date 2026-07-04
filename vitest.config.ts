@@ -15,7 +15,7 @@ import { resolve } from 'path'
  * reliably — do not rely on `extends` for this.
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react({})],
   resolve: {
     alias: { '@renderer': resolve('src/renderer/src'), '@shared': resolve('src/shared') },
   },
@@ -59,7 +59,7 @@ export default defineConfig({
     projects: [
       {
         // Renderer: React components + stores + utils — DOM environment.
-        plugins: [react()],
+        plugins: [react({})],
         resolve: {
           alias: { '@renderer': resolve('src/renderer/src'), '@shared': resolve('src/shared') },
         },

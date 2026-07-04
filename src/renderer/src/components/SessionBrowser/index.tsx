@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { overlayStyles, ui } from '../../styles/theme'
 import { usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import { useSessionsStore } from '../../store/sessions'
@@ -57,16 +58,21 @@ export function SessionBrowser(): JSX.Element {
     setSelectedProject(null)
   }, [mode, query])
 
+  // Bump the generation unconditionally on every invocation — including the
+  // empty-query branch — so an in-flight response to a superseded query is
+  // always discarded. Without this bump, clearing the input leaves the gen
+  // equal to the in-flight request's, and stale results repopulate the empty
+  // view (spec 036, item 5).
   const runDeepSearch = useCallback(async (q: string) => {
+    const gen = ++searchGenRef.current
     if (!q.trim()) {
       setDeepResults([])
       setDeepSearching(false)
       return
     }
-    const gen = ++searchGenRef.current
     setDeepSearching(true)
     try {
-      const results = (await window.ipc.invoke('sessions:search-deep', { query: q })) as SessionSearchResult[]
+      const results = await window.ipc.invoke('sessions:search-deep', { query: q })
       if (searchGenRef.current !== gen) return
       setDeepResults(results)
     } catch {
@@ -86,7 +92,7 @@ export function SessionBrowser(): JSX.Element {
     }
   }, [query, mode, runDeepSearch])
 
-  const summarySessions = query ? search(query) : sessions
+  const summarySessions = useMemo(() => query ? search(query) : sessions, [query, sessions, search])
   const summaryGrouped = useMemo(() => groupByProject(summarySessions), [summarySessions])
   const deepGrouped = useMemo(() => groupResultsByProject(deepResults), [deepResults])
 
@@ -139,13 +145,8 @@ export function SessionBrowser(): JSX.Element {
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 50,
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        ...overlayStyles.backdrop,
+        zIndex: ui.z.sessionOverlay,
       }}
       onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
       onClick={() => { if (mouseDownOnOverlay.current) closeOverlays() }}
@@ -156,13 +157,10 @@ export function SessionBrowser(): JSX.Element {
           width: '85vw',
           maxWidth: 960,
           height: '75vh',
-          backgroundColor: '#1a1b1e',
-          border: '1px solid #2a2b2e',
-          borderRadius: 10,
+          ...overlayStyles.panel,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
         }}
       >
         {/* Header */}

@@ -62,7 +62,7 @@ export function DirPicker({
     if (!window.ipc) return
     void (async () => {
       try {
-        const dirs = await window.ipc.invoke('dirs:recent-get') as string[]
+        const dirs = await window.ipc.invoke('dirs:recent-get')
         setRecentDirs(dirs)
       } catch {
         // ignore
@@ -100,7 +100,7 @@ export function DirPicker({
   async function browse(): Promise<void> {
     if (!window.ipc) return
     try {
-      const picked = await window.ipc.invoke('dialog:pick-directory', title, value || initial) as string | null
+      const picked = await window.ipc.invoke('dialog:pick-directory', title, value || initial)
       if (picked) {
         setValue(picked)
         closeDropdown()

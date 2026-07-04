@@ -36,6 +36,8 @@ export const ui = {
     resizeHandle: 10,
     menuBackdrop: 200,
     menu: 201,
+    sessionOverlay: 50,
+    overlay: 60,
   },
   chrome: {
     height: 42,
@@ -51,6 +53,15 @@ export const ui = {
     darkScrollbar: 'dark-scrollbar',
   },
 } as const
+
+export const overlayStyles = {
+  backdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  backdropLight: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '15vh' },
+  panel: { backgroundColor: ui.color.panel, border: `1px solid ${ui.color.border}`, borderRadius: ui.radius.modal, overflow: 'hidden', boxShadow: ui.shadow.overlay },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${ui.color.border}`, flexShrink: 0 },
+  headerTitle: { fontSize: 14, fontWeight: 600, color: ui.color.textStrong },
+  headerHint: { fontSize: 11, color: ui.color.textDim },
+} satisfies Record<string, React.CSSProperties>
 
 export const border = {
   default: `1px solid ${ui.color.border}`,

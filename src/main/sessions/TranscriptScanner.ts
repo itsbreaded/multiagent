@@ -29,50 +29,9 @@ export interface ScannedSession {
   mtimeMs: number
 }
 
-// Cache: filePath:mtimeMs -> ScannedSession
-const scanCache = new Map<string, ScannedSession>()
-
-async function readLines(filePath: string, maxLines: number): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const lines: string[] = []
-    const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-
-    rl.on('line', (line) => {
-      lines.push(line)
-      if (lines.length >= maxLines) {
-        rl.close()
-        stream.destroy()
-      }
-    })
-
-    rl.on('close', () => resolve(lines))
-    rl.on('error', reject)
-    stream.on('error', reject)
-  })
-}
-
-async function readLastLines(filePath: string, maxLines: number): Promise<string[]> {
-  // Read the entire file tail by streaming with a rolling buffer
-  return new Promise((resolve, reject) => {
-    const buffer: string[] = []
-    const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-
-    rl.on('line', (line) => {
-      buffer.push(line)
-      if (buffer.length > maxLines) {
-        buffer.shift()
-      }
-    })
-
-    rl.on('close', () => resolve(buffer))
-    rl.on('error', reject)
-    stream.on('error', reject)
-  })
-}
-
 export class TranscriptScanner {
+  private scanCache = new Map<string, ScannedSession>()
+
   async scanAll(): Promise<ScannedSession[]> {
     const projectsDir = path.join(os.homedir(), '.claude', 'projects')
 
@@ -87,6 +46,7 @@ export class TranscriptScanner {
     }
 
     const results: ScannedSession[] = []
+    const walked = new Set<string>()
 
     for (const projectDir of projectDirs) {
       let files: string[]
@@ -100,16 +60,21 @@ export class TranscriptScanner {
       }
 
       for (const filePath of files) {
+        walked.add(filePath)
         const session = await this.scanFile(filePath)
         if (session) results.push(session)
       }
+    }
+
+    for (const key of this.scanCache.keys()) {
+      const separator = key.lastIndexOf(':')
+      if (separator >= 0 && !walked.has(key.slice(0, separator))) this.scanCache.delete(key)
     }
 
     return results
   }
 
   async scanFile(filePath: string): Promise<ScannedSession | null> {
-    let stat: fsPromises.FileHandle | undefined
     let mtimeMs: number
 
     try {
@@ -120,17 +85,15 @@ export class TranscriptScanner {
     }
 
     const cacheKey = `${filePath}:${mtimeMs}`
-    const cached = scanCache.get(cacheKey)
+    const cached = this.scanCache.get(cacheKey)
     if (cached) return cached
 
     // Clear stale cache entries for this file path
-    for (const key of scanCache.keys()) {
+    for (const key of this.scanCache.keys()) {
       if (key.startsWith(`${filePath}:`)) {
-        scanCache.delete(key)
+        this.scanCache.delete(key)
       }
     }
-
-    void stat
 
     let sessionId = ''
     let cwd = ''
@@ -142,10 +105,9 @@ export class TranscriptScanner {
     let messageCount = 0
 
     try {
-      // Read first 40 lines for header info
-      const headLines = await readLines(filePath, 40)
-
-      for (const line of headLines) {
+      const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
+      const lines = readline.createInterface({ input: stream, crlfDelay: Infinity })
+      for await (const line of lines) {
         if (!line.trim()) continue
         const record = parseRecord(line)
         if (!record) continue
@@ -154,37 +116,18 @@ export class TranscriptScanner {
         if (!cwd && record.cwd) cwd = record.cwd
         if (!gitBranch && record.gitBranch) gitBranch = record.gitBranch
         if (!firstActivity && record.timestamp) firstActivity = record.timestamp
-
-        if (isRealUserMessage(record)) {
-          messageCount++
-          if (!firstMessage) {
-            const text = extractText(record)
-            if (text) firstMessage = truncate(text)
-          }
-          const text = extractText(record)
-          if (text) lastMessage = truncate(text)
-        }
-      }
-
-      // Read last 15 lines for tail info
-      const tailLines = await readLastLines(filePath, 15)
-
-      for (const line of tailLines) {
-        if (!line.trim()) continue
-        const record = parseRecord(line)
-        if (!record) continue
-
         if (record.timestamp) lastActivity = record.timestamp
 
         if (isRealUserMessage(record)) {
+          messageCount++
           const text = extractText(record)
-          if (text) lastMessage = truncate(text)
+          if (text) {
+            const truncated = truncate(text)
+            if (!firstMessage) firstMessage = truncated
+            lastMessage = truncated
+          }
         }
       }
-
-      // Count remaining messages by streaming full file
-      // We already counted up to 40 lines above - do a full count pass
-      messageCount = await countUserMessages(filePath)
     } catch {
       return null
     }
@@ -208,25 +151,7 @@ export class TranscriptScanner {
       mtimeMs
     }
 
-    scanCache.set(cacheKey, session)
+    this.scanCache.set(cacheKey, session)
     return session
   }
-}
-
-async function countUserMessages(filePath: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    let count = 0
-    const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-
-    rl.on('line', (line) => {
-      if (!line.trim()) return
-      const record = parseRecord(line)
-      if (record && isRealUserMessage(record)) count++
-    })
-
-    rl.on('close', () => resolve(count))
-    rl.on('error', reject)
-    stream.on('error', reject)
-  })
 }

@@ -9,6 +9,15 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import type { BrowserContentResult, BrowserViewManager } from '../browser/BrowserViewManager'
+import {
+  optionalBoolean,
+  optionalNumber,
+  optionalString,
+  optionalStringArray,
+  requireCookies,
+  requireNumber,
+  requireString,
+} from './toolArgs'
 
 export class BrowserMcpServer {
   constructor(private browser: BrowserViewManager) {}
@@ -268,18 +277,23 @@ export class BrowserMcpServer {
       try {
         switch (name) {
           case 'browser_navigate': {
-            const nav = await this.browser.navigate(args!.url as string)
+            const url = requireString(args, 'url')
+            const nav = await this.browser.navigate(url)
             return { content: [{ type: 'text' as const, text: `Navigated to ${nav.url}\nTitle: ${nav.title}` }] }
           }
 
           case 'browser_click': {
-            const nav = await this.browser.click(args!.selector as string)
-            return { content: [{ type: 'text' as const, text: `Clicked ${args!.selector}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
+            const selector = requireString(args, 'selector')
+            const nav = await this.browser.click(selector)
+            return { content: [{ type: 'text' as const, text: `Clicked ${selector}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
           }
 
-          case 'browser_type':
-            await this.browser.type(args!.selector as string, args!.text as string)
+          case 'browser_type': {
+            const selector = requireString(args, 'selector')
+            const text = requireString(args, 'text')
+            await this.browser.type(selector, text)
             return { content: [{ type: 'text' as const, text: 'Typed text' }] }
+          }
 
           case 'browser_screenshot': {
             const dataUrl = await this.browser.screenshot()
@@ -290,33 +304,33 @@ export class BrowserMcpServer {
           }
 
           case 'browser_evaluate': {
-            const result = await this.browser.evaluate(args!.js as string)
+            const js = requireString(args, 'js')
+            const result = await this.browser.evaluate(js)
             return { content: [{ type: 'text' as const, text: result === undefined ? 'undefined' : JSON.stringify(result) }] }
           }
 
           case 'browser_get_content': {
-            const result = await this.browser.getContent({
-              selector: args?.selector as string | undefined,
-              maxChars: args?.max_chars as number | undefined,
-            })
+            const selector = optionalString(args, 'selector')
+            const maxChars = optionalNumber(args, 'max_chars')
+            const result = await this.browser.getContent({ selector, maxChars })
             return { content: [{ type: 'text' as const, text: formatContentResult(result) }] }
           }
 
-          case 'browser_scroll':
-            await this.browser.scroll(
-              (args!.x ?? 0) as number,
-              (args!.y ?? 0) as number
-            )
+          case 'browser_scroll': {
+            const x = optionalNumber(args, 'x', 0) ?? 0
+            const y = optionalNumber(args, 'y', 0) ?? 0
+            await this.browser.scroll(x, y)
             return { content: [{ type: 'text' as const, text: 'Scrolled' }] }
+          }
 
-          case 'browser_wait_for':
-            await this.browser.waitFor(
-              args!.selector as string,
-              (args!.timeout_ms ?? 5000) as number
-            )
+          case 'browser_wait_for': {
+            const selector = requireString(args, 'selector')
+            const timeoutMs = optionalNumber(args, 'timeout_ms', 5000) ?? 5000
+            await this.browser.waitFor(selector, timeoutMs)
             return {
-              content: [{ type: 'text' as const, text: `Element found: ${args!.selector}` }],
+              content: [{ type: 'text' as const, text: `Element found: ${selector}` }],
             }
+          }
 
           case 'browser_go_back': {
             const nav = await this.browser.goBack()
@@ -328,63 +342,77 @@ export class BrowserMcpServer {
             return { content: [{ type: 'text' as const, text: `Navigated forward to ${nav.url}\nTitle: ${nav.title}` }] }
           }
 
-          case 'browser_hover':
-            await this.browser.hover(args!.selector as string)
-            return { content: [{ type: 'text' as const, text: `Hovered ${args!.selector}` }] }
+          case 'browser_hover': {
+            const selector = requireString(args, 'selector')
+            await this.browser.hover(selector)
+            return { content: [{ type: 'text' as const, text: `Hovered ${selector}` }] }
+          }
 
-          case 'browser_keyboard':
-            await this.browser.keyboard(
-              args!.key as string,
-              (args!.modifiers ?? []) as string[]
-            )
-            return { content: [{ type: 'text' as const, text: `Sent key: ${args!.key}` }] }
+          case 'browser_keyboard': {
+            const key = requireString(args, 'key')
+            const modifiers = optionalStringArray(args, 'modifiers')
+            await this.browser.keyboard(key, modifiers)
+            return { content: [{ type: 'text' as const, text: `Sent key: ${key}` }] }
+          }
 
-          case 'browser_wait_for_load':
-            await this.browser.waitForLoad((args!.timeout_ms ?? 10000) as number)
+          case 'browser_wait_for_load': {
+            const timeoutMs = optionalNumber(args, 'timeout_ms', 10000) ?? 10000
+            await this.browser.waitForLoad(timeoutMs)
             return { content: [{ type: 'text' as const, text: 'Page finished loading' }] }
+          }
 
-          case 'browser_select':
-            await this.browser.selectOption(args!.selector as string, args!.value as string)
-            return { content: [{ type: 'text' as const, text: `Selected "${args!.value}" in ${args!.selector}` }] }
+          case 'browser_select': {
+            const selector = requireString(args, 'selector')
+            const value = requireString(args, 'value')
+            await this.browser.selectOption(selector, value)
+            return { content: [{ type: 'text' as const, text: `Selected "${value}" in ${selector}` }] }
+          }
 
           case 'browser_get_url':
             return { content: [{ type: 'text' as const, text: this.browser.getCurrentUrl() }] }
 
           case 'browser_click_text': {
-            const nav = await this.browser.clickText(args!.text as string, (args!.exact ?? false) as boolean)
-            return { content: [{ type: 'text' as const, text: `Clicked element with text: ${args!.text}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
+            const text = requireString(args, 'text')
+            const exact = optionalBoolean(args, 'exact', false)
+            const nav = await this.browser.clickText(text, exact)
+            return { content: [{ type: 'text' as const, text: `Clicked element with text: ${text}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
           }
 
           case 'browser_click_at': {
-            const nav = await this.browser.clickAt(args!.x as number, args!.y as number)
-            return { content: [{ type: 'text' as const, text: `Clicked at (${args!.x}, ${args!.y})\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
+            const x = requireNumber(args, 'x')
+            const y = requireNumber(args, 'y')
+            const nav = await this.browser.clickAt(x, y)
+            return { content: [{ type: 'text' as const, text: `Clicked at (${x}, ${y})\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
           }
 
-          case 'browser_hover_at':
-            await this.browser.hoverAt(args!.x as number, args!.y as number)
-            return { content: [{ type: 'text' as const, text: `Hovered at (${args!.x}, ${args!.y})` }] }
+          case 'browser_hover_at': {
+            const x = requireNumber(args, 'x')
+            const y = requireNumber(args, 'y')
+            await this.browser.hoverAt(x, y)
+            return { content: [{ type: 'text' as const, text: `Hovered at (${x}, ${y})` }] }
+          }
 
           case 'browser_get_elements': {
-            const elements = await this.browser.getElements(args!.selector as string)
+            const selector = requireString(args, 'selector')
+            const elements = await this.browser.getElements(selector)
             return { content: [{ type: 'text' as const, text: JSON.stringify(elements, null, 2) }] }
           }
 
           case 'browser_get_links': {
-            const links = await this.browser.getLinks(args?.text_filter as string | undefined)
+            const textFilter = optionalString(args, 'text_filter')
+            const links = await this.browser.getLinks(textFilter)
             return { content: [{ type: 'text' as const, text: JSON.stringify(links, null, 2) }] }
           }
 
-          case 'browser_wait_for_text':
-            await this.browser.waitForText(args!.text as string, (args!.timeout_ms ?? 5000) as number)
-            return { content: [{ type: 'text' as const, text: `Text found: ${args!.text}` }] }
+          case 'browser_wait_for_text': {
+            const text = requireString(args, 'text')
+            const timeoutMs = optionalNumber(args, 'timeout_ms', 5000) ?? 5000
+            await this.browser.waitForText(text, timeoutMs)
+            return { content: [{ type: 'text' as const, text: `Text found: ${text}` }] }
+          }
 
           case 'browser_set_cookies': {
-            const cookies = (args!.cookies as Array<{ url: string; name: string; value: string; domain?: string; path?: string; secure?: boolean; http_only?: boolean; expiration_date?: number }>)
-              .map(({ http_only, expiration_date, ...rest }) => ({
-                ...rest,
-                ...(http_only !== undefined ? { httpOnly: http_only } : {}),
-                ...(expiration_date !== undefined ? { expirationDate: expiration_date } : {}),
-              }))
+            const cookies = requireCookies(args, 'cookies')
             await this.browser.setCookies(cookies)
             return { content: [{ type: 'text' as const, text: `Set ${cookies.length} cookie(s)` }] }
           }
