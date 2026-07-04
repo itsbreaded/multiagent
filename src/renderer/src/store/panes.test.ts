@@ -32,6 +32,55 @@ function tabRoot(tabId: string): PaneNode | undefined {
   return usePanesStore.getState().tabs.find((t) => t.id === tabId)?.rootNode
 }
 
+describe('usePanesStore — stale resume failures', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    Object.defineProperty(window, 'ipc', { configurable: true, value: undefined })
+  })
+
+  function pendingResume(): { promise: Promise<never>; reject: (error: Error) => void } {
+    let reject!: (error: Error) => void
+    const promise = new Promise<never>((_resolve, rejectPromise) => { reject = rejectPromise })
+    return { promise, reject }
+  }
+
+  it('does not stamp resumeError after the pane gains a ptyId', async () => {
+    const pane = makeLeaf('C:\\repo', 'agent', 'claude')
+    pane.sessionId = 'session-1'
+    plantTab(pane)
+    const deferred = pendingResume()
+    Object.defineProperty(window, 'ipc', { configurable: true, value: { invoke: vi.fn(() => deferred.promise) } })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const resume = usePanesStore.getState().resumeAgentPane(pane.id)
+    usePanesStore.getState().updatePane(pane.id, { ptyId: 'pty-new' })
+    deferred.reject(new Error('late failure'))
+    await resume
+
+    const current = usePanesStore.getState().findPaneInAnyTab(pane.id)
+    expect(current?.ptyId).toBe('pty-new')
+    expect(current?.resumeError).toBeUndefined()
+  })
+
+  it('does not stamp resumeError after the pane changes session', async () => {
+    const pane = makeLeaf('C:\\repo', 'agent', 'claude')
+    pane.sessionId = 'session-1'
+    plantTab(pane)
+    const deferred = pendingResume()
+    Object.defineProperty(window, 'ipc', { configurable: true, value: { invoke: vi.fn(() => deferred.promise) } })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const resume = usePanesStore.getState().resumeAgentPane(pane.id)
+    usePanesStore.getState().updatePane(pane.id, { sessionId: 'session-2' })
+    deferred.reject(new Error('late failure'))
+    await resume
+
+    const current = usePanesStore.getState().findPaneInAnyTab(pane.id)
+    expect(current?.sessionId).toBe('session-2')
+    expect(current?.resumeError).toBeUndefined()
+  })
+})
+
 describe('usePanesStore — bulk sidebar section state', () => {
   it('expands and collapses every project section without changing Recent', () => {
     const tabA = plantTab(makeLeaf('C:\\a'))

@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 
@@ -66,6 +66,16 @@ async function spawnShell(page: Page, userDataDir: string): Promise<{ tab: Saved
     return ptyId
   }).not.toBe('')
   return { tab: tab!, ptyId }
+}
+
+async function tearOffTab(app: ElectronApplication, page: Page, tabName: string): Promise<Page> {
+  const tabElement = page.locator('.tab-strip').getByText(tabName, { exact: true }).locator('..')
+  const transfer = await page.evaluateHandle(() => new DataTransfer())
+  await tabElement.dispatchEvent('mousedown', { button: 0 })
+  await tabElement.dispatchEvent('dragstart', { dataTransfer: transfer })
+  await tabElement.dispatchEvent('dragend', { dataTransfer: transfer, screenX: -1_000, screenY: -1_000 })
+  await expect.poll(() => app.windows().length).toBe(2)
+  return app.windows().find((candidate) => candidate !== page)!
 }
 
 test.describe('cold-start layout restore', () => {
@@ -176,6 +186,99 @@ test.describe('cold-start layout restore', () => {
       firstMessage: 'The quasarneedle appears only in this fixture.',
     })
     expect(misses).toEqual([])
+  })
+
+  test('keeps valid sessions visible when one transcript is malformed', async () => {
+    const transcriptDir = join(homeDir, '.claude', 'projects', 'fixture-project')
+    await writeFile(join(transcriptDir, 'malformed.jsonl'), '{this is not valid json\n', 'utf8')
+    const sessions = await page.evaluate(() => window.ipc.invoke('sessions:refresh')) as Array<{ sessionId: string }>
+    expect(sessions.map((session) => session.sessionId)).toContain('fts-session')
+  })
+
+  test('commits comma-formatted scrollback through the real settings UI', async () => {
+    await page.getByTitle('Settings').click()
+    await page.getByText('Terminal', { exact: true }).click()
+    const row = page.getByText('Scrollback lines', { exact: true }).locator('..').locator('..')
+    const input = row.locator('input')
+    await input.fill('500,000')
+    await input.blur()
+    await expect(input).toHaveValue('500000')
+  })
+
+  test('broadcasts an external session deletion to a detached window', async () => {
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+    const update = detached.evaluate(() => new Promise<Array<{ sessionId: string }>>((resolve) => {
+      const unsubscribe = window.ipc.on('sessions:updated', (sessions: unknown) => {
+        unsubscribe()
+        resolve(sessions as Array<{ sessionId: string }>)
+      })
+    }))
+    await page.evaluate(() => window.ipc.invoke('sessions:delete', 'claude', 'fts-session'))
+    const sessions = await update
+    expect(sessions.map((session) => session.sessionId)).not.toContain('fts-session')
+  })
+
+  test('closing a detached shell tab from the primary sidebar kills its process', async () => {
+    const { ptyId } = await spawnShell(page, userDataDir)
+    const ready = await page.evaluate((id) => window.ipc.invoke('pty:get-ready', id), ptyId) as { pid: number }
+    const pid = ready.pid
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await expect(page.locator('.tab-strip').getByText('Alpha', { exact: true })).toHaveCount(0)
+
+    await page.getByText('Alpha', { exact: true }).click({ button: 'right' })
+    await page.getByText('Close tab', { exact: true }).click()
+    await expect.poll(() => app.evaluate((_electron, childPid) => {
+      try { process.kill(childPid, 0); return true } catch { return false }
+    }, pid)).toBe(false)
+    const detachedAlphaCount = () => detached.isClosed()
+      ? Promise.resolve(0)
+      : detached.locator('.tab-strip').getByText('Alpha', { exact: true }).count()
+    await expect.poll(detachedAlphaCount).toBe(0)
+    await page.waitForTimeout(5_500)
+    expect(await detachedAlphaCount()).toBe(0)
+  })
+
+  test('surfaces a missing PTY worker instead of leaving a shell pane hanging', async () => {
+    test.setTimeout(60_000)
+    await app.close()
+    const workerPath = join(repoRoot, 'out', 'main', 'ptyWorker.js')
+    const hiddenWorkerPath = `${workerPath}.e2e-hidden`
+    await rename(workerPath, hiddenWorkerPath)
+    try {
+      await launchTestApp()
+      await page.evaluate(() => {
+        localStorage.setItem('multiagent:settings', JSON.stringify({
+          optimizedTerminalRenderer: true,
+          terminalGpuAcceleration: 'off',
+        }))
+      })
+      await page.reload()
+      await page.waitForLoadState('domcontentloaded')
+      await page.getByTitle(/Command palette/).click()
+      await page.keyboard.type('New Shell Pane')
+      await page.keyboard.press('Enter')
+      await expect(page.locator('.xterm-rows')).toContainText('terminal error:', { timeout: 10_000 })
+    } finally {
+      await app?.close()
+      await rename(hiddenWorkerPath, workerPath)
+    }
+  })
+
+  test('moves a closed agent pane back to Recent while a refresh is in flight', async () => {
+    const sessionRow = page.getByTitle(projectCwd, { exact: true }).filter({
+      hasText: 'The quasarneedle appears only in this fixture.',
+    })
+    await sessionRow.click()
+    await expect(sessionRow).toHaveCount(0)
+    const closePane = page.getByTitle(/^Close pane \(/)
+    await expect(closePane).toHaveCount(1)
+
+    await page.evaluate(() => { void window.ipc.invoke('sessions:refresh') })
+    await closePane.click()
+    await expect(page.getByTitle(projectCwd, { exact: true }).filter({
+      hasText: 'The quasarneedle appears only in this fixture.',
+    })).toHaveCount(1)
   })
 
   test('summary search never rejects on FTS-adversarial queries (spec 036 item 7)', async () => {

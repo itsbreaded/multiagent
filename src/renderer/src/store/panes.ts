@@ -874,6 +874,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   closeTab: (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId)
+    // The primary keeps a detached tab as a sidebar proxy. Release the owning
+    // renderer before removing that proxy so its next state sync cannot restore
+    // a tab whose PTYs were just torn down. tab:return is harmless because this
+    // local copy is removed synchronously below.
+    if (tab?.detached && typeof window !== 'undefined' && window.ipc) {
+      void window.ipc.invoke('tab:bring-home', tabId).catch((err) => {
+        console.error('tab:bring-home before close failed', err)
+      })
+    }
     const previousHydrated = get().hydratedTabIds
     const teardown = tab?.rootNode ? teardownTabRuntime(tab) : { killPromises: [], needsSessionRefresh: false }
     set((s) => {

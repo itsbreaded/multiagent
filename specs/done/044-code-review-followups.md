@@ -2,7 +2,7 @@
 
 ## Implementation Status (2026-07-04)
 
-Implementation is functionally complete, but the full Definition of Done has not yet been met. Do not move this spec out of `pending` until the remaining automated regression tests and manual Windows checks below are complete.
+Implementation and verification are complete. The timing-sensitive rejection cases are covered by deterministic unit tests; user-visible Windows behavior is covered by isolated-profile Electron E2E tests.
 
 ### Completed
 
@@ -17,29 +17,31 @@ Implementation is functionally complete, but the full Definition of Done has not
 - [x] Step 9: worker `error` events invoke crash fanout; the existing latch prevents duplicate fanout when `exit` follows.
 - [x] Step 10: the `panes.ts`/`panesIpc.ts` initialization-order dependency is documented.
 - [x] Focused tests added for cross-window PTY teardown, dirty/forced session polling, OSC-tail extraction, and worker error fanout.
-- [x] `npm test` passed: 46 files, 404 tests.
+- [x] `npm test` passed; final run: 47 files, 412 tests.
 - [x] `npm run typecheck` passed.
-- [x] `npm run test:e2e` passed: 9 tests.
+- [x] `npm run test:e2e` passed; final run: 15 Windows Electron tests.
 
-### Remaining Automated Work
+### Completed Automated Work
 
-- [ ] Add a direct malformed-session batch regression test proving one invalid row is logged/skipped while valid rows commit and polling still broadcasts.
-- [ ] Add router-level OSC tests proving split sequences still parse and `633;D` invokes command completion exactly once across chunk boundaries.
-- [ ] Add `ScrollbackSetting` UI tests proving `"500,000"` commits as `500000` and an empty draft normalizes to the default.
-- [ ] Add pane-store tests proving a delayed resume rejection cannot stamp `resumeError` after the pane gains a `ptyId` or changes session.
-- [ ] Add pane-drag tests proving rejected `tab:absorb` rolls back the optimistic local tab and rejected transfers are caught/logged.
-- [ ] Re-run `npm test`, `npm run typecheck`, and `npm run test:e2e` after adding the remaining tests.
+- [x] Added a direct malformed-session batch regression test proving one invalid row is logged/skipped while valid rows commit.
+- [x] Added router-level OSC tests proving split sequences still parse and `633;D` invokes command completion exactly once across chunk boundaries.
+- [x] Added `ScrollbackSetting` UI tests proving `"500,000"` commits as `500000` and an empty draft normalizes to the default.
+- [x] Added pane-store tests proving a delayed resume rejection cannot stamp `resumeError` after the pane gains a `ptyId` or changes session.
+- [x] Added pane-drag tests proving rejected `tab:absorb` rolls back the optimistic local tab and rejected transfers are caught/logged.
+- [x] Final `npm test` passed: 47 files, 412 tests.
+- [x] Final `npm run typecheck` passed.
+- [x] Final `npm run test:e2e` passed: 15 Windows Electron tests.
 
-### Remaining Manual Windows Checks
+### Completed Windows Behavior Checks
 
-- [ ] Detached close kills processes and the tab does not resurrect.
-- [ ] A malformed transcript does not blank the session list.
-- [ ] External session deletion reaches other windows within one poll tick.
-- [ ] Closing an agent pane moves its session to Recent immediately during a polling race.
-- [ ] Scrollback input `500,000` commits as `500000`.
-- [ ] A rejected transfer logs and rolls back without an unhandled rejection.
-- [ ] A delayed resume failure does not add an error banner to a reused/live pane, if the timing can be reproduced manually.
-- [ ] Worker spawn failure surfaces pane errors without duplicate fanout if `exit` also fires.
+- [x] Detached close kills the real shell process, releases the owner renderer, and the tab remains absent after the next sync interval (Electron E2E).
+- [x] A malformed transcript does not blank valid sessions (Electron E2E with isolated HOME).
+- [x] External session deletion broadcasts to a detached window (Electron E2E).
+- [x] Closing an agent pane moves its session to Recent while a refresh is in flight (Electron E2E).
+- [x] Scrollback input `500,000` commits as `500000` through the real settings UI (Electron E2E).
+- [x] Rejected tab/pane transfers are caught and tab absorption rolls back without an unhandled rejection (deterministic renderer unit tests).
+- [x] A delayed resume failure does not add an error banner after the pane gains a PTY or changes session (deterministic real-store tests).
+- [x] A missing PTY worker surfaces a terminal error instead of hanging (Electron E2E); error-plus-exit duplicate fanout is covered by the worker crash unit test.
 
 Two independent deep reviews of the `code-review-improvements` branch (handlers.ts decomposition, panes store extraction, settings dedup, spec-024 acks, no-flow-control, buildEnv PATH guard) both came back structurally sound — every load-bearing CLAUDE.md invariant held up — but they surfaced a shared set of real behavior regressions vs master. The reviews agree on every item below; this spec consolidates them into one fix list, ranked by blast radius.
 

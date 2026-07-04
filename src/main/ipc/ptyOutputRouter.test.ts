@@ -22,4 +22,28 @@ describe('pty output router', () => {
     expect(wm.unroutePty).toHaveBeenCalledWith('p')
     expect(wm.sendToWindowForPty).toHaveBeenCalledWith('p', 'pty:exit', 'p', 1, undefined)
   })
+
+  it('parses a split cwd sequence without carrying a completed cwd forward', () => {
+    const pty = new EventEmitter()
+    const wm = { sendToWindowForPty: vi.fn(() => true), unroutePty: vi.fn() }
+    createPtyOutputRouter({ ptyManager: pty as never, windowManager: wm })
+    pty.emit('data', 'p', '\x1b]633;P;Cwd=C:\\pro')
+    pty.emit('data', 'p', 'ject\x07')
+    pty.emit('data', 'p', 'plain output')
+    expect(wm.sendToWindowForPty).toHaveBeenCalledTimes(4)
+    expect(wm.sendToWindowForPty).toHaveBeenCalledWith('p', 'pty:cwd', 'p', 'C:\\project')
+  })
+
+  it('fires command completion once when a split sequence is followed by ordinary output', () => {
+    const pty = new EventEmitter()
+    const wm = { sendToWindowForPty: vi.fn(() => true), unroutePty: vi.fn() }
+    const onCommandComplete = vi.fn()
+    createPtyOutputRouter({ ptyManager: pty as never, windowManager: wm, onCommandComplete })
+    pty.emit('ready', { id: 'p', pid: 1, cwd: 'C:\\repo', windowsPty: true })
+    pty.emit('data', 'p', '\x1b]633;')
+    pty.emit('data', 'p', 'D\x07')
+    pty.emit('data', 'p', 'keystroke')
+    expect(onCommandComplete).toHaveBeenCalledOnce()
+    expect(onCommandComplete).toHaveBeenCalledWith('C:\\repo')
+  })
 })
