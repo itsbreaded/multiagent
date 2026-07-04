@@ -127,6 +127,25 @@ describe('PtyManager — worker crash fanout (spec 034)', () => {
     expect(exits).toEqual([[id, 1]])
   })
 
+  it('fans out a spawn error even when no worker exit follows', async () => {
+    const id = manager.createDeferred(REAL_CWD, ['powershell.exe'])
+    await flushImmediate()
+    const exits: Array<[string, number]> = []
+    manager.on('exit', (eid, code) => exits.push([eid, code]))
+    worker.emit('error', new Error('spawn ENOENT'))
+    expect(exits).toEqual([[id, 1]])
+  })
+
+  it('fans out only once when worker error is followed by exit', async () => {
+    const id = manager.createDeferred(REAL_CWD, ['powershell.exe'])
+    await flushImmediate()
+    const exits: Array<[string, number]> = []
+    manager.on('exit', (eid, code) => exits.push([eid, code]))
+    worker.emit('error', new Error('spawn ENOENT'))
+    worker.emit('exit', 1)
+    expect(exits).toEqual([[id, 1]])
+  })
+
   it('destroy() suppresses crash fanout on subsequent worker exit', async () => {
     manager.createDeferred(REAL_CWD, ['powershell.exe'])
     await flushImmediate()

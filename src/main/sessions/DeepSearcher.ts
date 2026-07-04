@@ -181,7 +181,8 @@ export class DeepSearcher {
   constructor(
     private claudeScanner: TranscriptScanner,
     private codexScanner: CodexSessionScanner,
-    private index: SessionIndex
+    private index: SessionIndex,
+    private onIndexMutation: () => void = () => {},
   ) {}
 
   async search(request: SessionSearchRequest, allSessions: Session[]): Promise<SessionSearchResult[]> {
@@ -260,6 +261,7 @@ export class DeepSearcher {
               : await this.codexScanner.scanFile(fileResult.filePath)
           if (scanned) {
             this.index.upsert(scanned)
+            this.onIndexMutation()
             session = this.index.get(fileResult.agentKind, fileResult.sessionId) ?? undefined
           }
         } catch {

@@ -241,8 +241,12 @@ export class SessionIndex {
     this.db.transaction(() => {
       for (const session of sessions) {
         if (stored.get(`${session.agentKind}:${session.sessionId}`) === session.mtimeMs) continue
-        this.upsert(session)
-        changed++
+        try {
+          this.upsert(session)
+          changed++
+        } catch (err) {
+          console.warn(`[SessionIndex] Skipping malformed session ${session.agentKind}:${session.sessionId}:`, err)
+        }
       }
     })()
     return { changed }

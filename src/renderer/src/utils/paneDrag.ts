@@ -30,6 +30,7 @@ export function absorbDroppedTab(
     deps.receiveTab(tab, dropIndex)
     void window.ipc.invoke('tab:absorb', JSON.stringify(tab), ptyIds, sourceWindowId ?? -1)
       .then((ok) => { if (!ok) deps.removeTabLocally(tab.id) })
+      .catch((err) => { console.error('tab:absorb failed', err); deps.removeTabLocally(tab.id) })
     return true
   } catch { return false }
 }
@@ -45,6 +46,7 @@ export function transferDroppedPane(
   e.preventDefault(); e.stopPropagation()
   if (payload.sourceWindowId === windowId) deps.movePaneToTab(payload.pane.id, targetTabId)
   else void window.ipc.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId: windowId })
+    .catch((err) => { console.error('pane:transfer failed', err) })
   return true
 }
 

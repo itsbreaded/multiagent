@@ -489,10 +489,13 @@ async function resumeIntoPane(
     }
   } catch (err) {
     console.error('session:resume IPC failed', err)
-    get().updatePane(paneId, {
-      resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
-      ...opts.extraFailurePatch,
-    })
+    const current = get().findPaneInAnyTab(paneId)
+    if (current?.paneType === 'agent' && current.agentKind === agentKind && current.sessionId === sessionId && !current.ptyId) {
+      get().updatePane(paneId, {
+        resumeError: agentIpcErrorMessage(err, 'Session resume failed'),
+        ...opts.extraFailurePatch,
+      })
+    }
   } finally {
     opts.onSettled?.()
   }

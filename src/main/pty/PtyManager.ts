@@ -139,6 +139,7 @@ export class PtyManager extends EventEmitter {
 
     this.worker.on('error', (err) => {
       console.error('[PtyManager] worker error:', err)
+      this._handleWorkerCrash(null)
     })
 
     this.worker.on('exit', (code) => {

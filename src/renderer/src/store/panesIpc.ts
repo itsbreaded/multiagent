@@ -4,6 +4,8 @@ import { PANE_DRAG_MIME } from '../utils/paneDrag'
 import { focusArming, LOCAL_REARM_MS } from './focusArming'
 import { clearPendingRemoteFocus, isSpawnInTabPayload, reportCurrentFocusTarget, usePanesStore } from './panes'
 
+// Imported as a side effect by panes.ts only after the store is initialized; keep
+// store access inside wirePanesIpc/listener callbacks to preserve that ordering.
 let wired = false
 
 /** Wire renderer listeners once. Store access is deferred to avoid the panes↔panesIpc import cycle. */
@@ -363,5 +365,4 @@ export function wirePanesIpc(): void {
     }
   })
 }
-
 

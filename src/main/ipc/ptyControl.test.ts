@@ -8,14 +8,14 @@ describe('pty ownership control', () => {
     expect(senderMayControlPty(8, 7)).toBe(false)
   })
 
-  it('rejects a stale kill before any unroute or cleanup side effect', () => {
+  it('allows cross-window teardown while input ownership remains denied', () => {
     const unroute = vi.fn()
     const release = vi.fn()
     const kill = vi.fn(() => true)
-    expect(killPtyIfAllowed({ getOwner: () => 8, unroute, release, kill }, 'pty-1', 7)).toBe(false)
-    expect(unroute).not.toHaveBeenCalled()
-    expect(release).not.toHaveBeenCalled()
-    expect(kill).not.toHaveBeenCalled()
+    expect(killPtyIfAllowed({ getOwner: () => 8, unroute, release, kill }, 'pty-1', 7)).toBe(true)
+    expect(unroute).toHaveBeenCalledWith('pty-1')
+    expect(release).toHaveBeenCalledWith('pty-1')
+    expect(kill).toHaveBeenCalledWith('pty-1')
   })
 
   it('unroutes and releases before killing for owner and unrouted teardown', () => {

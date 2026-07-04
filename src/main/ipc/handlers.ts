@@ -54,7 +54,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const index = new SessionIndex()
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
-  const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index)
   const ptyManager = new PtyManager()
   const spawner = new SessionSpawner(ptyManager, mainWindow)
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
@@ -112,6 +111,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     index,
     broadcast: (sessions) => windowManager.broadcastAll('sessions:updated', sessions),
   })
+  const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index, () => sessionPoller.markDirty())
   sessionPoller.poll(true).catch((err) => {
     console.error('[MultiAgent] Session scan failed:', err)
     windowManager.broadcastAll('sessions:updated', [])
@@ -143,7 +143,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return deepSearcher.search(request, allSessions)
   })
 
-  registrar.handle('sessions:delete', (_e, agentKind, sessionId: string) => index.delete(agentKind, sessionId))
+  registrar.handle('sessions:delete', (_e, agentKind, sessionId: string) => {
+    const deleted = index.delete(agentKind, sessionId)
+    sessionPoller.markDirty()
+    return deleted
+  })
 
   registrar.handle('sessions:repair-cwd', (_e, oldCwd: string, newCwd: string) => {
     if (typeof oldCwd !== 'string' || typeof newCwd !== 'string') {
@@ -194,6 +198,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
     if (latest) {
       index.upsert(latest)
+      sessionPoller.markDirty()
       return latest.sessionId
     }
     return null
@@ -347,6 +352,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
     if (candidates.length !== 1) return null
     index.upsert(candidates[0])
+    sessionPoller.markDirty()
     return candidates[0].sessionId
   })
 

@@ -9,8 +9,7 @@ export function senderMayControlPty(owner: number | undefined, senderId: number)
   return owner === undefined || owner === senderId
 }
 
-export function killPtyIfAllowed(deps: PtyKillDeps, ptyId: string, senderId: number): boolean | void {
-  if (!senderMayControlPty(deps.getOwner(ptyId), senderId)) return false
+export function killPtyIfAllowed(deps: PtyKillDeps, ptyId: string, _senderId: number): boolean | void {
   deps.unroute(ptyId)
   deps.release(ptyId)
   return deps.kill(ptyId)

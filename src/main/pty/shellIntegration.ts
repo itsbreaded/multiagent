@@ -53,3 +53,12 @@ export function unescapeShellIntegrationValue(value: string): string {
     return String.fromCharCode(Number.parseInt(hex, 16))
   })
 }
+
+/** Retain only an OSC sequence that began but did not finish in this scan. */
+export function unterminatedOscTail(data: string, maxLength = 256): string {
+  const start = data.lastIndexOf('\x1b]')
+  if (start < 0) return data.endsWith('\x1b') ? '\x1b' : ''
+  const tail = data.slice(start)
+  if (tail.includes('\x07') || tail.includes('\x1b\\')) return ''
+  return tail.slice(-maxLength)
+}
