@@ -2,6 +2,8 @@
 
 MultiAgent is a Windows desktop workspace for running Claude Code, Codex, and regular shell sessions side by side. It combines a tiling terminal, persistent project layouts, searchable agent history, and an embedded browser that agents can control through MCP.
 
+MultiAgent began as a passion project by a single developer building the ideal app for their own workflow. Its purpose is to provide an easy-to-use terminal multiplexer for CLI coding agents, whether they are accessed through a subscription or an API key. It supports Claude Code and Codex with their native services as well as compatible third-party providers and models such as GLM and Qwen—without locking the workflow into an app-specific AI integration or monetization model.
+
 > [!WARNING]
 > MultiAgent is alpha software. Expect breaking changes and rough edges. Windows 10 and 11 are currently the only supported platforms.
 
