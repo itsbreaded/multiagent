@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { unixShellLaunch } from './terminalEnvironment'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { unixShellLaunch, shellIntegrationCommand } from './terminalEnvironment'
+
+const originalPlatform = process.platform
+function pinPlatform(value: string): void {
+  Object.defineProperty(process, 'platform', { value })
+}
+function restorePlatform(): void {
+  Object.defineProperty(process, 'platform', { value: originalPlatform })
+}
 
 // Unix shell-integration wiring: bash gets `--init-file`, zsh gets a `ZDOTDIR` env, unknown
 // shells and script-missing fall back to the bare shell. `unixShellLaunch` takes injectable
@@ -61,5 +69,53 @@ describe('unixShellLaunch', () => {
   it('launches unknown shells (sh/fish) without integration', () => {
     expect(unixShellLaunch('sh', okDeps)).toEqual({ cmd: ['sh'] })
     expect(unixShellLaunch('fish', okDeps)).toEqual({ cmd: ['fish'] })
+  })
+})
+
+// Windows shell integration sources shellIntegration.ps1. The bundled asset lives inside
+// app.asar when packaged — PowerShell can't read it — so the command must prefer a real
+// <userData> copy (ensureScript) and only fall back to the bundled/asar path. The args are
+// otherwise unchanged. platform is pinned; deps are injected so no Electron/fs is touched.
+describe('shellIntegrationCommand (Windows)', () => {
+  beforeEach(() => pinPlatform('win32'))
+  afterEach(() => restorePlatform())
+
+  it('returns [] off win32', () => {
+    pinPlatform('linux')
+    expect(shellIntegrationCommand({ ensureScript: () => null, bundled: () => null })).toEqual([])
+  })
+
+  it('prefers the materialized <userData> copy over the bundled asset', () => {
+    const args = shellIntegrationCommand({
+      ensureScript: () => 'C:/userData/shellIntegration.ps1',
+      bundled: () => 'C:/app.asar/shellIntegration.ps1',
+    })
+    expect(args).toEqual([
+      '-NoLogo',
+      '-NoExit',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      'try { . "C:/userData/shellIntegration.ps1" } catch {}',
+    ])
+  })
+
+  it('falls back to the bundled asset path when the materialized copy is unavailable (dev)', () => {
+    const args = shellIntegrationCommand({
+      ensureScript: () => null,
+      bundled: () => 'C:/repo/src/main/pty/shellIntegration.ps1',
+    })
+    expect(args[args.length - 1]).toBe(
+      'try { . "C:/repo/src/main/pty/shellIntegration.ps1" } catch {}',
+    )
+  })
+
+  it('escapes backticks and double quotes in the sourced path', () => {
+    const args = shellIntegrationCommand({
+      ensureScript: () => 'C:/a`b"c\\dir.ps1',
+      bundled: () => null,
+    })
+    // ` -> `` and " -> `" inside the double-quoted PowerShell string.
+    expect(args[args.length - 1]).toBe('try { . "C:/a``b`"c\\dir.ps1" } catch {}')
   })
 })

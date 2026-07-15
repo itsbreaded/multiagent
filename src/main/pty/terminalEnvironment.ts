@@ -1,15 +1,31 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'fs'
 import { join, basename } from 'path'
 
-export function shellIntegrationCommand(): string[] {
+export interface ShellIntegrationCommandDeps {
+  /** Materialize the bundled asset to a real file outside app.asar; null on failure. */
+  ensureScript: (name: string) => string | null
+  /** Resolve the bundled asset path (beside out/main + dev fallbacks); null if none found. */
+  bundled: (name: string) => string | null
+}
+
+export function shellIntegrationCommand(
+  deps: ShellIntegrationCommandDeps = {
+    ensureScript: ensureShellIntegrationScript,
+    bundled: bundledScriptPath,
+  },
+): string[] {
   if (process.platform !== 'win32') return []
 
-  const candidates = [
-    join(__dirname, 'shellIntegration.ps1'),
-    join(__dirname, '..', 'shellIntegration.ps1'),
-    join(process.cwd(), 'src', 'main', 'pty', 'shellIntegration.ps1'),
-  ]
-  const scriptPath = candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
+  // Prefer the materialized <userData> copy: the bundled asset lives inside app.asar when
+  // packaged, which PowerShell (a separate process) cannot read — sourcing the asar path
+  // fails silently under `catch {}` and CWD tracking (OSC 633) never loads. The <userData>
+  // copy is a real file outside the archive, so packaged builds source it correctly. Fall
+  // back to the bundled candidates for dev (real files on disk), then the asar path as a
+  // last resort. Same pattern the Unix path uses via ensureShellIntegrationScript.
+  const scriptPath =
+    deps.ensureScript('shellIntegration.ps1') ??
+    deps.bundled('shellIntegration.ps1') ??
+    join(__dirname, 'shellIntegration.ps1')
   return [
     '-NoLogo',
     '-NoExit',
