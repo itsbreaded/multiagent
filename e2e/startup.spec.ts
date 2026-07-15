@@ -76,10 +76,17 @@ async function closeApp(target: ElectronApplication): Promise<void> {
   // test then blows its 30s timeout mid-afterEach, which surfaces as "Worker teardown
   // timeout of 30000ms exceeded". Race graceful close against a hard SIGKILL of the whole
   // Electron process tree so teardown always completes in bounded time.
-  const proc = target.process()
+  let proc: ReturnType<ElectronApplication['process']> | undefined
+  try {
+    proc = target.process()
+  } catch {
+    // Application already disposed (the test closed the app itself before afterEach).
+    // Like app.close(), this must be an idempotent no-op on an already-closed app.
+    return
+  }
   const hardKill = new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
-      try { proc.kill('SIGKILL') } catch { /* already exited */ }
+      try { proc!.kill('SIGKILL') } catch { /* already exited */ }
       resolve()
     }, 5_000)
     timer.unref?.()
