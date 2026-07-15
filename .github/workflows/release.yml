@@ -20,6 +20,11 @@ jobs:
           - os: macos-latest
           - os: ubuntu-latest
     runs-on: ${{ matrix.os }}
+    permissions:
+      # The auto GITHUB_TOKEN needs contents:write to create releases and upload
+      # assets. Without this, repos defaulting to read-only token perms fail with
+      # 403 "Resource not accessible by integration" on the release publish step.
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
