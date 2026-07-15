@@ -13,8 +13,18 @@ interface SavedTab {
 }
 
 function launchEnv(userDataDir: string, homeDir: string): Record<string, string> {
+  // GitHub Actions injects an enormous environment (GITHUB_*, RUNNER_*, ACTIONS_*, toolchain
+  // vars). buildEnv forwards the whole of process.env into each PTY, and on macOS node-pty's
+  // posix_spawnp path chokes on the oversized envp (posix_spawnp failed.) while Linux/Win are
+  // more forgiving. Strip the CI-only prefixes so the Electron process under test has a realistic
+  // (small) environment — the real app launches from a small GUI env, so this also keeps the test
+  // honest about production. If macOS still throws posix_spawnp after this, the cause is the
+  // node-pty native binding, not env size (see @lydell/node-pty switch in CLAUDE.md notes).
+  const CI_NOISE = /^(GITHUB_|RUNNER_|ACTIONS_|AGENT_|ANDROID_|JAVA_|GRADLE_|BOOST_|VCPKG|DOTNET_|CONDA_|PERL_|RUST|CHROME|BUILD_|ImageOS|ImageVersion|RUNNER_TRACKING_ID|HOSTNAME)/
   const inherited = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+    Object.entries(process.env)
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)
+      .filter(([key]) => !CI_NOISE.test(key))
   )
   return {
     ...inherited,
