@@ -20,6 +20,8 @@ export class WindowManager {
   private ptyToWebContentsId = new Map<string, number>()
   public pendingInitData = new Map<number, WindowInitData>()
   private pendingDetachedWindowTabs = new Map<number, string[]>()
+  /** Resolvers waiting on a tab's ownership handshake to land (see waitForTabOwnership). */
+  private ownershipWaiters = new Map<string, Array<(windowId: number) => void>>()
   /** Maps detached window id → tab ids it owns (for tab:return on close) */
   private detachedWindowTabs = new Map<number, string[]>()
   /** Maps tab id → detached window id (for window:focus-for-tab) */
@@ -90,12 +92,53 @@ export class WindowManager {
       this.tabToWindowId.set(tabId, windowId)
       if (this.tabSyncTombstones.get(tabId) === windowId) this.tabSyncTombstones.delete(tabId)
       this.bumpTabOwnershipGeneration(tabId)
+      this.resolveOwnershipWaiters(tabId, windowId)
     }
   }
 
   prepareDetachedTab(windowId: number, tabIds: string[]): void {
     const existing = this.pendingDetachedWindowTabs.get(windowId) ?? []
     this.pendingDetachedWindowTabs.set(windowId, Array.from(new Set([...existing, ...tabIds])))
+  }
+
+  private resolveOwnershipWaiters(tabId: string, windowId: number): void {
+    const waiters = this.ownershipWaiters.get(tabId)
+    if (!waiters) return
+    this.ownershipWaiters.delete(tabId)
+    for (const resolve of waiters) resolve(windowId)
+  }
+
+  /**
+   * Resolve once `tabId` gets an owning window, for a tab that is currently mid tear-off
+   * (staged in pendingDetachedWindowTabs but not yet in tabToWindowId — see prepareDetachedTab).
+   * Bounded wait so a tab that is not pending anywhere (or whose detached window never boots)
+   * fails fast instead of hanging. Closes the race where the primary closes a just-torn-off tab
+   * before the new window finishes its tab:adopt/tab:detached-ready handshake (see tab:bring-home).
+   */
+  waitForTabOwnership(tabId: string, timeoutMs = 3000): Promise<number | null> {
+    const immediate = this.tabToWindowId.get(tabId)
+    if (immediate !== undefined) return Promise.resolve(immediate)
+    const isPending = Array.from(this.pendingDetachedWindowTabs.values()).some((ids) => ids.includes(tabId))
+    if (!isPending) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (windowId: number | null): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        const waiters = this.ownershipWaiters.get(tabId)
+        if (waiters) {
+          const remaining = waiters.filter((w) => w !== onResolved)
+          if (remaining.length > 0) this.ownershipWaiters.set(tabId, remaining)
+          else this.ownershipWaiters.delete(tabId)
+        }
+        resolve(windowId)
+      }
+      const onResolved = (windowId: number): void => finish(windowId)
+      const existing = this.ownershipWaiters.get(tabId) ?? []
+      this.ownershipWaiters.set(tabId, [...existing, onResolved])
+      const timer = setTimeout(() => finish(null), timeoutMs)
+    })
   }
 
   markDetachedTabReady(windowId: number, tabId: string): boolean {

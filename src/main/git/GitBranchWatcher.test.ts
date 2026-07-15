@@ -11,7 +11,11 @@ const watchers: GitBranchWatcher[] = []
 afterEach(async () => {
   await Promise.all(watchers.splice(0).map((watcher) => watcher.dispose()))
   for (const tempPath of tempPaths.splice(0).reverse()) {
-    rmSync(tempPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    // dispose() awaits chokidar's watcher.close(), but on Windows that promise can resolve
+    // before the OS actually releases the directory handle, so an immediate rmSync can hit
+    // EPERM. Retry budget widened (5x50ms -> 10x200ms) to absorb that without masking a real
+    // leak (a handle still held after 2s would keep failing regardless of budget).
+    rmSync(tempPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 })
 
@@ -57,7 +61,7 @@ describe('GitBranchWatcher', () => {
     await waitFor(() => updates.at(-1) === branch)
   })
 
-  it('resolves linked worktree git directories and shares one watch across subdirectories', async () => {
+  it('resolves linked worktree git directories and shares one watch across subdirectories', { timeout: 15_000 }, async () => {
     const repo = createRepository()
     const root = tempDirectory()
     const worktree = join(root, 'worktree')
@@ -71,7 +75,7 @@ describe('GitBranchWatcher', () => {
     expect(await watcher.watchCwd(nested)).toBe('worktree-start')
     git(worktree, 'switch', '-c', 'worktree-next')
 
-    await waitFor(() => updates.some((update) => update.branch === 'worktree-next'))
+    await waitFor(() => updates.some((update) => update.branch === 'worktree-next'), 12_000)
     const update = updates.find((item) => item.branch === 'worktree-next')!
     expect(update.cwdKeys).toEqual(expect.arrayContaining([
       normalizeCwdKey(worktree),

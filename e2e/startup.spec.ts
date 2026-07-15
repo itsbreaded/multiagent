@@ -260,9 +260,12 @@ test.describe('cold-start layout restore', () => {
     await expect.poll(() => app.evaluate((_electron, childPid) => {
       try { process.kill(childPid, 0); return true } catch { return false }
     }, pid)).toBe(false)
+    // The window can close between the isClosed() check and the locator call (it auto-closes
+    // once its last tab is removed — App.tsx's `if (tabs.length === 0) window.close()`), so
+    // treat a closed-page error the same as isClosed() === true: no window means no Alpha tab.
     const detachedAlphaCount = () => detached.isClosed()
       ? Promise.resolve(0)
-      : detached.locator('.tab-strip').getByText('Alpha', { exact: true }).count()
+      : detached.locator('.tab-strip').getByText('Alpha', { exact: true }).count().catch(() => 0)
     await expect.poll(detachedAlphaCount).toBe(0)
     await page.waitForTimeout(5_500)
     expect(await detachedAlphaCount()).toBe(0)

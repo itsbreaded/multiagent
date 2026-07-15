@@ -271,8 +271,13 @@ export function registerTransferHandlers(deps: {
   })
 
   // Pull a detached tab back to the requesting window.
-  registrar.handle('tab:bring-home', (e, tabId: string) => {
-    const targetWindowId = windowManager.getWindowIdForTab(tabId)
+  registrar.handle('tab:bring-home', async (e, tabId: string) => {
+    // A tab just torn off is staged in pendingDetachedWindowTabs before the new window finishes
+    // booting + the tab:adopt/tab:detached-ready handshake that populates real ownership. If the
+    // primary closes the tab in that window, getWindowIdForTab would return null and silently
+    // never send tab:release, permanently orphaning the tab in the detached window (no retry, no
+    // notification). Wait for the handshake to land (or fail fast if the tab isn't pending at all).
+    const targetWindowId = windowManager.getWindowIdForTab(tabId) ?? await windowManager.waitForTabOwnership(tabId)
     if (targetWindowId === null) return false
     const sourceWin = windowManager.getWindowById(targetWindowId)
     if (!sourceWin || sourceWin.isDestroyed()) return false
