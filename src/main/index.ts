@@ -9,6 +9,7 @@ import { BrowserViewManager } from './browser/BrowserViewManager'
 import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
 import { windowManager } from './window/WindowManager'
+import { WindowShowCoordinator } from './window/windowShow'
 import { writeJsonAtomic } from './atomicJson'
 import { coerceWindowState, DEFAULT_WINDOW_STATE, type WindowState } from './windowState'
 
@@ -78,14 +79,23 @@ async function createWindow(): Promise<void> {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    if (state.isMaximized) mainWindow.maximize()
-    mainWindow.show()
-  })
+  // Show exactly once, with a bounded fallback. `ready-to-show` is the normal path (no
+  // flash), but on some Linux/Wayland + virtual-GPU stacks it never fires even though the
+  // renderer loads fine — so after `did-finish-load`, if the window is still not shown a
+  // short delay later, the coordinator shows it. See WindowShowCoordinator.
+  const showCoordinator = new WindowShowCoordinator(
+    () => {
+      if (state.isMaximized) mainWindow.maximize()
+      mainWindow.show()
+    },
+    () => mainWindow.isDestroyed(),
+  )
+  mainWindow.on('ready-to-show', () => showCoordinator.onReadyToShow())
 
   let isShutdownSaveComplete = false
   mainWindow.on('close', async (event) => {
     saveWindowState(mainWindow)
+    showCoordinator.dispose()
     // On the first close, do a final authoritative layout save that flushes the latest
     // detached-window state before the debounce could have written it. We prevent the
     // default close, await the save (with an internal timeout), then re-close. On the
@@ -118,6 +128,7 @@ async function createWindow(): Promise<void> {
       event.preventDefault()
       openExternalUrl(url)
     })
+    showCoordinator.onDidLoad()
   })
 
   // Wire IPC handlers (sessions, PTY, shell, layout)

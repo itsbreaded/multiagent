@@ -23,9 +23,12 @@ npm run dist       # build + package to dist\win-unpacked\ (requires Windows Dev
 
 ### Packaging Notes
 
-- `npm run dist` uses `electron-builder` with `npmRebuild: false` because postinstall already handles the required `better-sqlite3` rebuild.
-- Output: `dist\MultiAgent Setup X.Y.Z.exe` (NSIS installer, primary distribution artifact) and `dist\win-unpacked\` (portable, kept for dev inspection).
-- The NSIS installer does a per-user install to `%LOCALAPPDATA%\Programs\MultiAgent` — no admin rights needed.
+- `npm run dist` runs `electron-vite build && electron-builder` with **no `--<os>` flag**, so it builds for the **host OS** (Windows → NSIS + dir, macOS → dmg + zip, Linux → AppImage + deb). `dist:dir`/`dist:nsis`/`dist:mac`/`dist:linux` build a specific OS explicitly; `release` is `electron-builder --publish always` for the host OS (used by CI). `npmRebuild: false` is kept because postinstall already handles the `better-sqlite3` (and node-pty on mac/linux) rebuild for the host ABI.
+- **Native modules are not cross-compiled.** Each CI runner installs + rebuilds natively (postinstall `electron-rebuild`). Do not try to build mac/linux artifacts from Windows. `node-pty` ships Windows Electron prebuilds; on mac/linux it rebuilds from source (needs Xcode CLT / build-essential + `libudev-dev`).
+- Windows output: `dist\MultiAgent Setup X.Y.Z.exe` (NSIS installer, primary Windows artifact) and `dist\win-unpacked\` (portable, kept for dev inspection). The NSIS installer does a per-user install to `%LOCALAPPDATA%\Programs\MultiAgent` — no admin rights needed.
+- macOS output: `dist/MultiAgent-X.Y.Z-arm64.dmg` + `.zip`. **v1 ships unsigned** (developer audience): Gatekeeper blocks a double-click install, so developers run `xattr -cr /Applications/MultiAgent.app` (or right-click → Open) after dragging from the dmg. Notarization + signing are deferred until an Apple Developer ID exists; the flip-on is one config change — set `hardenedRuntime: true` + `"notarize": { "teamId": ... }` in the `mac` block and provide `CSC_LINK`/`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` as build env (never committed). `build/entitlements.mac.plist` (committed) is already referenced and is applied only once signing is on (allow-jit + disable-library-validation for the native modules).
+- Linux output: `dist/MultiAgent-X.Y.Z.AppImage` + `.deb` (unsigned for v1).
+- `build/icon.icns` (mac) is **generated from `build/icon.png`** by `npm run build:icon` (`scripts/build-icon.mjs`, `sips`+`iconutil`, macOS-only; no-ops elsewhere) — the CI mac runner runs it before `--mac`. electron-builder auto-detects `build/icon.icns` and falls back to the default Electron icon if absent, so `mac.icon` is intentionally not hard-set (a missing .icns must not fail a local build). `build/icon.png` (Linux) and `build/favicon.ico` (Windows) are committed.
 - `asarUnpack` is set for `**/*.node`, `**/node-pty/**`, and `**/better-sqlite3/**` so native modules are accessible outside the asar archive.
 - MCP templates under `src/main/mcp/templates/**/*` are included in packaged builds via `package.json` `build.files`. If templates move or new runtime templates are added, update the packaging list and verify they are present in `resources/app.asar`.
 
@@ -36,14 +39,14 @@ The app uses `electron-updater` to check `github.com/itsbreaded/multiagent` rele
 **Token at build time**: set `GH_UPDATE_TOKEN` in your environment (e.g. Windows system env vars or PowerShell profile) before running `npm run build` or `npm run dist`. It is baked into `out/main/index.js` at build time via `electron.vite.config.ts`. If unset, the updater is silently disabled. Never put the token in source files.
 
 **Publishing a release** (requires `gh auth login`):
-1. Bump `version` in `package.json`
-2. Run `publish.bat` — it pulls the `gh` CLI token automatically, builds, and uploads to GitHub releases
+1. Bump `version` in `package.json` (the release skill uses `npm version patch --no-git-tag-version` so `package-lock.json` stays in sync)
+2. Run `publish.bat` — it delegates to `scripts/publish.mjs`, which creates + pushes the `v<version>` tag (no local build). The tag push triggers `.github/workflows/release.yml`, a 3-OS matrix (win/mac/linux) that builds + publishes each platform's artifacts to the same GitHub release in parallel using the auto `GITHUB_TOKEN`.
 
-`publish.bat` runs `npm run release` which calls `electron-builder --publish always`. The GitHub release and `latest.yml` metadata are created automatically. Do not hardcode any tokens in source files.
+`npm run release` (`electron-builder --publish always`) is what CI runs per OS. The GitHub release and `latest.yml`/`*-mac.yml`/`*-linux.yml` metadata are created automatically. Do not hardcode any tokens in source files.
 
 `patch-package` applies `patches/app-builder-lib+26.15.3.patch` after install. It fixes an upstream publisher-cache race that otherwise lets concurrent NSIS artifact callbacks create duplicate GitHub releases. Remove the patch only after upgrading to an `app-builder-lib` version that caches in-flight publisher creation.
 
-**Update flow in the running app**: updater checks on startup (10s delay) and hourly. `updater:status` IPC events drive the `UpdateBanner` component in the renderer. The banner is suppressed in dev mode and in detached windows.
+**Update flow in the running app**: updater checks on startup (10s delay) and hourly. `updater:status` IPC events drive the `UpdateBanner` component in the renderer. The banner is suppressed in dev mode and in detached windows. **macOS auto-update caveat:** unsigned updates will not pass Gatekeeper either until notarization is enabled — a v1 limitation, not a bug.
 
 ## Testing
 
@@ -69,7 +72,7 @@ npm run typecheck   # tsc -b --noEmit — also type-checks test files
 
 **Don't mock the Zustand store.** Render components against the real store. State reset between tests is handled by the auto-reset mock at repo-root `__mocks__/zustand.ts`, activated by `vi.mock('zustand')` in `tests/setup.renderer.ts` (Vitest does not auto-apply node-module `__mocks__` like Jest — the explicit `vi.mock` call is mandatory). That mock does automatic *state reset* only; it does not stub store *behavior*.
 
-**Determinism.** Tests touching recency, time-grace windows, uuids, or file mtimes must control those inputs (`vi.setSystemTime`, pinned timestamps via `fs.utimesSync`, structural assertions that ignore ids). `process.platform` is machine-dependent — pin it in tests that branch on `win32` and cover both branches; CI runs `windows-latest`.
+**Determinism.** Tests touching recency, time-grace windows, uuids, or file mtimes must control those inputs (`vi.setSystemTime`, pinned timestamps via `fs.utimesSync`, structural assertions that ignore ids). `process.platform` is machine-dependent — pin it in tests that branch on `win32` and cover both branches; CI runs the 3-OS matrix (`windows-latest`, `macos-latest`, `ubuntu-latest`).
 
 **Boy-scout rule.** Any file a PR touches should gain or extend a test, and new features ship with tests. This is the durable mechanism that grows coverage without a dedicated sprint — do not chase a percentage. The global threshold remains 0 for legacy integration-only surfaces; raise the nonzero scoped ratchets in `vitest.config.ts` as their measured baselines improve.
 
@@ -98,6 +101,10 @@ The terminal stack follows VS Code's integrated-terminal shape, and **shell and 
 **No PATH rewrite for terminal panes (specs 012/013).** `buildEnv` used to prepend `%APPDATA%\npm`, `%ProgramFiles%\nodejs`, and `~/.local/bin` to PATH — dirs already on the inherited PATH, so the prepend only *reordered* it, shifting `git`'s startup timing into ConPTY's no-scroll flush race and dropping short output like `git pull -> Already up to date.`. The dropped-output root cause was this PATH rewrite, not the pty worker or output volume. Shells and agents share one worker fine once the rewrite is gone (the deleted `ShellPtyHost`/`shellWorker` were unnecessary). **Do not reintroduce any PATH rewrite for terminal panes.**
 
 On Windows, shell panes spawn `powershell.exe` with `src/main/pty/shellIntegration.ps1` (via `terminalEnvironment.ts`/`_shellCmd`), emitted beside `out/main/index.js` by `electron.vite.config.ts`. The script uses VS Code-style OSC 633 (`OSC 633;P;Cwd=...`) for CWD reporting; main parses it in `handlers.ts` and sends `pty:cwd`. OSC 7 parsing remains only as compatibility fallback. Do not reintroduce ad hoc prompt wrapping or the removed `shellterm:*`/Bare Term scaffolding as a production terminal path.
+
+On Unix, shell panes launch via `unixShellLaunch` (`terminalEnvironment.ts`): bash with `--init-file`, zsh with a generated `ZDOTDIR` (zsh has no `--init-file`; a tiny `.zshrc` there re-sources `~/.zshrc` then our script). `src/main/pty/shellIntegration.sh` (bash + zsh in one file) installs a `PROMPT_COMMAND`/`precmd` hook that emits `OSC 633;D` + `OSC 633;P;Cwd=<byte-escaped>` + `OSC 7;file://<path>` before each prompt. **asar caveat:** a shell is a separate process and cannot read inside `app.asar`, so `ensureShellIntegrationScript` copies the bundled `shellIntegration.sh` to a real file under `<userData>` (idempotent on content) and the shell sources that — the same pattern the managed-hook scripts use. (Note: the Windows `.ps1` is still sourced from the asar candidate path, which PowerShell cannot read packaged — packaged Windows CWD tracking via OSC 633 is a known pre-existing gap; apply the same `<userData>` copy to Windows if fixing it.) macOS' default shell is zsh, so bash-only is not enough. `_shellCmd()` returns `{ cmd, env? }` (the ZDOTDIR rides as `createDeferred`'s `extraEnv`).
+
+**Cross-platform process snapshot (CLI-agent promotion/demotion).** `snapshotProcesses()` (`src/main/pty/processSnapshot.ts`) is the single platform seam feeding the pure `selectForegroundAgent` selector. Windows shells out to `Get-CimInstance Win32_Process`; macOS shells out to `ps -Ax -o pid=,ppid=,comm=,command=`; Linux reads `/proc/<pid>/{stat,cmdline}` directly (null-delimited argv). All three export pure parsers (`toEntries`/`parsePsDarwin`/`parseProcStat`/`parseProcCmdline`) for platform-pinned unit tests. Every platform fails closed (any error → `[]` → no pane transition). Do not add a per-platform scanner "fallback" for the missing platform — keep one mechanism per platform behind the seam.
 
 Renderer resize uses the VS Code principle: immediate resize for first/small-buffer changes, vertical updates immediately once established, and horizontal reflow debounced with a deterministic flush. Avoid raw `ResizeObserver -> pty.resize` loops.
 

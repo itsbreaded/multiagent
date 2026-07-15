@@ -7,11 +7,15 @@ on:
 
 jobs:
   test:
-    # Windows runner matches the native-module/ConPTY target: better-sqlite3 and
-    # node-pty rebuild against the Windows ABI and the PowerShell shell-integration
-    # path is Windows-specific. Don't assume macOS/Linux CI exercises the real
-    # terminal stack.
-    runs-on: windows-latest
+    # Cross-platform test matrix: typecheck + unit tests run on all three OSes so a
+    # platform-specific regression (process snapshot, shell integration, native ABI) is
+    # caught before merge. Native modules (better-sqlite3, node-pty) rebuild natively on
+    # each runner via postinstall — no cross-compilation.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -22,20 +26,24 @@ jobs:
           node-version: '24'
           cache: 'npm'
 
-      # Cache the Electron binary download and the electron-rebuild output so the
-      # native-rebuild cost (better-sqlite3 + node-pty) doesn't dominate CI time.
-      - name: Cache Electron + native modules
+      - name: Cache Electron binary
         uses: actions/cache@v4
         with:
           path: |
-            ~\AppData\Local\electron
-            ~\AppData\Local\electron-builder\Cache
-            node_modules
-          key: ${{ runner.os }}-node-24-${{ hashFiles('package-lock.json') }}
+            ~/AppData/Local/electron
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Linux build/runtime deps (node-pty native build + Electron runtime)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libgtk-3-0 libnss3 libasound2t64 libgbm1 libxss1
 
       - name: Install dependencies
-        # postinstall downloads Electron + rebuilds better-sqlite3 for the
-        # Electron ABI. Do NOT add --ignore-scripts.
+        # postinstall downloads Electron + rebuilds better-sqlite3 (and node-pty on mac/linux)
+        # for the host ABI. Do NOT add --ignore-scripts.
         run: npm ci
 
       - name: Typecheck
@@ -44,15 +52,17 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Coverage
-        run: npm run test:coverage
+      - name: Electron E2E (xvfb on Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:e2e
 
       - name: Electron E2E
+        if: runner.os != 'Linux'
         run: npm run test:e2e
 
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage
+          name: coverage-${{ runner.os }}
           path: coverage/

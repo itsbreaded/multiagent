@@ -103,3 +103,27 @@ describe('parseOsc7 (OSC 7 file://)', () => {
     })
   })
 })
+
+// Round-trip contract with shellIntegration.sh (bash/zsh): the script escapes ';', '\'
+// and control bytes as \xNN (matching the .ps1), and emits OSC 7 with the raw path.
+// These assert the script's emitted sequences round-trip through the parsers above —
+// so a CWD with a ';' or '\' (or a space, via OSC 7) is recovered intact on Unix.
+describe('shellIntegration.sh round-trip (bash/zsh emit → parser)', () => {
+  it('recovers a cwd that the script would escape with \\xNN for ; and \\', () => {
+    // shellIntegration.sh __ma_escape_cwd emits '\x3b' for ';' and '\x5c' for '\'.
+    // A path like /a;b\c → /a\x3bb\x5cc → parser → /a;b\c
+    const escaped = '/a\\x3bb\\x5cc'
+    expect(parseShellIntegrationCwd(`\x1b]633;P;Cwd=${escaped}${BEL}`)).toBe('/a;b\\c')
+  })
+
+  it('recovers a cwd with a space via the OSC 7 raw-path fallback (posix)', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    try {
+      // The script emits `file://` + raw $PWD; a space is preserved (not %20) and
+      // decodeURIComponent leaves a raw space untouched.
+      expect(parseOsc7(`\x1b]7;file:///home/u/my dir${BEL}`)).toBe('/home/u/my dir')
+    } finally {
+      Object.defineProperty(process, 'platform', { value: process.platform })
+    }
+  })
+})

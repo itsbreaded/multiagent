@@ -18,6 +18,11 @@ export default defineConfig({
             fileName: 'shellIntegration.ps1',
             source: readFileSync(resolve('src/main/pty/shellIntegration.ps1'), 'utf8'),
           })
+          this.emitFile({
+            type: 'asset',
+            fileName: 'shellIntegration.sh',
+            source: readFileSync(resolve('src/main/pty/shellIntegration.sh'), 'utf8'),
+          })
         },
       },
       {

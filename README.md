@@ -1,11 +1,11 @@
 # MultiAgent
 
-MultiAgent is a Windows desktop workspace for running Claude Code, Codex, and regular shell sessions side by side. It combines a tiling terminal, persistent project layouts, searchable agent history, and an embedded browser that agents can control through MCP.
+MultiAgent is a desktop workspace for running Claude Code, Codex, and regular shell sessions side by side. It combines a tiling terminal, persistent project layouts, searchable agent history, and an embedded browser that agents can control through MCP.
 
 MultiAgent began as a passion project by a single developer building the ideal app for their own workflow. Its purpose is to provide an easy-to-use terminal multiplexer for CLI coding agents, whether they are accessed through a subscription or an API key. It supports Claude Code and Codex with their native services as well as compatible third-party providers and models such as GLM and Qwen—without locking the workflow into an app-specific AI integration or monetization model.
 
 > [!WARNING]
-> MultiAgent is alpha software. Expect breaking changes and rough edges. Windows 10 and 11 are currently the only supported platforms.
+> MultiAgent is alpha software. Expect breaking changes and rough edges. It runs on Windows 10/11, macOS (Apple Silicon), and Linux. macOS builds are **unsigned** for now (see [Installing on macOS](#installing-on-macos)); Linux AppImage/deb are unsigned.
 
 ![MultiAgent workspace showing agent and shell panes](docs/screenshots/main-screen.png)
 
@@ -15,7 +15,7 @@ Agent CLIs work well independently, but real projects often need several session
 
 ## Features
 
-- **Claude Code and Codex in one app** — start either agent in any project directory and mix agent and PowerShell panes in the same tab.
+- **Claude Code and Codex in one app** — start either agent in any project directory and mix agent and shell (PowerShell, bash, zsh) panes in the same tab.
 - **Flexible tiling layouts** — split panes horizontally or vertically, resize and zoom them, reorder panes and tabs with drag and drop, or move work into a detached window.
 - **Persistent workspaces** — tabs, pane trees, directories, sidebar state, and active sessions are restored when the app starts. Inactive tabs are loaded on demand.
 - **Resume and search agent sessions** — browse recent Claude and Codex sessions, filter summaries instantly, or deep-search complete transcripts with literal, case-sensitive, and regex modes.
@@ -37,11 +37,11 @@ Agent CLIs work well independently, but real projects often need several session
 
 | Requirement | Notes |
 | --- | --- |
-| Windows 10 or 11 | MultiAgent uses PowerShell, ConPTY, and Windows shell integration. macOS and Linux are not supported yet. |
+| Windows 10/11, macOS (Apple Silicon), or Linux | Windows uses PowerShell + ConPTY; macOS/Linux use bash/zsh + `/proc` or `ps` for agent detection. |
 | Node.js 24.x | Required for development builds and native Electron dependencies. The expected version is in `.nvmrc`. |
 | Claude Code CLI | Required for Claude panes. Install `claude`, put it on `PATH`, and authenticate before launching MultiAgent. |
 | Codex CLI | Required for Codex panes. Install `codex`, put it on `PATH`, and authenticate before launching MultiAgent. |
-| Visual Studio Build Tools and Python | Usually unnecessary; only needed if npm cannot use prebuilt native modules. |
+| Native build toolchain | Windows: Visual Studio Build Tools + Python (only if npm can't use prebuilt native modules). macOS: Xcode Command Line Tools. Linux: build-essential + `libudev-dev` (for node-pty). |
 
 You only need the CLI for the agents you intend to use. Shell panes work independently.
 
@@ -58,16 +58,33 @@ npm run dev
 
 Do not install with `--ignore-scripts`. The postinstall step downloads Electron, rebuilds `better-sqlite3` for Electron's ABI, and applies required package patches.
 
-To produce an installer and an unpacked build:
+To produce an installer and an unpacked build for your OS:
 
-```powershell
-npm run dist
+```bash
+npm run dist          # builds for the host OS (NSIS on Windows, dmg+zip on macOS, AppImage+deb on Linux)
 ```
 
-The installer is written to `dist\MultiAgent Setup X.Y.Z.exe`; the unpacked application is written to `dist\win-unpacked\`.
+On Windows the installer is written to `dist\MultiAgent Setup X.Y.Z.exe` and the unpacked app to `dist\win-unpacked\`. On macOS the output is `dist/MultiAgent-X.Y.Z-arm64.dmg` + `.zip`. On Linux it is `dist/MultiAgent-X.Y.Z.AppImage` + `.deb`. (On macOS, generate the icon first with `npm run build:icon` — the CI release workflow does this automatically.)
 
 > [!NOTE]
 > Windows Developer Mode must be enabled to package the app without administrator privileges because Electron Builder creates symbolic links. Development mode (`npm run dev`) does not require it.
+
+## Installing a release
+
+Download the latest artifacts from [GitHub Releases](https://github.com/itsbreaded/multiagent/releases):
+
+- **Windows** — `MultiAgent Setup X.Y.Z.exe` (per-user NSIS installer, no admin rights).
+- **Linux** — `MultiAgent-X.Y.Z.AppImage` (make executable: `chmod +x` and run) or the `.deb`.
+
+### Installing on macOS
+
+The macOS build is currently **unsigned** (Gatekeeper will warn that the developer cannot be verified). To run it, drag `MultiAgent.app` from the dmg to `/Applications`, then strip the quarantine attribute:
+
+```bash
+xattr -cr /Applications/MultiAgent.app
+```
+
+Then open it normally (or right-click → Open the first time). A future release will be signed + notarized once an Apple Developer ID is in place, which removes this step. Unsigned updates auto-downloaded by the in-app updater have the same Gatekeeper caveat — re-run `xattr -cr` after an update, or download the dmg directly.
 
 ## Basic workflow
 

@@ -1,6 +1,6 @@
 {
   "name": "multiagent",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Multiagent",
   "main": "out/main/index.js",
   "scripts": {
@@ -13,10 +13,13 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npm run build && playwright test",
     "pack": "electron-builder --dir",
-    "dist": "electron-vite build && electron-builder --win nsis dir",
+    "dist": "electron-vite build && electron-builder",
     "dist:dir": "electron-vite build && electron-builder --win dir",
     "dist:nsis": "electron-vite build && electron-builder --win nsis",
-    "release": "electron-vite build && electron-builder --win nsis --publish always",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:linux": "electron-vite build && electron-builder --linux",
+    "release": "electron-vite build && electron-builder --publish always",
+    "build:icon": "node scripts/build-icon.mjs",
     "postinstall": "node node_modules/electron/install.js && electron-rebuild -f -o better-sqlite3 && patch-package"
   },
   "keywords": [],
@@ -105,7 +108,12 @@
       "allowToChangeInstallationDirectory": false
     },
     "mac": {
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSCameraUsageDescription": "Application requests access to the device's camera.",
@@ -115,8 +123,13 @@
       }
     },
     "linux": {
-      "target": "AppImage",
-      "category": "Development"
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "maintainer": "Chris Haniszewski <Chris.Haniszewski@ecentria.com>",
+      "vendor": "MultiAgent"
     }
   }
 }

@@ -14,7 +14,7 @@ import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { defaultShell } from './shell'
-import { shellIntegrationCommand } from './terminalEnvironment'
+import { shellIntegrationCommand, unixShellLaunch } from './terminalEnvironment'
 import { buildEnv } from './buildEnv'
 
 export interface PtyReadyEvent {
@@ -280,17 +280,20 @@ export class PtyManager extends EventEmitter {
     this._send({ type: 'spawn', id, cwd, cmd, env, cols, rows, allowCwdFallback })
   }
 
-  private _shellCmd(): string[] {
+  private _shellCmd(): { cmd: string[]; env?: Record<string, string> } {
     if (process.platform === 'win32') {
-      return ['powershell.exe', ...shellIntegrationCommand()]
+      return { cmd: ['powershell.exe', ...shellIntegrationCommand()] }
     }
-    return [defaultShell()]
+    // Unix: wire the shell-integration script (OSC 633;P;Cwd + OSC 7) into bash/zsh. Falls
+    // back to the bare shell if the integration script can't be materialized.
+    return unixShellLaunch(defaultShell())
   }
 
   createShell(cwd: string, initialSize?: { cols: number; rows: number }): string {
     // Shell panes may fall back to the home directory for deleted cwd paths.
     // Agent panes validate cwd before spawning and should fail loudly instead.
-    return this.createDeferred(cwd, this._shellCmd(), undefined, initialSize, true)
+    const { cmd, env } = this._shellCmd()
+    return this.createDeferred(cwd, cmd, env, initialSize, true)
   }
 
   write(ptyId: string, data: string): void {
