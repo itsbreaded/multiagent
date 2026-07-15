@@ -18,16 +18,16 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: 'npm'
 
       - name: Cache Electron binary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/AppData/Local/electron
@@ -62,7 +62,11 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
+          # npm test runs vitest without coverage, so coverage/ usually doesn't exist.
+          # Ignore rather than warn; switch the Test step to `npm run test:coverage`
+          # to actually collect per-OS coverage artifacts.
+          if-no-files-found: ignore
           name: coverage-${{ runner.os }}
           path: coverage/

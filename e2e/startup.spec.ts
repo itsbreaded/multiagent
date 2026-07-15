@@ -68,6 +68,28 @@ async function spawnShell(page: Page, userDataDir: string): Promise<{ tab: Saved
   return { tab: tab!, ptyId }
 }
 
+async function closeApp(target: ElectronApplication): Promise<void> {
+  // Graceful close can stall on macOS: the main process intentionally does not quit on
+  // window-all-closed (darwin) and preventDefaults before-quit until its shutdown cleanup
+  // (PTY worker teardown, MCP/agent-report HTTP servers, detached-window state collection)
+  // resolves. If any of that hangs on a CI runner, app.close() blocks indefinitely — the
+  // test then blows its 30s timeout mid-afterEach, which surfaces as "Worker teardown
+  // timeout of 30000ms exceeded". Race graceful close against a hard SIGKILL of the whole
+  // Electron process tree so teardown always completes in bounded time.
+  const proc = target.process()
+  const hardKill = new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGKILL') } catch { /* already exited */ }
+      resolve()
+    }, 5_000)
+    timer.unref?.()
+  })
+  await Promise.race([
+    target.close().catch(() => {}),
+    hardKill,
+  ])
+}
+
 async function tearOffTab(app: ElectronApplication, page: Page, tabName: string): Promise<Page> {
   const tabElement = page.locator('.tab-strip').getByText(tabName, { exact: true }).locator('..')
   const transfer = await page.evaluateHandle(() => new DataTransfer())
@@ -148,7 +170,7 @@ test.describe('cold-start layout restore', () => {
   })
 
   test.afterEach(async () => {
-    await app?.close()
+    await closeApp(app)
     await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })
 
@@ -241,7 +263,7 @@ test.describe('cold-start layout restore', () => {
 
   test('surfaces a missing PTY worker instead of leaving a shell pane hanging', async () => {
     test.setTimeout(60_000)
-    await app.close()
+    await closeApp(app)
     const workerPath = join(repoRoot, 'out', 'main', 'ptyWorker.js')
     const hiddenWorkerPath = `${workerPath}.e2e-hidden`
     await rename(workerPath, hiddenWorkerPath)
@@ -335,7 +357,7 @@ test.describe('cold-start layout restore', () => {
       cwd: repairedProjectCwd,
     }))
 
-    await app.close()
+    await closeApp(app)
     await launchTestApp()
     await page.evaluate(() => window.ipc.invoke('sessions:refresh'))
     const matches = await page.evaluate(
@@ -507,7 +529,7 @@ test.describe('cold-start layout restore', () => {
   test('preserves a nested right-column agent across repeated horizontal splits', async () => {
     test.setTimeout(90_000)
     const layoutPath = join(userDataDir, 'layout.json')
-    await app.close()
+    await closeApp(app)
     await writeFile(layoutPath, JSON.stringify({
       tabs: [{
         id: 'tab-restored-nested',
