@@ -10,23 +10,12 @@
 import { EventEmitter } from 'events'
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
-import { appendFileSync, existsSync } from 'fs'
+import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { defaultShell } from './shell'
 import { shellIntegrationCommand, unixShellLaunch } from './terminalEnvironment'
 import { buildEnv } from './buildEnv'
-
-// Temporary first-time-macOS diagnostics (see ptyWorker.ts). Main-process stderr is captured by
-// Playwright and never reaches the CI log, so log worker lifecycle events to the same file the
-// test reads. Remove once macOS PTY is green.
-const diagLogPath = process.env.MULTIAGENT_E2E_USER_DATA_DIR
-  ? join(process.env.MULTIAGENT_E2E_USER_DATA_DIR, 'ptydbg.log')
-  : null
-function diagLog(line: string): void {
-  if (!diagLogPath) return
-  try { appendFileSync(diagLogPath, line + '\n') } catch { /* ignore */ }
-}
 
 export interface PtyReadyEvent {
   id: string
@@ -162,14 +151,12 @@ export class PtyManager extends EventEmitter {
 
     this.worker.on('error', (err) => {
       console.error('[PtyManager] worker error:', err)
-      diagLog(`[ptydbg][main] worker error: ${String(err)}`)
       this._handleWorkerCrash(null)
     })
 
     this.worker.on('exit', (code) => {
       if (this.destroying) return
       console.error('[PtyManager] worker exited with code', code)
-      diagLog(`[ptydbg][main] worker exited code=${code}`)
       this._handleWorkerCrash(code)
     })
   }

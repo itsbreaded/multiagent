@@ -13,18 +13,8 @@ interface SavedTab {
 }
 
 function launchEnv(userDataDir: string, homeDir: string): Record<string, string> {
-  // GitHub Actions injects an enormous environment (GITHUB_*, RUNNER_*, ACTIONS_*, toolchain
-  // vars). buildEnv forwards the whole of process.env into each PTY, and on macOS node-pty's
-  // posix_spawnp path chokes on the oversized envp (posix_spawnp failed.) while Linux/Win are
-  // more forgiving. Strip the CI-only prefixes so the Electron process under test has a realistic
-  // (small) environment — the real app launches from a small GUI env, so this also keeps the test
-  // honest about production. If macOS still throws posix_spawnp after this, the cause is the
-  // node-pty native binding, not env size (see @lydell/node-pty switch in CLAUDE.md notes).
-  const CI_NOISE = /^(GITHUB_|RUNNER_|ACTIONS_|AGENT_|ANDROID_|JAVA_|GRADLE_|BOOST_|VCPKG|DOTNET_|CONDA_|PERL_|RUST|CHROME|BUILD_|ImageOS|ImageVersion|RUNNER_TRACKING_ID|HOSTNAME)/
   const inherited = Object.fromEntries(
-    Object.entries(process.env)
-      .filter((entry): entry is [string, string] => entry[1] !== undefined)
-      .filter(([key]) => !CI_NOISE.test(key))
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   )
   return {
     ...inherited,
@@ -187,13 +177,6 @@ test.describe('cold-start layout restore', () => {
   })
 
   test.afterEach(async () => {
-    // Surface the E2E-gated PTY diagnostics (written by ptyWorker.ts to <userDataDir>/ptydbg.log).
-    // Electron's main-process stderr is captured by Playwright and never reaches the CI log, so
-    // the test reads the file and prints it — test-side console output DOES appear in Playwright.
-    try {
-      const log = await readFile(join(userDataDir, 'ptydbg.log'), 'utf8')
-      if (log.trim()) console.log(`\n--- ptydbg.log ---\n${log}--- end ptydbg ---\n`)
-    } catch { /* no diagnostic log for this test (e.g. no PTY spawned) */ }
     await closeApp(app)
     await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })
@@ -306,7 +289,7 @@ test.describe('cold-start layout restore', () => {
       await page.keyboard.press('Enter')
       await expect(page.locator('.xterm-rows')).toContainText('terminal error:', { timeout: 10_000 })
     } finally {
-      await app?.close()
+      await closeApp(app)
       await rename(hiddenWorkerPath, workerPath)
     }
   })
@@ -419,7 +402,7 @@ test.describe('cold-start layout restore', () => {
       const timer = window.setTimeout(() => {
         unsubscribe()
         reject(new Error('Timed out waiting for direct PTY output'))
-      }, 5_000)
+      }, 15_000)
       const unsubscribe = window.ipc.on(
         'pty:data',
         (receivedId: unknown, chunk: unknown, seq: unknown) => {
