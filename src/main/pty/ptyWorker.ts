@@ -7,7 +7,7 @@
  * isolation, claude (a Bun binary) crashes on startup with exit code 1.
  */
 
-import * as pty from 'node-pty'
+import * as pty from '@lydell/node-pty'
 import { appendFileSync, existsSync } from 'fs'
 import { homedir, release } from 'os'
 import { basename, join } from 'path'
