@@ -13,6 +13,17 @@ import { homedir, release } from 'os'
 import { basename } from 'path'
 import { defaultShell } from './shell'
 
+// Temporary first-time-macOS diagnostics. Gated to E2E runs only (the env var is set
+// exclusively by startup.spec.ts) so production is unaffected. stderr is forwarded to the
+// main-process console by PtyManager and appears in CI output. Remove once macOS PTY is green.
+const E2E_DEBUG = !!process.env.MULTIAGENT_E2E_USER_DATA_DIR
+function dbg(label: string, extra?: unknown): void {
+  if (!E2E_DEBUG) return
+  const detail = extra === undefined ? '' : ' ' + (typeof extra === 'string' ? extra : JSON.stringify(extra))
+  console.error(`[ptydbg] ${label}${detail}`)
+}
+dbg('worker started', { platform: process.platform, shell: defaultShell(), nodePty: !!pty })
+
 type WorkerMessage =
   | { type: 'spawn'; id: string; cwd: string; cmd: string[]; env: Record<string, string>; cols: number; rows: number; allowCwdFallback?: boolean }
   | { type: 'write'; id: string; data: string }
@@ -46,7 +57,9 @@ process.on('message', (msg: WorkerMessage) => {
       const shell = msg.cmd[0] ?? defaultShell()
       const args = msg.cmd.slice(1)
       const cwdExists = existsSync(msg.cwd)
+      dbg('spawn', { id: msg.id, shell, args, cwd: msg.cwd, cwdExists, cols: msg.cols, rows: msg.rows })
       if (!cwdExists && !msg.allowCwdFallback) {
+        dbg('spawn rejected (cwd missing)', { id: msg.id })
         send({ type: 'error', id: msg.id, message: `Working directory does not exist: ${msg.cwd}` })
         break
       }
@@ -65,9 +78,15 @@ process.on('message', (msg: WorkerMessage) => {
             conptyInheritCursor: false,
           } : {}),
         })
+        dbg('spawned', { id: msg.id, pid: ptyProcess.pid })
 
-        ptyProcess.onData((data) => send({ type: 'data', id: msg.id, data }))
+        let dataSeen = false
+        ptyProcess.onData((data) => {
+          if (!dataSeen) { dataSeen = true; dbg('first data', { id: msg.id, bytes: data.length }) }
+          send({ type: 'data', id: msg.id, data })
+        })
         ptyProcess.onExit(({ exitCode, signal }) => {
+          dbg('exit', { id: msg.id, exitCode, signal })
           instances.delete(msg.id)
           send({ type: 'exit', id: msg.id, exitCode, signal })
           finishShutdownIfReady()
@@ -76,6 +95,7 @@ process.on('message', (msg: WorkerMessage) => {
         instances.set(msg.id, ptyProcess)
         sendReadyWhenPidIsAvailable(msg.id, ptyProcess, safeCwd)
       } catch (err) {
+        dbg('spawn threw', { id: msg.id, error: String(err) })
         send({ type: 'error', id: msg.id, message: String(err) })
       }
       break
@@ -130,6 +150,7 @@ function finishShutdown(): void {
 
 function sendReadyWhenPidIsAvailable(id: string, ptyProcess: pty.IPty, cwd: string): void {
   const sendReady = () => {
+    dbg('sending ready', { id, pid: ptyProcess.pid })
     send({
       type: 'ready',
       id,
