@@ -177,6 +177,13 @@ test.describe('cold-start layout restore', () => {
   })
 
   test.afterEach(async () => {
+    // Surface the E2E-gated PTY diagnostics (written by ptyWorker.ts to <userDataDir>/ptydbg.log).
+    // Electron's main-process stderr is captured by Playwright and never reaches the CI log, so
+    // the test reads the file and prints it — test-side console output DOES appear in Playwright.
+    try {
+      const log = await readFile(join(userDataDir, 'ptydbg.log'), 'utf8')
+      if (log.trim()) console.log(`\n--- ptydbg.log ---\n${log}--- end ptydbg ---\n`)
+    } catch { /* no diagnostic log for this test (e.g. no PTY spawned) */ }
     await closeApp(app)
     await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })

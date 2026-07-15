@@ -8,19 +8,25 @@
  */
 
 import * as pty from 'node-pty'
-import { existsSync } from 'fs'
+import { appendFileSync, existsSync } from 'fs'
 import { homedir, release } from 'os'
-import { basename } from 'path'
+import { basename, join } from 'path'
 import { defaultShell } from './shell'
 
 // Temporary first-time-macOS diagnostics. Gated to E2E runs only (the env var is set
-// exclusively by startup.spec.ts) so production is unaffected. stderr is forwarded to the
-// main-process console by PtyManager and appears in CI output. Remove once macOS PTY is green.
-const E2E_DEBUG = !!process.env.MULTIAGENT_E2E_USER_DATA_DIR
+// exclusively by startup.spec.ts) so production is unaffected. Electron main-process stderr
+// is captured by Playwright and never reaches the CI step log, so also append each line to
+// <userDataDir>/ptydbg.log, which the test's afterEach reads and console.logs (test-side
+// console DOES appear in Playwright output). Remove once macOS PTY is green.
+const e2eUserDataDir = process.env.MULTIAGENT_E2E_USER_DATA_DIR
+const E2E_DEBUG = !!e2eUserDataDir
+const dbgLogPath = e2eUserDataDir ? join(e2eUserDataDir, 'ptydbg.log') : null
 function dbg(label: string, extra?: unknown): void {
   if (!E2E_DEBUG) return
   const detail = extra === undefined ? '' : ' ' + (typeof extra === 'string' ? extra : JSON.stringify(extra))
-  console.error(`[ptydbg] ${label}${detail}`)
+  const line = `[ptydbg] ${label}${detail}`
+  console.error(line)
+  try { appendFileSync(dbgLogPath!, line + '\n') } catch { /* ignore */ }
 }
 dbg('worker started', { platform: process.platform, shell: defaultShell(), nodePty: !!pty })
 
