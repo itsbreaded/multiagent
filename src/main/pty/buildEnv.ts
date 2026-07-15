@@ -24,6 +24,14 @@ export function buildEnv(
   delete env['CLAUDE_CODE_DISABLE_MOUSE']
   delete env['CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL']
   delete env['CLAUDE_CODE_NO_FLICKER']
+  // MultiAgent pane-identity vars (spec 047 phase 3 / phase 4) are set per-pane via
+  // extraVars when the session-linking feature is on. Scrub inherited copies so a nested
+  // MultiAgent (launched from inside one of our panes) never reuses the outer pane's id or
+  // session id (the latter would make an app-Claude hook bail on the wrong id).
+  delete env['MULTIAGENT_PTY_ID']
+  delete env['MULTIAGENT_ENV']
+  delete env['MULTIAGENT_HOOK_PORT']
+  delete env['MULTIAGENT_SESSION_ID']
 
   env['TERM'] = 'xterm-256color'
   env['COLORTERM'] = 'truecolor'

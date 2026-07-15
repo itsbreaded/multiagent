@@ -30,3 +30,23 @@ export function writeJsonAtomic(filePath: string, value: unknown, space?: number
     throw err
   }
 }
+
+/**
+ * Atomically write raw `text` to `filePath`. Same temp-file + rename discipline as
+ * `writeJsonAtomic`, for non-JSON files (e.g. the Codex `~/.codex/config.toml` the
+ * managed-hook feature touches). `.bak` handling stays with the caller.
+ */
+export function writeTextAtomic(filePath: string, text: string): void {
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`
+  try {
+    fs.writeFileSync(tmpPath, text)
+    fs.renameSync(tmpPath, filePath)
+  } catch (err) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
+    } catch {
+      // ignore
+    }
+    throw err
+  }
+}

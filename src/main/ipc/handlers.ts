@@ -11,6 +11,9 @@ import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner, setAgentProviderSettings } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
+import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
+import { AgentSessionReportServer } from '../integration/agentSessionReportServer'
+import { ManagedHookController } from '../integration/managedHookController'
 import { openExternalUrl } from '../external'
 import { getRecentDirs, addRecentDir } from '../recentDirs'
 import { mcpManager } from '../mcp/McpManager'
@@ -54,8 +57,74 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const index = new SessionIndex()
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
-  const ptyManager = new PtyManager()
-  const spawner = new SessionSpawner(ptyManager, mainWindow)
+
+  // spec 047 phase 3 / phase 4: managed SessionStart hooks for session linking. Default-ON
+  // under phase 4 — app-launched Codex can ONLY link via the managed hook now that the
+  // file-poll scanner is gone. When enabled, managed hooks in ~/.claude/settings.json and
+  // ~/.codex/hooks.json report the exact agent session id back to this report server, so a
+  // launched (or CLI-launched, promoted) pane links the running session (including across
+  // in-pane resume/fork) and resumes on restart. Built before PtyManager so the pane-identity
+  // env (MULTIAGENT_PTY_ID/HOOK_PORT) can close over the live port. A scoped, reversible
+  // exception to the "no agent config mutation" rule; both Claude and Codex use hooks.
+  const cliLinkingPath = path.join(app.getPath('userData'), 'cli-session-linking.json')
+  let cliSessionLinkingEnabled = true
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cliLinkingPath, 'utf8'))
+    if (parsed && typeof parsed.enabled === 'boolean') cliSessionLinkingEnabled = parsed.enabled
+  } catch { /* missing/corrupt → default-on */ }
+  const reportServer = new AgentSessionReportServer({
+    onReport: (r) => {
+      // Link the reported session to the pane that owns the ptyId. The renderer's
+      // session:detected listener promotes a still-shell pane if the hook raced ahead of
+      // the sweeper, then attaches the sessionId. agentKind comes from the hook (claude or
+      // codex) so app/CLI Codex sessions now link the same way Claude does (spec 047 p4).
+      windowManager.sendToWindowForPty(r.ptyId, 'session:detected', r.ptyId, r.agentKind, r.sessionId)
+    },
+  })
+  const managedHook = new ManagedHookController({
+    claudeSettingsPath: ManagedHookController.defaultClaudeSettingsPath(),
+    codexHooksPath: ManagedHookController.defaultCodexHooksPath(),
+    codexConfigPath: ManagedHookController.defaultCodexConfigPath(),
+    legacyClaudeConfigPath: ManagedHookController.legacyClaudeConfigPath(),
+    userDataDir: app.getPath('userData'),
+    sourceHookScriptPath: ManagedHookController.resolveHookScriptPath(),
+  })
+  async function applyCliSessionLinking(enabled: boolean): Promise<boolean> {
+    cliSessionLinkingEnabled = enabled
+    try { writeJsonAtomic(cliLinkingPath, { enabled }, 2) } catch (err) { console.error('[MultiAgent] cli-session-linking persist failed:', err) }
+    if (enabled) {
+      reportServer.start()
+      const port = await reportServer.ready()
+      if (!port) { cliSessionLinkingEnabled = false; return false }
+      try { managedHook.install() }
+      catch (err) { console.error('[MultiAgent] managed hook install failed:', err); return false }
+    } else {
+      reportServer.stop()
+      try { managedHook.uninstall() }
+      catch (err) { console.error('[MultiAgent] managed hook uninstall failed:', err) }
+    }
+    return true
+  }
+  // Track the in-flight apply so session:new / session:resume can await the report server
+  // port being assigned before spawning — otherwise an app-Codex pane spawned in the first
+  // few ms would have no MULTIAGENT_HOOK_PORT and fail to link that launch (spec 047 p4).
+  let linkingApplyPromise: Promise<void> = applyCliSessionLinking(cliSessionLinkingEnabled)
+    .then(() => undefined, () => undefined)
+  function runLinkingApply(enabled: boolean): Promise<boolean> {
+    const p = applyCliSessionLinking(enabled)
+    linkingApplyPromise = p.then(() => undefined, () => undefined)
+    return p
+  }
+
+  const ptyManager = new PtyManager({
+    getPaneEnv: (ptyId) => {
+      if (!cliSessionLinkingEnabled) return {}
+      const port = reportServer.port
+      const base: Record<string, string> = { MULTIAGENT_PTY_ID: ptyId, MULTIAGENT_ENV: '1' }
+      return port ? { ...base, MULTIAGENT_HOOK_PORT: String(port) } : base
+    },
+  })
+  const spawner = new SessionSpawner(ptyManager)
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
   let cleanupPromise: Promise<void> | null = null
   const gitBranchWatcher = new GitBranchWatcher((cwdKeys, branch) => {
@@ -65,6 +134,18 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     ptyManager,
     windowManager,
     onCommandComplete: (cwd) => { void gitBranchWatcher.retryUnresolvedCwd(cwd) },
+  })
+
+  // spec 047 phase 1 / phase 4: CLI-launched agent detection. The sweeper promotes a shell
+  // pane when a claude/codex process becomes the foreground in its tree, and demotes it
+  // back to a shell when the agent exits (hooks fire on start, not exit — the sweeper owns
+  // demotion). Session-id linking is now entirely the managed hooks' job: the hook fires at
+  // SessionStart and reports the id (see reportServer above), so there is no separate linker.
+  // The sweeper is app-global (PtyManager is a singleton; delivery is cross-window via
+  // sendToWindowForPty).
+  const agentSweeper = new AgentProcessSweeper({
+    ptyManager,
+    sendToWindowForPty: (ptyId, channel, ...args) => windowManager.sendToWindowForPty(ptyId, channel, ...args),
   })
 
   async function scanAllSessions() {
@@ -206,7 +287,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   registrar.handle('session:new', async (e, agentKind, cwd: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
-    const result = await spawner.spawnNew(agentKind, cwd, senderWin)
+    // Ensure the report server port is assigned (hooks linking on) before spawning, so an
+    // app-Codex pane gets MULTIAGENT_HOOK_PORT and links at start (spec 047 p4 race fix).
+    await linkingApplyPromise
+    const result = await spawner.spawnNew(agentKind, cwd)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
     ptyOutputRouter.flushDirectOutput(result.ptyId)
     return result
@@ -214,7 +298,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   registrar.handle('session:resume', async (e, agentKind, sessionId: string, cwd: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
-    const result = await spawner.spawnResume(agentKind, sessionId, cwd, senderWin)
+    await linkingApplyPromise
+    const result = await spawner.spawnResume(agentKind, sessionId, cwd)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
     ptyOutputRouter.flushDirectOutput(result.ptyId)
     return result
@@ -229,6 +314,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     windowManager.routePty(ptyId, senderWin.webContents.id)
     ptyOutputRouter.flushDirectOutput(ptyId)
+    // Watch this shell pane for a CLI-launched agent (spec 047 phase 1). Agent panes use
+    // session:new / session:resume and are intentionally not tracked.
+    agentSweeper.trackShell(ptyId)
     return { ptyId }
   })
 
@@ -246,7 +334,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   registrar.on('pty:write', (e, ptyId: string, data: string) => {
     if (!senderMayControlPty(ptyId, e.sender.id)) return
-    spawner.notePtyWrite(ptyId, data)
     ptyManager.write(ptyId, data)
   })
 
@@ -394,6 +481,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     setAgentProviderSettings(sanitized)
   })
 
+  // --- CLI session linking (spec 047 phase 3) ---
+  registrar.handle('settings:get-cli-session-linking', () => cliSessionLinkingEnabled)
+  registrar.handle('settings:set-cli-session-linking', async (_e, enabled: boolean) => {
+    return runLinkingApply(enabled === true)
+  })
+
   // --- GPU feature status ---
   registrar.handle('gpu:feature-status', () => {
     const status = app.getGPUFeatureStatus()
@@ -472,6 +565,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       ptyOutputRouter.dispose()
       index.close()
       spawner.dispose()
+      agentSweeper.dispose()
+      reportServer.stop()
       cleanupPromise = Promise.all([
         gitBranchWatcher.dispose(),
         ptyManager.destroy(),

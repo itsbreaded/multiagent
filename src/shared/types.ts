@@ -164,6 +164,13 @@ export interface PaneLeaf {
   sessionDetectionError?: string
   title?: string        // programmatic display override (full)
   customName?: string   // user-set label prefix shown before the directory name
+  // In-memory only: true when this pane was promoted from a shell pane because a CLI
+  // agent (claude/codex) was detected running in its process tree (spec 047). Only panes
+  // with this flag demote back to a shell when the agent exits; native (app-spawned)
+  // agent panes never set it and keep their exit/resume behavior. NOT serialized — strip
+  // it before writing layout.json (a phase-1-only promotion with no sessionId reverts to
+  // a shell on restart via applyLayout's sanitizeNode).
+  promotedFromShell?: boolean
 }
 
 export type SplitDirection = 'horizontal' | 'vertical'
@@ -375,6 +382,12 @@ export interface IPCChannels {
   'settings:get-agent-providers': () => AgentProviderSettings
   'settings:save-agent-providers': (settings: AgentProviderSettings) => void
 
+  // --- CLI session linking (spec 047 phase 3) ---
+  // Opt-in managed Claude SessionStart hook that reports session ids for CLI-launched
+  // (promoted) agents. Main is the authority for the hook install + env injection.
+  'settings:get-cli-session-linking': () => boolean
+  'settings:set-cli-session-linking': (enabled: boolean) => boolean
+
   // --- GPU / renderer diagnostics ---
   // Renderer asks main for Chromium's GPU feature status. Used to corroborate
   // the renderer-side WebGL probe (primary signal); never on the critical path.
@@ -384,6 +397,10 @@ export interface IPCChannels {
   // Main notifies renderer when a new agent session file is detected for a spawned PTY
   'session:detected': (ptyId: string, agentKind: AgentKind, sessionId: string) => void
   'session:detection-failed': (ptyId: string, agentKind: AgentKind, reason: string, mode: 'new' | 'resume') => void
+  // Main notifies renderer that a CLI-launched agent was detected in (or has exited from)
+  // a shell pane's process tree (spec 047). agentKind non-null = promote the shell pane to
+  // an agent pane; null = demote a previously-promoted pane back to a shell.
+  'pane:agent-detected': (ptyId: string, agentKind: AgentKind | null) => void
 
   // --- Multi-window: window identity / init ---
   'window:get-id': () => number | null
@@ -507,6 +524,8 @@ export type InvokeChannels = ChannelSubset<
   | 'mcp:probe-stdio'
   | 'settings:get-agent-providers'
   | 'settings:save-agent-providers'
+  | 'settings:get-cli-session-linking'
+  | 'settings:set-cli-session-linking'
   | 'gpu:feature-status'
   | 'updater:check'
   | 'updater:get-version'
@@ -542,6 +561,7 @@ export type EventChannels = ChannelSubset<
   | 'pty:cwd'
   | 'session:detected'
   | 'session:detection-failed'
+  | 'pane:agent-detected'
   | 'window:snap-zones'
   | 'window:maximized-changed'
   | 'window:focus-state-request'

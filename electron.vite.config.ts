@@ -20,6 +20,26 @@ export default defineConfig({
           })
         },
       },
+      {
+        // spec 047 phase 3 / phase 4: the managed SessionStart hook scripts, emitted beside
+        // out/main/index.js so ManagedHookController.resolveHookScriptPath finds them at
+        // runtime (dev and packaged). The .ps1 is used on Windows, the .sh on Linux/macOS;
+        // both are emitted on every build and the runtime picks the right one. Covered by
+        // build.files `out/**/*`.
+        name: 'copy-agent-state-hook',
+        generateBundle() {
+          this.emitFile({
+            type: 'asset',
+            fileName: 'multiagent-agent-state.ps1',
+            source: readFileSync(resolve('src/main/integration/assets/multiagent-agent-state.ps1'), 'utf8'),
+          })
+          this.emitFile({
+            type: 'asset',
+            fileName: 'multiagent-agent-state.sh',
+            source: readFileSync(resolve('src/main/integration/assets/multiagent-agent-state.sh'), 'utf8'),
+          })
+        },
+      },
     ],
     build: {
       rollupOptions: {

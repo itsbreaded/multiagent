@@ -519,3 +519,70 @@ describe('usePanesStore — identity-preserving pane patches', () => {
     expect(after.find((tab) => tab.id === agentTabId)).not.toBe(before.find((tab) => tab.id === agentTabId))
   })
 })
+
+describe('usePanesStore — CLI agent promotion/demotion (spec 047)', () => {
+  afterEach(() => {
+    Object.defineProperty(window, 'ipc', { configurable: true, value: undefined })
+  })
+
+  it('promoteShellPaneToAgent flips metadata and keeps the live ptyId', () => {
+    const shell = makeLeaf('C:\repo', 'shell')
+    shell.ptyId = 'shell-pty'
+    plantTab(shell)
+
+    usePanesStore.getState().promoteShellPaneToAgent(shell.id, 'claude')
+
+    const pane = usePanesStore.getState().findPaneInAnyTab(shell.id)
+    expect(pane?.paneType).toBe('agent')
+    expect(pane?.agentKind).toBe('claude')
+    expect(pane?.promotedFromShell).toBe(true)
+    // The shell pty is still running — ptyId must be untouched (no remount/clear).
+    expect(pane?.ptyId).toBe('shell-pty')
+  })
+
+  it('promoteShellPaneToAgent does not clobber a native (app-spawned) agent pane', () => {
+    const agent = makeLeaf('C:\repo', 'agent', 'claude')
+    agent.ptyId = 'agent-pty'
+    agent.sessionId = 'session-1'
+    plantTab(agent)
+
+    usePanesStore.getState().promoteShellPaneToAgent(agent.id, 'codex')
+
+    const pane = usePanesStore.getState().findPaneInAnyTab(agent.id)
+    expect(pane?.agentKind).toBe('claude')            // unchanged
+    expect(pane?.promotedFromShell).toBeUndefined()   // never set on a native agent pane
+  })
+
+  it('demoteAgentPaneToShell reverts a promoted pane and preserves the pty', () => {
+    const shell = makeLeaf('C:\repo', 'shell')
+    shell.ptyId = 'shell-pty'
+    plantTab(shell)
+    usePanesStore.getState().promoteShellPaneToAgent(shell.id, 'codex')
+    // Simulate a phase-2 link, then demote when the agent exits.
+    usePanesStore.getState().setSessionId(shell.id, 'linked-session')
+
+    usePanesStore.getState().demoteAgentPaneToShell(shell.id)
+
+    const pane = usePanesStore.getState().findPaneInAnyTab(shell.id)
+    expect(pane?.paneType).toBe('shell')
+    expect(pane?.agentKind).toBeUndefined()
+    expect(pane?.sessionId).toBeUndefined()
+    expect(pane?.promotedFromShell).toBeUndefined()
+    // Pure metadata — no pty kill, ptyId intact.
+    expect(pane?.ptyId).toBe('shell-pty')
+  })
+
+  it('demoteAgentPaneToShell never demotes a native agent pane', () => {
+    const agent = makeLeaf('C:\repo', 'agent', 'claude')
+    agent.ptyId = 'agent-pty'
+    agent.sessionId = 'session-1'
+    plantTab(agent)
+
+    usePanesStore.getState().demoteAgentPaneToShell(agent.id)
+
+    const pane = usePanesStore.getState().findPaneInAnyTab(agent.id)
+    expect(pane?.paneType).toBe('agent')
+    expect(pane?.agentKind).toBe('claude')
+    expect(pane?.sessionId).toBe('session-1')
+  })
+})

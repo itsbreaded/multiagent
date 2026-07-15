@@ -42,7 +42,33 @@ export function wirePanesIpc(): void {
       if (!tab.rootNode) continue
       const pane = findLeafByPtyId(tab.rootNode, ptyId)
       if (pane) {
+        // spec 047 phase 3: the managed Claude hook fires at session start, which can
+        // race ahead of the sweeper's promotion. If the report arrives for a still-shell
+        // pane, promote it first so the session id attaches to an agent pane. (For phase
+        // 2 and native panes the pane is already an agent, so this is a no-op.)
+        if (pane.paneType === 'shell') store.promoteShellPaneToAgent(pane.id, agentKind)
         store.setSessionId(pane.id, sessionId)
+        break
+      }
+    }
+  })
+
+  // spec 047: a CLI-launched agent was detected in (or has exited from) a shell pane's
+  // process tree. Promote the shell pane to an agent pane, or demote a previously-
+  // promoted pane back to a shell. The store actions guard the transitions (only a shell
+  // promotes; only a promotedFromShell pane demotes), so native agent panes are unaffected.
+  window.ipc.on('pane:agent-detected', (ptyId: unknown, agentKind: unknown) => {
+    if (typeof ptyId !== 'string') return
+    const store = usePanesStore.getState()
+    for (const tab of store.tabs) {
+      if (!tab.rootNode) continue
+      const pane = findLeafByPtyId(tab.rootNode, ptyId)
+      if (pane) {
+        if (agentKind === 'claude' || agentKind === 'codex') {
+          store.promoteShellPaneToAgent(pane.id, agentKind)
+        } else {
+          store.demoteAgentPaneToShell(pane.id)
+        }
         break
       }
     }

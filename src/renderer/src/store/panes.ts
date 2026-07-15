@@ -331,6 +331,11 @@ interface PanesStore {
   updatePaneRatio: (splitId: string, ratio: number) => void
   setPtyId: (paneId: string, ptyId: string) => void
   setSessionId: (paneId: string, sessionId: string) => void
+  // spec 047: promote a shell pane to an agent pane (CLI agent detected in its tree) /
+  // demote a previously-promoted pane back to a shell (agent exited). Pure metadata —
+  // neither kills the pty nor clears scrollback. Only promotedFromShell panes demote.
+  promoteShellPaneToAgent: (paneId: string, agentKind: AgentKind) => void
+  demoteAgentPaneToShell: (paneId: string) => void
   updatePane: (paneId: string, patch: Partial<PaneLeaf>) => void
   markPtyExited: (ptyId: string, exitCode: number | null, signal?: number) => void
   applyCwdRepair: (mapping: CwdRepairMapping) => void
@@ -1249,6 +1254,55 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         sessionDetectionState: 'detected',
         sessionDetectionError: undefined,
         resumeError: undefined,
+      })
+      return tabs ? { tabs } : s
+    })
+  },
+
+  promoteShellPaneToAgent: (paneId, agentKind) => {
+    // Flip metadata only. The shell pty is still running and MUST keep running — do not
+    // touch ptyId, clear scrollback, or remount. The Terminal connect effect re-runs on
+    // paneType change and reconnects to the same ptyId (skipping the "Starting session…"
+    // banner because ptyId is present). Atomic, tab-scoped via patchLeafInTabs.
+    set((s) => {
+      // Only promote a current shell pane; never clobber a native agent pane.
+      let isShell = false
+      for (const tab of s.tabs) {
+        if (!tab.rootNode) continue
+        const leaf = findLeaf(tab.rootNode, paneId)
+        if (leaf && leaf.paneType === 'shell') { isShell = true; break }
+      }
+      if (!isShell) return s
+      const tabs = patchLeafInTabs(s.tabs, paneId, {
+        paneType: 'agent',
+        agentKind,
+        promotedFromShell: true,
+      })
+      return tabs ? { tabs } : s
+    })
+  },
+
+  demoteAgentPaneToShell: (paneId) => {
+    // Only panes promoted from a shell demote. Native (app-spawned) agent panes never set
+    // promotedFromShell and keep their exit/resumeError/retry behavior. Pure metadata —
+    // no pty kill, no ptyId clear, no xterm clear; the shell prompt returns underneath.
+    set((s) => {
+      let promoted = false
+      for (const tab of s.tabs) {
+        if (!tab.rootNode) continue
+        const leaf = findLeaf(tab.rootNode, paneId)
+        if (leaf && leaf.promotedFromShell === true) { promoted = true; break }
+      }
+      if (!promoted) return s
+      const tabs = patchLeafInTabs(s.tabs, paneId, {
+        paneType: 'shell',
+        agentKind: undefined,
+        sessionId: undefined,
+        promotedFromShell: undefined,
+        sessionDetectionState: undefined,
+        sessionDetectionStartedAt: undefined,
+        sessionDetectionCwd: undefined,
+        sessionDetectionError: undefined,
       })
       return tabs ? { tabs } : s
     })

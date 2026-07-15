@@ -122,8 +122,58 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
 export function normalizeTabsForLayout(tabs: unknown): unknown {
   if (!Array.isArray(tabs)) return tabs
   return tabs.map((tab) => tab && typeof tab === 'object'
-    ? { ...(tab as Record<string, unknown>), detached: false }
+    ? { ...normalizeTabForLayout(tab as Record<string, unknown>), detached: false }
     : tab)
+}
+
+/** Per-tab normalization: strip transient pane state before writing layout.json. */
+function normalizeTabForLayout(tab: Record<string, unknown>): Record<string, unknown> {
+  if (tab && typeof tab.rootNode !== 'undefined') {
+    return { ...tab, rootNode: normalizeNodeForLayout(tab.rootNode) }
+  }
+  return tab
+}
+
+/**
+ * Strip in-memory-only pane state from a layout node before it is persisted.
+ *
+ * spec 047: `promotedFromShell` is never serialized. A phase-1-only promoted pane
+ * (agent + promotedFromShell + no sessionId) is reverted to a shell here so layout.json
+ * never carries a dangling agent leaf; a phase-2-linked promoted pane (has sessionId) is
+ * kept as an agent pane so it resumes on restart. Non-promoted panes pass through
+ * unchanged (applyLayout's sanitizeNode still handles legacy agent-no-sessionId on load).
+ */
+function normalizeNodeForLayout(node: unknown): unknown {
+  if (!node || typeof node !== 'object') return node
+  const record = node as Record<string, unknown>
+  if (record['type'] === 'leaf') {
+    if (record['promotedFromShell'] === true) {
+      const promoted = { ...record }
+      delete promoted['promotedFromShell']
+      if (!promoted['sessionId']) {
+        // Phase-1-only promotion (no session linked): persist as the original shell pane.
+        promoted['paneType'] = 'shell'
+        delete promoted['agentKind']
+        delete promoted['sessionId']
+        delete promoted['sessionDetectionState']
+        delete promoted['sessionDetectionStartedAt']
+        delete promoted['sessionDetectionCwd']
+        delete promoted['sessionDetectionError']
+      }
+      return promoted
+    }
+    // Defensive: never persist the flag even if it somehow appears on a non-promoted leaf.
+    if ('promotedFromShell' in record) {
+      const cleaned = { ...record }
+      delete cleaned['promotedFromShell']
+      return cleaned
+    }
+    return record
+  }
+  if (record['type'] === 'split') {
+    return { ...record, first: normalizeNodeForLayout(record['first']), second: normalizeNodeForLayout(record['second']) }
+  }
+  return record
 }
 
 export function rewriteLayoutCwds(layout: unknown, mapping: CwdRepairMapping): { changed: boolean; count: number } {

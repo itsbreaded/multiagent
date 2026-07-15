@@ -56,6 +56,16 @@ type PendingSpawn = {
 // render cycle (~16 ms), so 500 ms is a conservative backstop.
 const DEFERRED_SPAWN_TIMEOUT_MS = 500
 
+export interface PtyManagerOptions {
+  /**
+   * Per-pane env vars to merge into every PTY's environment at creation (spec 047 phase 3).
+   * Called with the freshly-generated ptyId so the caller can inject `MULTIAGENT_PTY_ID`
+   * etc. when the opt-in CLI session-linking feature is enabled; return {} otherwise.
+   * buildEnv scrubs inherited copies first, so a nested MultiAgent never reuses these.
+   */
+  getPaneEnv?: (ptyId: string) => Record<string, string | undefined>
+}
+
 export class PtyManager extends EventEmitter {
   private worker: ChildProcess
   private pendingResizes = new Map<string, { cols: number; rows: number }>()
@@ -68,9 +78,11 @@ export class PtyManager extends EventEmitter {
   // Latched the first time the worker exits unexpectedly while we are not
   // destroying. Once true, post-crash creates fail loudly instead of hanging.
   private workerDead = false
+  private readonly getPaneEnv?: (ptyId: string) => Record<string, string | undefined>
 
-  constructor() {
+  constructor(options: PtyManagerOptions = {}) {
     super()
+    this.getPaneEnv = options.getPaneEnv
     // ELECTRON_RUN_AS_NODE=1 makes electron.exe run as plain Node — no Chromium
     // init, no inherited Chromium handles. stdio 'ipc' gives us message passing.
     this.worker = spawn(
@@ -189,6 +201,9 @@ export class PtyManager extends EventEmitter {
     deferSpawn = false,
   ): string {
     const id = randomUUID()
+    // Merge per-pane identity env (spec 047 phase 3) before buildEnv scrubs+applies.
+    const paneEnv = this.getPaneEnv?.(id) ?? {}
+    const mergedExtraEnv = { ...extraEnv, ...paneEnv }
 
     if (this.workerDead) {
       // The worker host is gone; refuse to queue another silent-hang spawn.
@@ -207,7 +222,7 @@ export class PtyManager extends EventEmitter {
       const entry: PendingSpawn = {
         cwd,
         cmd,
-        env: buildEnv(extraEnv),
+        env: buildEnv(mergedExtraEnv),
         allowCwdFallback,
         size: initialSize,
         resized: false,
@@ -247,7 +262,7 @@ export class PtyManager extends EventEmitter {
         this.emit('error', id, new Error(`Working directory does not exist: ${cwd}`))
         return
       }
-      this._spawn(id, cwdExists ? cwd : homedir(), cmd, buildEnv(extraEnv), initialSize.cols, initialSize.rows, allowCwdFallback)
+      this._spawn(id, cwdExists ? cwd : homedir(), cmd, buildEnv(mergedExtraEnv), initialSize.cols, initialSize.rows, allowCwdFallback)
     })
     return id
   }

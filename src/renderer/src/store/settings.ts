@@ -72,6 +72,14 @@ interface SettingsState {
   setTerminalScrollbackLines: (value: number) => void
   autoUpdateEnabled: boolean
   setAutoUpdateEnabled: (value: boolean) => void
+  // spec 047 phase 3 / phase 4: managed SessionStart hooks for session linking. Default-ON
+  // under phase 4 (app-launched Codex can only link via the managed hook, now that the
+  // file-poll scanner is gone). Enabling installs managed hooks into ~/.claude/settings.json
+  // and ~/.codex/hooks.json (+ the [features] flag in ~/.codex/config.toml); reversible from
+  // this same toggle. Main is the authority — hydrate from it at startup.
+  cliSessionLinking: boolean
+  setCliSessionLinking: (value: boolean) => void
+  hydrateCliSessionLinking: (value: boolean) => void
   hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>>
   setHotkeyOverride: (id: HotkeyId, override: HotkeyOverride) => void
   resetHotkeyOverride: (id: HotkeyId) => void
@@ -96,6 +104,7 @@ interface SettingsState {
 
 type Persisted = Pick<SettingsState,
   | 'autoUpdateEnabled'
+  | 'cliSessionLinking'
   | 'showGitBranchBadges'
   | 'tabOverflowMode'
   | 'optimizedTerminalRenderer'
@@ -113,6 +122,7 @@ type Persisted = Pick<SettingsState,
 function defaultSettings(): Persisted {
   return {
     autoUpdateEnabled: false,
+    cliSessionLinking: true,
     showGitBranchBadges: true,
     tabOverflowMode: 'scroll',
     optimizedTerminalRenderer: true,
@@ -162,6 +172,7 @@ function loadSettings(): Persisted {
         : 1
     return {
       autoUpdateEnabled: parsed.autoUpdateEnabled === true,
+      cliSessionLinking: parsed.cliSessionLinking !== false,
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
       tabOverflowMode: parsed.tabOverflowMode === 'wrap' ? 'wrap' : 'scroll',
       optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
@@ -191,6 +202,7 @@ function saveSettings(state: Persisted): void {
   if (typeof localStorage === 'undefined') return
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     autoUpdateEnabled: state.autoUpdateEnabled,
+    cliSessionLinking: state.cliSessionLinking,
     showGitBranchBadges: state.showGitBranchBadges,
     tabOverflowMode: state.tabOverflowMode,
     optimizedTerminalRenderer: state.optimizedTerminalRenderer,
@@ -211,6 +223,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setAutoUpdateEnabled: (value) => {
     set({ autoUpdateEnabled: value })
+    saveSettings(get())
+  },
+
+  setCliSessionLinking: (value) => {
+    set({ cliSessionLinking: value })
+    saveSettings(get())
+    // Main is the authority for the managed hook install + env injection + report server.
+    window.ipc.invoke('settings:set-cli-session-linking', value).catch((err) => {
+      console.error('[Settings] Failed to sync CLI session linking to main:', err)
+    })
+  },
+
+  hydrateCliSessionLinking: (value) => {
+    set({ cliSessionLinking: value })
     saveSettings(get())
   },
 
