@@ -6,9 +6,6 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    define: {
-      'process.env.GH_UPDATE_TOKEN': JSON.stringify(process.env.GH_UPDATE_TOKEN ?? ''),
-    },
     plugins: [
       {
         name: 'copy-shell-integration',

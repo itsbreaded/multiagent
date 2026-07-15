@@ -41,16 +41,15 @@ export function releaseContainsUploadedAsset(payload: unknown, expectedName: str
 export async function publishedInstallerExists(
   version: string,
   expectedName: string,
-  token: string,
   fetcher: typeof fetch = fetch,
 ): Promise<boolean> {
   try {
     const response = await fetcher(
       `https://api.github.com/repos/itsbreaded/multiagent/releases/tags/v${encodeURIComponent(version)}`,
       {
+        // Public repo: releases/assets are readable without auth. No Authorization header.
         headers: {
           Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${token}`,
           'User-Agent': 'MultiAgent-Updater',
           'X-GitHub-Api-Version': '2022-11-28',
         },

@@ -91,7 +91,6 @@
         "provider": "github",
         "owner": "itsbreaded",
         "repo": "multiagent",
-        "private": true,
         "releaseType": "release"
       }
     ],

@@ -36,7 +36,7 @@ npm run dist       # build + package to dist\win-unpacked\ (requires Windows Dev
 
 The app uses `electron-updater` to check `github.com/itsbreaded/multiagent` releases. Updates are downloaded silently and shown as a slim banner below the titlebar.
 
-**Token at build time**: set `GH_UPDATE_TOKEN` in your environment (e.g. Windows system env vars or PowerShell profile) before running `npm run build` or `npm run dist`. It is baked into `out/main/index.js` at build time via `electron.vite.config.ts`. If unset, the updater is silently disabled. Never put the token in source files.
+**No token required.** The repo is public, so release metadata and assets are readable over plain HTTPS with no auth — `autoUpdater.setFeedURL` and `publishedInstallerExists` (`src/main/updateArtifact.ts`) do not send credentials. The updater is always enabled (`updater:is-enabled` always resolves `true`); there is no `GH_UPDATE_TOKEN` build-time flag anymore. Do not reintroduce a token requirement or `private: true` on the feed/publish config unless the repo goes private again.
 
 **Publishing a release** (requires `gh auth login`):
 1. Bump `version` in `package.json` (the release skill uses `npm version patch --no-git-tag-version` so `package-lock.json` stays in sync)

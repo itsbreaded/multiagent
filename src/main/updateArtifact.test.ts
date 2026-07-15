@@ -31,8 +31,15 @@ describe('update artifact validation', () => {
 
   it('fails closed when GitHub does not return the installer', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ assets: [] }), { status: 200 }))
-    await expect(publishedInstallerExists('0.3.10', 'MultiAgent Setup 0.3.10.exe', 'token', fetcher))
+    await expect(publishedInstallerExists('0.3.10', 'MultiAgent Setup 0.3.10.exe', fetcher))
       .resolves.toBe(false)
     expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('does not send an Authorization header (public repo, no auth needed)', async () => {
+    const fetcher: typeof fetch = vi.fn(async () => new Response(JSON.stringify({ assets: [] }), { status: 200 }))
+    await publishedInstallerExists('0.3.10', 'MultiAgent Setup 0.3.10.exe', fetcher)
+    const [, init] = vi.mocked(fetcher).mock.calls[0]
+    expect(Object.keys(init?.headers ?? {})).not.toContain('Authorization')
   })
 })

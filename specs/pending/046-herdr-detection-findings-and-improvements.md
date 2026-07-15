@@ -121,7 +121,7 @@ quietly rots between releases.
 **How to adapt for MultiAgent (do not copy herdr's catalog).**
 - Reuse **existing** auto-update infra rather than inventing a new channel: we already
   check `github.com/itsbreaded/multiagent` releases via `electron-updater`
-  (`electron.vite.config.ts` `GH_UPDATE_TOKEN`, `publish.bat`, CLAUDE.md "Auto-Update").
+  (`src/main/updater.ts`, `publish.bat`, CLAUDE.md "Auto-Update" — public repo, no token).
   Publish rule-pack JSON as release assets (e.g. `status-rules-claude.json`,
   `status-rules-codex.json`) tagged with a `status-rules` category; main fetches the latest
   release assets on startup + hourly (mirror the updater cadence).
@@ -382,7 +382,7 @@ for "come back to where you left off in a desktop window."
 - Status dot: would render in `src/renderer/src/components/PaneHeader/index.tsx`; no
   status-dot code currently exists there.
 - Toast/banner precedent: `src/renderer/src/components/UpdateBanner.tsx`
-- Auto-update infra to reuse for OTA rules: `electron.vite.config.ts` (`GH_UPDATE_TOKEN`),
+- Auto-update infra to reuse for OTA rules: `src/main/updater.ts`,
   `publish.bat`; updater IPC in main; CLAUDE.md "Auto-Update (GitHub Releases)"
 - Command registry (new commands/sections): `src/renderer/src/commands/registry.ts`
 - IPC contract source of truth: `src/shared/types.ts`

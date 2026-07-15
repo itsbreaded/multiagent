@@ -409,7 +409,7 @@ export function UpdatesSection(): JSX.Element {
         </div>
         {updaterEnabled === false && (
           <div style={{ color: '#4a4b4e', fontSize: 11 }}>
-            Update token not set — rebuild with GH_UPDATE_TOKEN configured to enable updates.
+            Update check unavailable in this build.
           </div>
         )}
         {showActionRow && (

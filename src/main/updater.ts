@@ -5,8 +5,6 @@ import * as path from 'path'
 import type { UpdaterStatus } from '../shared/types'
 import { publishedInstallerExists, windowsInstallerName } from './updateArtifact'
 
-const GH_UPDATE_TOKEN: string = process.env.GH_UPDATE_TOKEN ?? ''
-
 // Persists the version of the most recently downloaded-but-not-installed
 // update so a restart surfaces "ready to install" instead of "download again".
 const STATE_FILE = path.join(app.getPath('userData'), 'update-state.json')
@@ -46,11 +44,9 @@ function clearPersistedState(): void {
 let autoUpdateEnabled = false
 
 export function initUpdater(mainWindow: BrowserWindow): void {
-  const updaterActive = !!GH_UPDATE_TOKEN
   ipcMain.handle('updater:get-version', () => app.getVersion())
-  ipcMain.handle('updater:is-enabled', () => updaterActive)
-
-  if (!updaterActive) return
+  // The repo is public, so no token/auth is needed to check or download releases.
+  ipcMain.handle('updater:is-enabled', () => true)
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
@@ -61,8 +57,6 @@ export function initUpdater(mainWindow: BrowserWindow): void {
     provider: 'github',
     owner: 'itsbreaded',
     repo: 'multiagent',
-    private: true,
-    token: GH_UPDATE_TOKEN,
   })
 
   function send(status: UpdaterStatus): void {
@@ -93,7 +87,7 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   autoUpdater.on('update-available', async (info) => {
     validatedVersion = ''
     const installerName = windowsInstallerName(info.files)
-    if (!installerName || !await publishedInstallerExists(info.version, installerName, GH_UPDATE_TOKEN)) {
+    if (!installerName || !await publishedInstallerExists(info.version, installerName)) {
       suppressProgress = false
       send({ state: 'error' })
       return

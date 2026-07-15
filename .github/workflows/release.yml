@@ -61,7 +61,4 @@ jobs:
         env:
           # The auto CI token can create releases + upload assets on this repo.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Baked into out/main for the in-app auto-updater. Optional — if unset, the
-          # updater is silently disabled (existing behavior).
-          GH_UPDATE_TOKEN: ${{ secrets.GH_UPDATE_TOKEN }}
         run: npm run release

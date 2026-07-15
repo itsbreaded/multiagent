@@ -18,7 +18,6 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
   )
   return {
     ...inherited,
-    GH_UPDATE_TOKEN: '',
     MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
     MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
     MULTIAGENT_E2E_AGENT_COMMAND: `node "${join(repoRoot, 'e2e', 'fixtures', 'framed-agent.cjs')}"`,
