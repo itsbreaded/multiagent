@@ -40,7 +40,7 @@ export interface EnvVarEntry {
 // built-in slot — non-default providers live as named entries in the
 // `claudeCustomProviders` / `codexCustomProviders` arrays (see below).
 export type ClaudeBuiltinPreset = 'native' | 'deepseek' | 'alibaba' | 'ollama' | 'zai'
-export type CodexBuiltinPreset  = 'native' | 'alibaba-token' | 'alibaba-payg'
+export type CodexBuiltinPreset  = 'native' | 'alibaba-token' | 'alibaba-payg' | 'ollama' | 'zai'
 export type CodexWireApi = 'responses' | 'chat'
 
 // A named custom provider id, stored in the active config's `preset` field so

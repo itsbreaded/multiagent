@@ -21,9 +21,10 @@ const CLAUDE_BUILTIN_LIST: ClaudeBuiltinPreset[] = ['native', 'deepseek', 'aliba
 const CLAUDE_BUILTIN_LABELS: Record<ClaudeBuiltinPreset, string> = {
   native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', ollama: 'Ollama', zai: 'z.ai',
 }
-const CODEX_BUILTIN_LIST: CodexBuiltinPreset[] = ['native', 'alibaba-token', 'alibaba-payg']
+const CODEX_BUILTIN_LIST: CodexBuiltinPreset[] = ['native', 'alibaba-token', 'alibaba-payg', 'ollama', 'zai']
 const CODEX_BUILTIN_LABELS: Record<CodexBuiltinPreset, string> = {
   native: 'Native', 'alibaba-token': 'Alibaba Token', 'alibaba-payg': 'Alibaba PAYG',
+  ollama: 'Ollama', zai: 'z.ai',
 }
 
 // Known built-in defaults. Custom providers (custom:<id>) get an empty body and
@@ -71,6 +72,21 @@ export const CODEX_PRESET_DEFAULTS: Record<CodexBuiltinPreset, Partial<CodexProv
     providerName: 'alibaba_payg', model: 'qwen3.6-plus',
     baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     envKey: 'OPENAI_API_KEY', wireApi: 'responses',
+  },
+  // Local Ollama OpenAI-compatible endpoint (chat/completions only). Token-less —
+  // local Ollama is logged in upstream; apiKey stays empty and is omitted here per
+  // the SAFETY INVARIANT above.
+  ollama: {
+    providerName: 'ollama', model: 'glm-5.2:cloud',
+    baseUrl: 'http://localhost:11434/v1', envKey: 'OPENAI_API_KEY', wireApi: 'chat',
+  },
+  // z.ai OpenAI Chat endpoint (coding plan). chat/completions only — no /responses.
+  // Model is glm-5.2 (no [1m]; the [1m] suffix is rejected on /chat/completions, it
+  // only works on the Anthropic endpoint used by the Claude zai preset). apiKey is
+  // user-filled and omitted here per the SAFETY INVARIANT.
+  zai: {
+    providerName: 'zai', model: 'glm-5.2',
+    baseUrl: 'https://api.z.ai/api/coding/paas/v4', envKey: 'OPENAI_API_KEY', wireApi: 'chat',
   },
 }
 
@@ -787,7 +803,6 @@ export function AgentProvidersSection(): JSX.Element {
                 builtinLabels={CLAUDE_BUILTIN_LABELS}
                 customs={claudeCustoms}
                 activeId={claudeDraft.preset}
-                disabled={claudeDisabled}
                 onSelectBuiltin={(p) => activateClaude(p)}
                 onSelectCustom={(id) => activateClaude(id)}
                 onAddCustom={addClaudeCustom}
@@ -898,7 +913,6 @@ export function AgentProvidersSection(): JSX.Element {
                 builtinLabels={CODEX_BUILTIN_LABELS}
                 customs={codexCustoms}
                 activeId={codexDraft.preset}
-                disabled={codexDisabled}
                 onSelectBuiltin={(p) => activateCodex(p)}
                 onSelectCustom={(id) => activateCodex(id)}
                 onAddCustom={addCodexCustom}
@@ -959,10 +973,11 @@ export function AgentProvidersSection(): JSX.Element {
                   masked
                 />
               </FieldRow>
-              {/* envKey + wireApi only matter for custom providers (z.ai / Ollama
-                  via OpenAI). Widening to the alibaba built-ins is a spec-017
-                  loose end, out of scope here. */}
-              {isCustomId(codexDraft.preset) && (
+              {/* envKey + wireApi matter for custom providers AND the chat-based
+                  built-ins (ollama, zai) — both hit OpenAI /chat/completions, where
+                  wire_api is the key compatibility lever. Hidden for native and the
+                  responses-based alibaba presets. */}
+              {(isCustomId(codexDraft.preset) || codexDraft.preset === 'ollama' || codexDraft.preset === 'zai') && (
                 <>
                   <FieldRow label="Env key">
                     <TextInput
@@ -982,7 +997,6 @@ export function AgentProvidersSection(): JSX.Element {
                         setCodexDraft(next)
                         flushCodex(next)
                       }}
-                      disabled={codexDisabled}
                     />
                   </FieldRow>
                 </>

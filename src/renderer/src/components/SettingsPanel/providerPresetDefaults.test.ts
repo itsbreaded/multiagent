@@ -12,7 +12,7 @@ import {
 // invariant and the reset/compare mechanics.
 
 const CLAUDE_BUILTINS = ['native', 'deepseek', 'alibaba', 'ollama', 'zai'] as const
-const CODEX_BUILTINS = ['native', 'alibaba-token', 'alibaba-payg'] as const
+const CODEX_BUILTINS = ['native', 'alibaba-token', 'alibaba-payg', 'ollama', 'zai'] as const
 
 describe('preset defaults never include credential keys (reset safety)', () => {
   it.each(CLAUDE_BUILTINS)('Claude %s defaults omit authToken', (preset) => {

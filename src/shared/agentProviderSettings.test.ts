@@ -80,6 +80,21 @@ describe('sanitizeAgentProviderSettings', () => {
     expect(zai.claude.preset).toBe('zai')
   })
 
+  it('accepts ollama and zai as valid built-in Codex presets', () => {
+    const result = sanitizeAgentProviderSettings({
+      codex: { enabled: true, preset: 'ollama', baseUrl: 'http://localhost:11434/v1', model: 'glm-5.2:cloud', wireApi: 'chat' },
+    })
+    expect(result.codex.preset).toBe('ollama')
+    expect(result.codex.baseUrl).toBe('http://localhost:11434/v1')
+    expect(result.codex.wireApi).toBe('chat')
+
+    const zai = sanitizeAgentProviderSettings({
+      codex: { enabled: true, preset: 'zai', baseUrl: 'https://api.z.ai/api/coding/paas/v4', model: 'glm-5.2', wireApi: 'chat' },
+    })
+    expect(zai.codex.preset).toBe('zai')
+    expect(zai.codex.wireApi).toBe('chat')
+  })
+
   it('accepts a built-in name and rejects garbage / bare "custom" to native', () => {
     // built-in
     expect(sanitizeAgentProviderSettings({ claude: { preset: 'deepseek' } }).claude.preset).toBe('deepseek')
