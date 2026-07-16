@@ -36,43 +36,71 @@ export interface EnvVarEntry {
   enabled: boolean
 }
 
-export type ClaudeProviderPreset = 'native' | 'deepseek' | 'alibaba' | 'custom'
-export type CodexProviderPreset  = 'native' | 'alibaba-token' | 'alibaba-payg' | 'custom'
+// Built-in presets ship with known defaults. `custom` is no longer a single
+// built-in slot — non-default providers live as named entries in the
+// `claudeCustomProviders` / `codexCustomProviders` arrays (see below).
+export type ClaudeBuiltinPreset = 'native' | 'deepseek' | 'alibaba' | 'ollama' | 'zai'
+export type CodexBuiltinPreset  = 'native' | 'alibaba-token' | 'alibaba-payg'
 export type CodexWireApi = 'responses' | 'chat'
+
+// A named custom provider id, stored in the active config's `preset` field so
+// the runtime + sanitizer can tell it apart from a built-in. Format: `custom:<id>`.
+// The legacy migration uses the fixed id `custom:legacy`; user-created providers
+// use `custom:<crypto.randomUUID()>`.
+export type CustomProviderId = `custom:${string}`
+
+// The full set of values a `*.preset` field can hold: a built-in name OR a
+// `custom:<id>` reference into the matching custom-providers array.
+export type ClaudePresetId = ClaudeBuiltinPreset | CustomProviderId
+export type CodexPresetId = CodexBuiltinPreset | CustomProviderId
+
+// Type guard — pure, no imports, safe to live alongside the types it inspects.
+export function isCustomId(preset: string): preset is CustomProviderId {
+  return preset.startsWith('custom:')
+}
 
 export interface ClaudeProviderConfig {
   enabled: boolean
-  preset: ClaudeProviderPreset
-  baseUrl: string                  // ANTHROPIC_BASE_URL
-  authToken: string                // ANTHROPIC_AUTH_TOKEN (masked in UI)
-  model: string                    // ANTHROPIC_MODEL
-  opusModel: string                // ANTHROPIC_DEFAULT_OPUS_MODEL
-  sonnetModel: string              // ANTHROPIC_DEFAULT_SONNET_MODEL
-  haikuModel: string               // ANTHROPIC_DEFAULT_HAIKU_MODEL
-  subagentModel: string            // CLAUDE_CODE_SUBAGENT_MODEL
-  effortLevel: string              // CLAUDE_CODE_EFFORT_LEVEL
+  preset: ClaudePresetId            // built-in name OR the active custom provider's `custom:<id>`
+  baseUrl: string                   // ANTHROPIC_BASE_URL
+  authToken: string                 // ANTHROPIC_AUTH_TOKEN (masked in UI)
+  model: string                     // ANTHROPIC_MODEL
+  opusModel: string                 // ANTHROPIC_DEFAULT_OPUS_MODEL
+  sonnetModel: string               // ANTHROPIC_DEFAULT_SONNET_MODEL
+  haikuModel: string                // ANTHROPIC_DEFAULT_HAIKU_MODEL
+  subagentModel: string             // CLAUDE_CODE_SUBAGENT_MODEL
+  effortLevel: string               // CLAUDE_CODE_EFFORT_LEVEL
   extraEnvVars: EnvVarEntry[]
 }
 
 export interface CodexProviderConfig {
   enabled: boolean
-  preset: CodexProviderPreset
-  providerName: string             // TOML section key
+  preset: CodexPresetId             // built-in name OR the active custom provider's `custom:<id>`
+  providerName: string              // TOML section key
   model: string
   baseUrl: string
-  envKey: string                   // env_key in TOML (e.g. "OPENAI_API_KEY")
-  apiKey: string                   // injected as env var (masked in UI)
+  envKey: string                    // env_key in TOML (e.g. "OPENAI_API_KEY")
+  apiKey: string                    // injected as env var (masked in UI)
   wireApi: CodexWireApi
   extraEnvVars: EnvVarEntry[]
 }
 
+// A saved named custom provider. `id` is its identity; `config.preset === id`
+// (self-referential, so activating/deactivating needs no marker toggling). `name`
+// is the user-facing label shown on the picker chip (inline-renameable).
+export interface ClaudeCustomProvider { id: CustomProviderId; name: string; config: ClaudeProviderConfig }
+export interface CodexCustomProvider  { id: CustomProviderId; name: string; config: CodexProviderConfig }
+
 export interface AgentProviderSettings {
   claude: ClaudeProviderConfig
   codex: CodexProviderConfig
-  // Per-preset drafts keep provider-specific credentials and overrides intact
-  // while `claude` / `codex` remain the active runtime configurations.
-  claudePresets?: Partial<Record<ClaudeProviderPreset, ClaudeProviderConfig>>
-  codexPresets?: Partial<Record<CodexProviderPreset, CodexProviderConfig>>
+  // Per-built-in drafts keep provider-specific credentials/overrides intact while
+  // `claude` / `codex` hold the active runtime config. Custom drafts live in the
+  // arrays below; switching providers never mutates another provider's saved draft.
+  claudePresets?: Partial<Record<ClaudeBuiltinPreset, ClaudeProviderConfig>>
+  codexPresets?: Partial<Record<CodexBuiltinPreset, CodexProviderConfig>>
+  claudeCustomProviders?: ClaudeCustomProvider[]
+  codexCustomProviders?: CodexCustomProvider[]
 }
 
 export interface McpStatus {

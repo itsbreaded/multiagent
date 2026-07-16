@@ -1,17 +1,40 @@
 import React, { useEffect, useState } from 'react'
 import { useSettingsStore } from '../../store/settings'
+import { ui, overlayStyles } from '../../styles/theme'
 import type {
   AgentProviderSettings,
   ClaudeProviderConfig,
-  ClaudeProviderPreset,
+  ClaudeBuiltinPreset,
+  ClaudePresetId,
   CodexProviderConfig,
-  CodexProviderPreset,
+  CodexBuiltinPreset,
+  CodexPresetId,
   CodexWireApi,
+  CustomProviderId,
   EnvVarEntry,
 } from '../../../../shared/types'
+import { isCustomId } from '../../../../shared/types'
 
-// Known preset defaults
-const CLAUDE_PRESET_DEFAULTS: Record<ClaudeProviderPreset, Partial<ClaudeProviderConfig>> = {
+// Built-in preset pickers + labels. `custom` is no longer a built-in — non-default
+// providers live as named chips in claudeCustomProviders / codexCustomProviders.
+const CLAUDE_BUILTIN_LIST: ClaudeBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
+const CLAUDE_BUILTIN_LABELS: Record<ClaudeBuiltinPreset, string> = {
+  native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', ollama: 'Ollama', zai: 'z.ai',
+}
+const CODEX_BUILTIN_LIST: CodexBuiltinPreset[] = ['native', 'alibaba-token', 'alibaba-payg']
+const CODEX_BUILTIN_LABELS: Record<CodexBuiltinPreset, string> = {
+  native: 'Native', 'alibaba-token': 'Alibaba Token', 'alibaba-payg': 'Alibaba PAYG',
+}
+
+// Known built-in defaults. Custom providers (custom:<id>) get an empty body and
+// are fully user-configured, so they have no entry here.
+//
+// SAFETY INVARIANT (spec 049): these maps must NEVER include credential keys —
+// not `authToken` (Claude) nor `apiKey` (Codex). The reset feature spreads a
+// preset's defaults over the active draft, so any credential key present here
+// would silently wipe the user's secret on "Reset to defaults". Guarded by
+// providerPresetDefaults.test.ts.
+export const CLAUDE_PRESET_DEFAULTS: Record<ClaudeBuiltinPreset, Partial<ClaudeProviderConfig>> = {
   native:   { baseUrl: '', model: '', opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '' },
   deepseek: {
     baseUrl: 'https://api.deepseek.com/anthropic',
@@ -22,10 +45,22 @@ const CLAUDE_PRESET_DEFAULTS: Record<ClaudeProviderPreset, Partial<ClaudeProvide
     baseUrl: 'https://dashscope-intl.aliyuncs.com/apps/anthropic',
     model: 'qwen3.5-plus', opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
   },
-  custom: {},
+  // Local Ollama client proxying to the cloud; token-less (logged in upstream).
+  // authToken intentionally absent here — newClaudeConfig seeds it as '' and the
+  // reset spread must not overwrite a user's token (see SAFETY INVARIANT above).
+  ollama: {
+    baseUrl: 'http://localhost:11434', model: 'glm-5.2:cloud',
+    opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
+  },
+  // z.ai Anthropic Messages endpoint; user fills the auth token (Bearer).
+  // authToken intentionally absent — preserved across reset (see SAFETY INVARIANT).
+  zai: {
+    baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.2',
+    opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
+  },
 }
 
-const CODEX_PRESET_DEFAULTS: Record<CodexProviderPreset, Partial<CodexProviderConfig>> = {
+export const CODEX_PRESET_DEFAULTS: Record<CodexBuiltinPreset, Partial<CodexProviderConfig>> = {
   native:         { providerName: '', model: '', baseUrl: '', envKey: '', wireApi: 'responses' },
   'alibaba-token': {
     providerName: 'alibaba_token', model: 'qwen3.6-plus',
@@ -37,10 +72,10 @@ const CODEX_PRESET_DEFAULTS: Record<CodexProviderPreset, Partial<CodexProviderCo
     baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     envKey: 'OPENAI_API_KEY', wireApi: 'responses',
   },
-  custom: {},
 }
 
-function newClaudePreset(preset: ClaudeProviderPreset, enabled: boolean): ClaudeProviderConfig {
+function newClaudeConfig(preset: ClaudePresetId, enabled: boolean): ClaudeProviderConfig {
+  const builtinDefaults = isCustomId(preset) ? {} : CLAUDE_PRESET_DEFAULTS[preset]
   return {
     enabled,
     preset,
@@ -53,11 +88,12 @@ function newClaudePreset(preset: ClaudeProviderPreset, enabled: boolean): Claude
     subagentModel: '',
     effortLevel: '',
     extraEnvVars: [],
-    ...CLAUDE_PRESET_DEFAULTS[preset],
+    ...builtinDefaults,
   }
 }
 
-function newCodexPreset(preset: CodexProviderPreset, enabled: boolean): CodexProviderConfig {
+function newCodexConfig(preset: CodexPresetId, enabled: boolean): CodexProviderConfig {
+  const builtinDefaults = isCustomId(preset) ? {} : CODEX_PRESET_DEFAULTS[preset]
   return {
     enabled,
     preset,
@@ -68,10 +104,15 @@ function newCodexPreset(preset: CodexProviderPreset, enabled: boolean): CodexPro
     apiKey: '',
     wireApi: 'responses',
     extraEnvVars: [],
-    ...CODEX_PRESET_DEFAULTS[preset],
+    ...builtinDefaults,
   }
 }
 
+// True when every field a preset ships a default for already equals that default.
+// Driven by the defaults map keys, so it stays correct as presets add fields.
+export function draftMatchesDefaults<T extends object>(draft: T, defaults: Partial<T>): boolean {
+  return (Object.keys(defaults) as (keyof T)[]).every((k) => draft[k] === defaults[k])
+}
 
 // Compact key-value editor extracted from the old EnvVarsSection
 function EnvVarEditor({
@@ -304,6 +345,203 @@ function PresetButtons<T extends string>({
   )
 }
 
+// Shared overlay modal (the #1a1b1e overlay pattern from theme.ts, not a native confirm()).
+function ConfirmOverlay({
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string
+  message: React.ReactNode
+  confirmLabel: string
+  onConfirm: () => void
+  onCancel: () => void
+}): JSX.Element {
+  return (
+    <div style={{ ...overlayStyles.backdrop, zIndex: ui.z.overlay }} onClick={onCancel}>
+      <div style={{ ...overlayStyles.panel, width: 340, maxWidth: '90vw' }} onClick={(e) => e.stopPropagation()}>
+        <div style={overlayStyles.header}>
+          <span style={overlayStyles.headerTitle}>{title}</span>
+        </div>
+        <div style={{ padding: '14px 16px', fontSize: 12, color: ui.color.text, lineHeight: 1.5 }}>{message}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 16px 14px' }}>
+          <button onClick={onCancel} style={secondaryBtn}>Cancel</button>
+          <button
+            onClick={onConfirm}
+            style={{ ...primaryBtn, background: '#3a1a1a', borderColor: ui.color.danger, color: ui.color.danger }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface CustomEntryView { id: CustomProviderId; name: string }
+
+// Provider picker: built-in preset chips + named custom-provider chips (rename +
+// delete) + an inline "+ Add custom" control. Switching never touches another
+// provider's saved draft — the parent owns that routing.
+function ProviderPicker<B extends string>({
+  builtins,
+  builtinLabels,
+  customs,
+  activeId,
+  disabled,
+  onSelectBuiltin,
+  onSelectCustom,
+  onAddCustom,
+  onRenameCustom,
+  onDeleteCustom,
+}: {
+  builtins: readonly B[]
+  builtinLabels: Record<B, string>
+  customs: CustomEntryView[]
+  activeId: string
+  disabled?: boolean
+  onSelectBuiltin: (p: B) => void
+  onSelectCustom: (id: CustomProviderId) => void
+  onAddCustom: (name: string) => void
+  onRenameCustom: (id: CustomProviderId, name: string) => void
+  onDeleteCustom: (id: CustomProviderView) => void
+}): JSX.Element {
+  const [adding, setAdding] = useState(false)
+  const [addName, setAddName] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<CustomEntryView | null>(null)
+
+  function commitAdd(): void {
+    const name = addName.trim()
+    if (!name) { setAdding(false); return }
+    onAddCustom(name)
+    setAdding(false)
+    setAddName('')
+  }
+  function cancelAdd(): void {
+    setAdding(false)
+    setAddName('')
+  }
+
+  function startRename(c: CustomEntryView): void {
+    setRenamingId(c.id)
+    setRenameValue(c.name)
+  }
+  function commitRename(): void {
+    if (!renamingId) return
+    const name = renameValue.trim()
+    if (name) onRenameCustom(renamingId as CustomProviderId, name)
+    setRenamingId(null)
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+        {builtins.map((p) => {
+          const active = activeId === p
+          return (
+            <button
+              key={p}
+              disabled={disabled}
+              onClick={() => onSelectBuiltin(p)}
+              style={{
+                padding: '3px 9px', fontSize: 11, cursor: disabled ? 'default' : 'pointer',
+                background: active ? '#1a3a1a' : 'none',
+                border: `1px solid ${active ? '#4ade80' : '#3a3b3e'}`,
+                borderRadius: 4, color: active ? '#4ade80' : '#6b7280',
+                fontWeight: active ? 500 : 400,
+              }}
+            >
+              {builtinLabels[p]}
+            </button>
+          )
+        })}
+
+        {customs.length > 0 && <span style={{ width: 1, alignSelf: 'stretch', background: '#2a2b2e', margin: '2px 2px' }} />}
+        {customs.map((c) => {
+          const active = c.id === activeId
+          const renaming = renamingId === c.id
+          return (
+            <span
+              key={c.id}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 1,
+                padding: '1px 3px 1px 8px',
+                background: active ? '#1a3a1a' : 'none',
+                border: `1px solid ${active ? '#4ade80' : '#3a3b3e'}`,
+                borderRadius: 4,
+              }}
+            >
+              {renaming ? (
+                <input
+                  autoFocus value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+                    if (e.key === 'Escape') setRenamingId(null)
+                    e.stopPropagation()
+                  }}
+                  onBlur={commitRename}
+                  style={{ ...monoInput, width: 100, padding: '1px 4px', fontSize: 11 }}
+                />
+              ) : (
+                <button
+                  onClick={() => onSelectCustom(c.id)}
+                  disabled={disabled}
+                  title={c.name}
+                  style={{ background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer', color: active ? '#4ade80' : '#9aa0a6', fontSize: 11, padding: '2px 0', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {c.name}
+                </button>
+              )}
+              <button onClick={() => startRename(c)} disabled={disabled || renaming} title="Rename" style={iconBtn}>✎</button>
+              <button onClick={() => setPendingDelete(c)} disabled={disabled} title="Delete" style={{ ...iconBtn, color: '#6b3030' }}>✕</button>
+            </span>
+          )
+        })}
+      </div>
+
+      <div style={{ marginTop: 5 }}>
+        {adding ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <input
+              autoFocus value={addName}
+              onChange={(e) => setAddName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitAdd() }
+                if (e.key === 'Escape') cancelAdd()
+                e.stopPropagation()
+              }}
+              placeholder="provider name"
+              style={{ ...monoInput, width: 130, padding: '2px 6px', fontSize: 11 }}
+            />
+            <button onClick={commitAdd} disabled={!addName.trim()} style={primaryBtn}>Add</button>
+            <button onClick={cancelAdd} style={secondaryBtn}>Cancel</button>
+          </span>
+        ) : (
+          <button onClick={() => { setAdding(true); setAddName('') }} disabled={disabled} style={{ ...secondaryBtn, fontSize: 10 }}>+ Add custom</button>
+        )}
+      </div>
+
+      {pendingDelete && (
+        <ConfirmOverlay
+          title="Delete custom provider"
+          message={<>Delete <strong style={{ color: ui.color.textStrong }}>{pendingDelete.name}</strong>? This discards that provider's saved credentials and cannot be undone.</>}
+          confirmLabel="Delete"
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => { onDeleteCustom(pendingDelete); setPendingDelete(null) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// A small handle passed to onDeleteCustom so the parent can branch on active-vs-inactive.
+type CustomProviderView = CustomEntryView
+
 export function AgentProvidersSection(): JSX.Element {
   const agentProviders = useSettingsStore((s) => s.agentProviders)
   const setAgentProviders = useSettingsStore((s) => s.setAgentProviders)
@@ -327,64 +565,180 @@ export function AgentProvidersSection(): JSX.Element {
   const [claudeEnvExpanded, setClaudeEnvExpanded] = useState(false)
   const [codexEnvExpanded, setCodexEnvExpanded] = useState(false)
 
-  // Flush draft to store (triggers IPC save + localStorage)
+  // --- Claude slot routing ---
+  // Write the active draft back to whichever slot is active: a built-in preset
+  // map entry, or the matching custom-providers array entry.
   function flushClaude(draft: ClaudeProviderConfig = claudeDraft): void {
     const current = useSettingsStore.getState().agentProviders
-    setAgentProviders({
-      ...current,
-      claude: draft,
-      claudePresets: { ...current.claudePresets, [draft.preset]: draft },
-    })
+    if (isCustomId(draft.preset)) {
+      const customs = (current.claudeCustomProviders ?? []).map((c) =>
+        c.id === draft.preset ? { ...c, config: draft } : c
+      )
+      setAgentProviders({ ...current, claude: draft, claudeCustomProviders: customs })
+    } else {
+      setAgentProviders({
+        ...current,
+        claude: draft,
+        claudePresets: { ...current.claudePresets, [draft.preset]: draft },
+      })
+    }
   }
-  function flushCodex(draft: CodexProviderConfig = codexDraft): void {
+
+  // Reset the active built-in preset's routing fields (baseUrl + model + tier
+  // overrides + effort) to CLAUDE_PRESET_DEFAULTS. The spread puts defaults over
+  // the draft, so authToken / extraEnvVars / enabled / preset survive. No-op for
+  // custom providers (no shipped defaults). Persists into the preset's saved slot
+  // via flushClaude so the reset survives a switch-away-and-back.
+  function resetClaudeDefaults(): void {
+    if (isCustomId(claudeDraft.preset)) return
+    const preset = claudeDraft.preset as ClaudeBuiltinPreset
+    const reset = { ...claudeDraft, ...CLAUDE_PRESET_DEFAULTS[preset] }
+    setClaudeDraft(reset)
+    flushClaude(reset)
+  }
+
+  // Save the outgoing provider's draft, then load the incoming provider's saved
+  // draft (or a freshly seeded one). `enabled` carries across as the per-kind
+  // runtime toggle; everything else is per-provider.
+  function activateClaude(incomingId: ClaudePresetId): void {
+    if (claudeDraft.preset === incomingId) return
     const current = useSettingsStore.getState().agentProviders
+    const afterSave = saveClaudeOutgoing(current, claudeDraft)
+    const incoming = loadClaudeDraft(afterSave, incomingId, claudeDraft.enabled)
+    setClaudeDraft(incoming)
+    commitClaudeActive(afterSave, incoming)
+  }
+
+  function addClaudeCustom(name: string): void {
+    const id = `custom:${crypto.randomUUID()}` as CustomProviderId
+    const current = useSettingsStore.getState().agentProviders
+    const afterSave = saveClaudeOutgoing(current, claudeDraft)
+    const config = newClaudeConfig(id, claudeDraft.enabled)
+    const entry = { id, name, config }
+    const incoming = { ...config, enabled: claudeDraft.enabled }
+    setClaudeDraft(incoming)
     setAgentProviders({
-      ...current,
-      codex: draft,
-      codexPresets: { ...current.codexPresets, [draft.preset]: draft },
+      ...afterSave,
+      claude: incoming,
+      claudeCustomProviders: [...(afterSave.claudeCustomProviders ?? []), entry],
     })
   }
 
-  // Save the current draft and restore the selected preset's last draft.
-  function applyClaudePreset(preset: ClaudeProviderPreset): void {
-    if (preset === claudeDraft.preset) return
+  function renameClaudeCustom(id: CustomProviderId, name: string): void {
     const current = useSettingsStore.getState().agentProviders
-    const saved = current.claudePresets?.[preset]
-    const next: ClaudeProviderConfig = saved
-      ? { ...saved, enabled: claudeDraft.enabled, preset }
-      : newClaudePreset(preset, claudeDraft.enabled)
-    setClaudeDraft(next)
     setAgentProviders({
       ...current,
-      claude: next,
-      claudePresets: {
-        ...current.claudePresets,
-        [claudeDraft.preset]: claudeDraft,
-        [preset]: next,
-      },
+      claudeCustomProviders: (current.claudeCustomProviders ?? []).map((c) => c.id === id ? { ...c, name } : c),
     })
   }
-  function applyCodexPreset(preset: CodexProviderPreset): void {
-    if (preset === codexDraft.preset) return
+
+  function deleteClaudeCustom(view: CustomProviderView): void {
     const current = useSettingsStore.getState().agentProviders
-    const saved = current.codexPresets?.[preset]
-    const next: CodexProviderConfig = saved
-      ? { ...saved, enabled: codexDraft.enabled, preset }
-      : newCodexPreset(preset, codexDraft.enabled)
-    setCodexDraft(next)
+    const customs = (current.claudeCustomProviders ?? []).filter((c) => c.id !== view.id)
+    if (current.claude.preset === view.id) {
+      // Deleting the active provider → fall back to native (disabled).
+      const native = newClaudeConfig('native', false)
+      setClaudeDraft(native)
+      setAgentProviders({
+        ...current,
+        claude: native,
+        claudeCustomProviders: customs,
+        claudePresets: { ...current.claudePresets, native },
+      })
+    } else {
+      setAgentProviders({ ...current, claudeCustomProviders: customs })
+    }
+  }
+
+  // --- Codex slot routing (mirrors Claude) ---
+  function flushCodex(draft: CodexProviderConfig = codexDraft): void {
+    const current = useSettingsStore.getState().agentProviders
+    if (isCustomId(draft.preset)) {
+      const customs = (current.codexCustomProviders ?? []).map((c) =>
+        c.id === draft.preset ? { ...c, config: draft } : c
+      )
+      setAgentProviders({ ...current, codex: draft, codexCustomProviders: customs })
+    } else {
+      setAgentProviders({
+        ...current,
+        codex: draft,
+        codexPresets: { ...current.codexPresets, [draft.preset]: draft },
+      })
+    }
+  }
+
+  // Reset the active built-in preset's routing fields (providerName + model +
+  // baseUrl + envKey + wireApi) to CODEX_PRESET_DEFAULTS. The spread puts defaults
+  // over the draft, so apiKey / extraEnvVars / enabled / preset survive. envKey is
+  // the env-var *name* (routing), not the secret (apiKey, preserved). No-op for
+  // custom providers. Persists into the preset's saved slot via flushCodex.
+  function resetCodexDefaults(): void {
+    if (isCustomId(codexDraft.preset)) return
+    const preset = codexDraft.preset as CodexBuiltinPreset
+    const reset = { ...codexDraft, ...CODEX_PRESET_DEFAULTS[preset] }
+    setCodexDraft(reset)
+    flushCodex(reset)
+  }
+
+  function activateCodex(incomingId: CodexPresetId): void {
+    if (codexDraft.preset === incomingId) return
+    const current = useSettingsStore.getState().agentProviders
+    const afterSave = saveCodexOutgoing(current, codexDraft)
+    const incoming = loadCodexDraft(afterSave, incomingId, codexDraft.enabled)
+    setCodexDraft(incoming)
+    commitCodexActive(afterSave, incoming)
+  }
+
+  function addCodexCustom(name: string): void {
+    const id = `custom:${crypto.randomUUID()}` as CustomProviderId
+    const current = useSettingsStore.getState().agentProviders
+    const afterSave = saveCodexOutgoing(current, codexDraft)
+    const config = newCodexConfig(id, codexDraft.enabled)
+    const entry = { id, name, config }
+    const incoming = { ...config, enabled: codexDraft.enabled }
+    setCodexDraft(incoming)
+    setAgentProviders({
+      ...afterSave,
+      codex: incoming,
+      codexCustomProviders: [...(afterSave.codexCustomProviders ?? []), entry],
+    })
+  }
+
+  function renameCodexCustom(id: CustomProviderId, name: string): void {
+    const current = useSettingsStore.getState().agentProviders
     setAgentProviders({
       ...current,
-      codex: next,
-      codexPresets: {
-        ...current.codexPresets,
-        [codexDraft.preset]: codexDraft,
-        [preset]: next,
-      },
+      codexCustomProviders: (current.codexCustomProviders ?? []).map((c) => c.id === id ? { ...c, name } : c),
     })
+  }
+
+  function deleteCodexCustom(view: CustomProviderView): void {
+    const current = useSettingsStore.getState().agentProviders
+    const customs = (current.codexCustomProviders ?? []).filter((c) => c.id !== view.id)
+    if (current.codex.preset === view.id) {
+      const native = newCodexConfig('native', false)
+      setCodexDraft(native)
+      setAgentProviders({
+        ...current,
+        codex: native,
+        codexCustomProviders: customs,
+        codexPresets: { ...current.codexPresets, native },
+      })
+    } else {
+      setAgentProviders({ ...current, codexCustomProviders: customs })
+    }
   }
 
   const claudeDisabled = !claudeDraft.enabled
   const codexDisabled = !codexDraft.enabled
+  // Reset is available only for built-ins that render routing fields (non-native,
+  // non-custom). Native ships no visible fields; custom has no shipped defaults.
+  const claudeResetVisible = claudeDraft.preset !== 'native' && !isCustomId(claudeDraft.preset)
+  const codexResetVisible = codexDraft.preset !== 'native' && !isCustomId(codexDraft.preset)
+  const claudeAtDefaults = claudeResetVisible && draftMatchesDefaults(claudeDraft, CLAUDE_PRESET_DEFAULTS[claudeDraft.preset as ClaudeBuiltinPreset])
+  const codexAtDefaults = codexResetVisible && draftMatchesDefaults(codexDraft, CODEX_PRESET_DEFAULTS[codexDraft.preset as CodexBuiltinPreset])
+  const claudeCustoms: CustomEntryView[] = (agentProviders.claudeCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
+  const codexCustoms: CustomEntryView[] = (agentProviders.codexCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
 
   return (
     <div>
@@ -412,13 +766,36 @@ export function AgentProvidersSection(): JSX.Element {
           </FieldRow>
 
           <FieldRow label="Preset">
-            <PresetButtons<ClaudeProviderPreset>
-              presets={['native', 'deepseek', 'alibaba', 'custom']}
-              labels={{ native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', custom: 'Custom' }}
-              value={claudeDraft.preset}
-              onChange={applyClaudePreset}
-              disabled={claudeDisabled}
-            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <ProviderPicker<ClaudeBuiltinPreset>
+                builtins={CLAUDE_BUILTIN_LIST}
+                builtinLabels={CLAUDE_BUILTIN_LABELS}
+                customs={claudeCustoms}
+                activeId={claudeDraft.preset}
+                disabled={claudeDisabled}
+                onSelectBuiltin={(p) => activateClaude(p)}
+                onSelectCustom={(id) => activateClaude(id)}
+                onAddCustom={addClaudeCustom}
+                onRenameCustom={renameClaudeCustom}
+                onDeleteCustom={deleteClaudeCustom}
+              />
+              {claudeResetVisible && (
+                <button
+                  onClick={resetClaudeDefaults}
+                  disabled={claudeAtDefaults}
+                  title="Restore this preset's base URL and model defaults (keeps auth token)"
+                  style={{
+                    ...secondaryBtn,
+                    fontSize: 10,
+                    alignSelf: 'flex-start',
+                    opacity: claudeAtDefaults ? 0.4 : 1,
+                    cursor: claudeAtDefaults ? 'default' : 'pointer',
+                  }}
+                >
+                  Reset to defaults
+                </button>
+              )}
+            </div>
           </FieldRow>
 
           {claudeDraft.preset !== 'native' && (
@@ -500,13 +877,36 @@ export function AgentProvidersSection(): JSX.Element {
           </FieldRow>
 
           <FieldRow label="Preset">
-            <PresetButtons<CodexProviderPreset>
-              presets={['native', 'alibaba-token', 'alibaba-payg', 'custom']}
-              labels={{ native: 'Native', 'alibaba-token': 'Alibaba Token', 'alibaba-payg': 'Alibaba PAYG', custom: 'Custom' }}
-              value={codexDraft.preset}
-              onChange={applyCodexPreset}
-              disabled={codexDisabled}
-            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <ProviderPicker<CodexBuiltinPreset>
+                builtins={CODEX_BUILTIN_LIST}
+                builtinLabels={CODEX_BUILTIN_LABELS}
+                customs={codexCustoms}
+                activeId={codexDraft.preset}
+                disabled={codexDisabled}
+                onSelectBuiltin={(p) => activateCodex(p)}
+                onSelectCustom={(id) => activateCodex(id)}
+                onAddCustom={addCodexCustom}
+                onRenameCustom={renameCodexCustom}
+                onDeleteCustom={deleteCodexCustom}
+              />
+              {codexResetVisible && (
+                <button
+                  onClick={resetCodexDefaults}
+                  disabled={codexAtDefaults}
+                  title="Restore this preset's base URL and model defaults (keeps API key)"
+                  style={{
+                    ...secondaryBtn,
+                    fontSize: 10,
+                    alignSelf: 'flex-start',
+                    opacity: codexAtDefaults ? 0.4 : 1,
+                    cursor: codexAtDefaults ? 'default' : 'pointer',
+                  }}
+                >
+                  Reset to defaults
+                </button>
+              )}
+            </div>
           </FieldRow>
 
           {codexDraft.preset !== 'native' && (
@@ -544,7 +944,10 @@ export function AgentProvidersSection(): JSX.Element {
                   masked
                 />
               </FieldRow>
-              {codexDraft.preset === 'custom' && (
+              {/* envKey + wireApi only matter for custom providers (z.ai / Ollama
+                  via OpenAI). Widening to the alibaba built-ins is a spec-017
+                  loose end, out of scope here. */}
+              {isCustomId(codexDraft.preset) && (
                 <>
                   <FieldRow label="Env key">
                     <TextInput
@@ -590,6 +993,93 @@ export function AgentProvidersSection(): JSX.Element {
       </div>
     </div>
   )
+}
+
+// --- Claude slot helpers (operate on store snapshots, no React state) ---
+function saveClaudeOutgoing(settings: AgentProviderSettings, draft: ClaudeProviderConfig): AgentProviderSettings {
+  if (isCustomId(draft.preset)) {
+    return {
+      ...settings,
+      claudeCustomProviders: (settings.claudeCustomProviders ?? []).map((c) =>
+        c.id === draft.preset ? { ...c, config: draft } : c
+      ),
+    }
+  }
+  return { ...settings, claudePresets: { ...settings.claudePresets, [draft.preset]: draft } }
+}
+
+function loadClaudeDraft(settings: AgentProviderSettings, incomingId: ClaudePresetId, enabled: boolean): ClaudeProviderConfig {
+  if (isCustomId(incomingId)) {
+    const entry = (settings.claudeCustomProviders ?? []).find((c) => c.id === incomingId)
+    if (entry) return { ...entry.config, enabled, preset: incomingId }
+    // Dangling reference — sanitizer should have prevented this; seed fresh.
+    return newClaudeConfig(incomingId, enabled)
+  }
+  const saved = settings.claudePresets?.[incomingId]
+  return saved ? { ...saved, enabled, preset: incomingId } : newClaudeConfig(incomingId, enabled)
+}
+
+function commitClaudeActive(settings: AgentProviderSettings, incoming: ClaudeProviderConfig): void {
+  // Push the incoming draft to the store as the active config AND persist it into
+  // its own slot so a subsequent switch-away saves the right thing.
+  const store = useSettingsStore.getState()
+  if (isCustomId(incoming.preset)) {
+    store.setAgentProviders({
+      ...settings,
+      claude: incoming,
+      claudeCustomProviders: (settings.claudeCustomProviders ?? []).map((c) =>
+        c.id === incoming.preset ? { ...c, config: incoming } : c
+      ),
+    })
+  } else {
+    store.setAgentProviders({
+      ...settings,
+      claude: incoming,
+      claudePresets: { ...settings.claudePresets, [incoming.preset]: incoming },
+    })
+  }
+}
+
+// --- Codex slot helpers (mirror Claude) ---
+function saveCodexOutgoing(settings: AgentProviderSettings, draft: CodexProviderConfig): AgentProviderSettings {
+  if (isCustomId(draft.preset)) {
+    return {
+      ...settings,
+      codexCustomProviders: (settings.codexCustomProviders ?? []).map((c) =>
+        c.id === draft.preset ? { ...c, config: draft } : c
+      ),
+    }
+  }
+  return { ...settings, codexPresets: { ...settings.codexPresets, [draft.preset]: draft } }
+}
+
+function loadCodexDraft(settings: AgentProviderSettings, incomingId: CodexPresetId, enabled: boolean): CodexProviderConfig {
+  if (isCustomId(incomingId)) {
+    const entry = (settings.codexCustomProviders ?? []).find((c) => c.id === incomingId)
+    if (entry) return { ...entry.config, enabled, preset: incomingId }
+    return newCodexConfig(incomingId, enabled)
+  }
+  const saved = settings.codexPresets?.[incomingId]
+  return saved ? { ...saved, enabled, preset: incomingId } : newCodexConfig(incomingId, enabled)
+}
+
+function commitCodexActive(settings: AgentProviderSettings, incoming: CodexProviderConfig): void {
+  const store = useSettingsStore.getState()
+  if (isCustomId(incoming.preset)) {
+    store.setAgentProviders({
+      ...settings,
+      codex: incoming,
+      codexCustomProviders: (settings.codexCustomProviders ?? []).map((c) =>
+        c.id === incoming.preset ? { ...c, config: incoming } : c
+      ),
+    })
+  } else {
+    store.setAgentProviders({
+      ...settings,
+      codex: incoming,
+      codexPresets: { ...settings.codexPresets, [incoming.preset]: incoming },
+    })
+  }
 }
 
 // Shared style constants
