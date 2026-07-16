@@ -6,12 +6,41 @@ on:
       - 'v*'
 
 jobs:
+  # Create the GitHub release for the tag BEFORE any build runs. The build matrix
+  # below uses `electron-builder --publish always`, which creates the release on a
+  # miss and uploads to it on a hit. With three OSes publishing in parallel, that
+  # create-call races: two jobs get HTTP 422 "tag_name already_exists" and the
+  # loser throws (this is exactly what failed mac on v0.3.19). Pre-creating the
+  # release here means every build job only ever uploads, never creates — the race
+  # is gone and the matrix stays parallel. Concurrent asset uploads to one release
+  # are safe (win+linux already uploaded in parallel this way). Idempotent so it
+  # survives re-runs (a re-run finds the release already present).
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create GitHub release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; leaving it as-is."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes "" \
+              --verify-tag
+            echo "Created release $GITHUB_REF_NAME."
+          fi
+
   release:
+    needs: create-release
     # Tag-triggered 3-OS build + publish. Each runner builds for its host OS (native modules
-    # rebuild natively — no cross-compilation) and uploads its artifacts to the same GitHub
-    # release. electron-builder dedupes by tag; the app-builder-lib publisher-cache patch
-    # (patches/app-builder-lib+26.15.3.patch) prevents concurrent NSIS callbacks from
-    # creating duplicate releases. CI publishes with the auto GITHUB_TOKEN.
+    # rebuild natively — no cross-compilation) and uploads its artifacts to the GitHub release
+    # created by the `create-release` job. CI publishes with the auto GITHUB_TOKEN.
     strategy:
       fail-fast: false
       matrix:
@@ -21,8 +50,8 @@ jobs:
           - os: ubuntu-latest
     runs-on: ${{ matrix.os }}
     permissions:
-      # The auto GITHUB_TOKEN needs contents:write to create releases and upload
-      # assets. Without this, repos defaulting to read-only token perms fail with
+      # The auto GITHUB_TOKEN needs contents:write to upload assets to the release.
+      # Without this, repos defaulting to read-only token perms fail with
       # 403 "Resource not accessible by integration" on the release publish step.
       contents: write
 
@@ -59,6 +88,6 @@ jobs:
 
       - name: Build + publish
         env:
-          # The auto CI token can create releases + upload assets on this repo.
+          # The auto CI token can upload assets to the pre-created release on this repo.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release
