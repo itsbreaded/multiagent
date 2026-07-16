@@ -10,7 +10,7 @@ import type {
 import { isCustomId } from './types'
 
 const CLAUDE_BUILTINS: readonly ClaudeBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
-const CODEX_BUILTINS: readonly CodexBuiltinPreset[] = ['native', 'alibaba-token', 'alibaba-payg', 'ollama', 'zai']
+const CODEX_BUILTINS: readonly CodexBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
 const WIRE_APIS: readonly CodexWireApi[] = ['responses', 'chat']
 
 const LEGACY_CUSTOM_ID = 'custom:legacy'

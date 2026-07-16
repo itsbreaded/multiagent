@@ -21,10 +21,9 @@ const CLAUDE_BUILTIN_LIST: ClaudeBuiltinPreset[] = ['native', 'deepseek', 'aliba
 const CLAUDE_BUILTIN_LABELS: Record<ClaudeBuiltinPreset, string> = {
   native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', ollama: 'Ollama', zai: 'z.ai',
 }
-const CODEX_BUILTIN_LIST: CodexBuiltinPreset[] = ['native', 'alibaba-token', 'alibaba-payg', 'ollama', 'zai']
+const CODEX_BUILTIN_LIST: CodexBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
 const CODEX_BUILTIN_LABELS: Record<CodexBuiltinPreset, string> = {
-  native: 'Native', 'alibaba-token': 'Alibaba Token', 'alibaba-payg': 'Alibaba PAYG',
-  ollama: 'Ollama', zai: 'z.ai',
+  native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', ollama: 'Ollama', zai: 'z.ai',
 }
 
 // Known built-in defaults. Custom providers (custom:<id>) get an empty body and
@@ -62,15 +61,20 @@ export const CLAUDE_PRESET_DEFAULTS: Record<ClaudeBuiltinPreset, Partial<ClaudeP
 }
 
 export const CODEX_PRESET_DEFAULTS: Record<CodexBuiltinPreset, Partial<CodexProviderConfig>> = {
-  native:         { providerName: '', model: '', baseUrl: '', envKey: '', wireApi: 'responses' },
-  'alibaba-token': {
-    providerName: 'alibaba_token', model: 'qwen3.6-plus',
-    baseUrl: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1',
-    envKey: 'OPENAI_API_KEY', wireApi: 'responses',
+  native:   { providerName: '', model: '', baseUrl: '', envKey: '', wireApi: 'responses' },
+  // DeepSeek's standard OpenAI-compatible endpoint (chat/completions only). envKey
+  // is DeepSeek's documented env var. apiKey is user-filled and omitted here per
+  // the SAFETY INVARIANT above.
+  deepseek: {
+    providerName: 'deepseek', model: 'deepseek-chat',
+    baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY', wireApi: 'chat',
   },
-  'alibaba-payg': {
-    providerName: 'alibaba_payg', model: 'qwen3.6-plus',
-    baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  // Alibaba DashScope OpenAI-compatible endpoint, US region. Responses wire api.
+  // Collapsed from the old token/payg split; apiKey is user-filled and omitted
+  // here per the SAFETY INVARIANT above.
+  alibaba: {
+    providerName: 'alibaba', model: 'qwen3.6-plus',
+    baseUrl: 'https://dashscope-us.aliyuncs.com/compatible-mode/v1',
     envKey: 'OPENAI_API_KEY', wireApi: 'responses',
   },
   // Local Ollama OpenAI-compatible endpoint (chat/completions only). Token-less —
@@ -974,10 +978,10 @@ export function AgentProvidersSection(): JSX.Element {
                 />
               </FieldRow>
               {/* envKey + wireApi matter for custom providers AND the chat-based
-                  built-ins (ollama, zai) — both hit OpenAI /chat/completions, where
-                  wire_api is the key compatibility lever. Hidden for native and the
-                  responses-based alibaba presets. */}
-              {(isCustomId(codexDraft.preset) || codexDraft.preset === 'ollama' || codexDraft.preset === 'zai') && (
+                  built-ins (deepseek, ollama, zai) — all hit OpenAI /chat/completions,
+                  where wire_api is the key compatibility lever. Hidden for native and
+                  the responses-based alibaba preset. */}
+              {(isCustomId(codexDraft.preset) || codexDraft.preset === 'deepseek' || codexDraft.preset === 'ollama' || codexDraft.preset === 'zai') && (
                 <>
                   <FieldRow label="Env key">
                     <TextInput

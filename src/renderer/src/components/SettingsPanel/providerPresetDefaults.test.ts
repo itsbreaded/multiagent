@@ -12,7 +12,7 @@ import {
 // invariant and the reset/compare mechanics.
 
 const CLAUDE_BUILTINS = ['native', 'deepseek', 'alibaba', 'ollama', 'zai'] as const
-const CODEX_BUILTINS = ['native', 'alibaba-token', 'alibaba-payg', 'ollama', 'zai'] as const
+const CODEX_BUILTINS = ['native', 'deepseek', 'alibaba', 'ollama', 'zai'] as const
 
 describe('preset defaults never include credential keys (reset safety)', () => {
   it.each(CLAUDE_BUILTINS)('Claude %s defaults omit authToken', (preset) => {
@@ -44,18 +44,18 @@ describe('reset spread restores routing fields, preserves credentials', () => {
 
   it('Codex: baseUrl/model/providerName/envKey/wireApi restore, apiKey survives', () => {
     const draft = {
-      ...CODEX_PRESET_DEFAULTS['alibaba-token'],
-      preset: 'alibaba-token',
+      ...CODEX_PRESET_DEFAULTS.alibaba,
+      preset: 'alibaba',
       enabled: true,
       apiKey: 'sk-secret',
       extraEnvVars: [],
       baseUrl: '',
       model: 'wrong',
     } as any
-    const reset = { ...draft, ...CODEX_PRESET_DEFAULTS['alibaba-token'] }
-    expect(reset.baseUrl).toBe('https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1')
+    const reset = { ...draft, ...CODEX_PRESET_DEFAULTS.alibaba }
+    expect(reset.baseUrl).toBe('https://dashscope-us.aliyuncs.com/compatible-mode/v1')
     expect(reset.model).toBe('qwen3.6-plus')
-    expect(reset.providerName).toBe('alibaba_token')
+    expect(reset.providerName).toBe('alibaba')
     expect(reset.envKey).toBe('OPENAI_API_KEY')
     expect(reset.wireApi).toBe('responses')
     expect(reset.apiKey).toBe('sk-secret')            // preserved

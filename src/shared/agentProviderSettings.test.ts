@@ -80,7 +80,7 @@ describe('sanitizeAgentProviderSettings', () => {
     expect(zai.claude.preset).toBe('zai')
   })
 
-  it('accepts ollama and zai as valid built-in Codex presets', () => {
+  it('accepts deepseek, alibaba, ollama, zai as valid built-in Codex presets', () => {
     const result = sanitizeAgentProviderSettings({
       codex: { enabled: true, preset: 'ollama', baseUrl: 'http://localhost:11434/v1', model: 'glm-5.2:cloud', wireApi: 'chat' },
     })
@@ -93,6 +93,18 @@ describe('sanitizeAgentProviderSettings', () => {
     })
     expect(zai.codex.preset).toBe('zai')
     expect(zai.codex.wireApi).toBe('chat')
+
+    const deepseek = sanitizeAgentProviderSettings({
+      codex: { enabled: true, preset: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', wireApi: 'chat' },
+    })
+    expect(deepseek.codex.preset).toBe('deepseek')
+    expect(deepseek.codex.wireApi).toBe('chat')
+
+    const alibaba = sanitizeAgentProviderSettings({
+      codex: { enabled: true, preset: 'alibaba', baseUrl: 'https://dashscope-us.aliyuncs.com/compatible-mode/v1', model: 'qwen3.6-plus', wireApi: 'responses' },
+    })
+    expect(alibaba.codex.preset).toBe('alibaba')
+    expect(alibaba.codex.wireApi).toBe('responses')
   })
 
   it('accepts a built-in name and rejects garbage / bare "custom" to native', () => {
@@ -238,12 +250,12 @@ describe('sanitizeAgentProviderSettings', () => {
       codexPresets: {
         // `custom` is no longer a built-in; a body-less legacy slot is dropped silently
         custom: { preset: 'custom', wireApi: 'soap' },
-        'alibaba-token': { preset: 'alibaba-token', wireApi: 'soap' }, // bad wireApi coerced
+        alibaba: { preset: 'alibaba', wireApi: 'soap' }, // bad wireApi coerced
       },
     })
     expect(Object.keys(result.claudePresets ?? {})).toEqual(['deepseek'])
     expect(result.claudePresets?.deepseek?.enabled).toBe(true)
-    expect(Object.keys(result.codexPresets ?? {}).sort()).toEqual(['alibaba-token'])
-    expect(result.codexPresets?.['alibaba-token']?.wireApi).toBe('responses')
+    expect(Object.keys(result.codexPresets ?? {}).sort()).toEqual(['alibaba'])
+    expect(result.codexPresets?.alibaba?.wireApi).toBe('responses')
   })
 })
