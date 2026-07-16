@@ -55,7 +55,7 @@ export const CLAUDE_PRESET_DEFAULTS: Record<ClaudeBuiltinPreset, Partial<ClaudeP
   // z.ai Anthropic Messages endpoint; user fills the auth token (Bearer).
   // authToken intentionally absent — preserved across reset (see SAFETY INVARIANT).
   zai: {
-    baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.2',
+    baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.2[1m]',
     opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
   },
 }
