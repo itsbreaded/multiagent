@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
 import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
+import { sanitizeAgentProviderSettings } from '../../../shared/agentProviderSettings'
 import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
 import {
@@ -191,7 +192,13 @@ function loadSettings(): Persisted {
           ? (parsed.mcpSettings as McpSettings).customServers
           : [],
       },
-      agentProviders: (parsed.agentProviders as AgentProviderSettings | undefined) ?? defaultAgentProviderSettings(),
+      // Sanitize the persisted provider settings through the same coercer the
+      // main process uses on read. localStorage is a mirror written by older app
+      // versions and must never be trusted raw — a stale/legacy shape (e.g. the
+      // pre-048 `preset: "custom"` slot) reaching the store unsanitized crashed
+      // the Providers tab on render. The main-process IPC hydrate still runs on
+      // top of this; sanitizing here just guarantees a valid shape at all times.
+      agentProviders: sanitizeAgentProviderSettings(parsed.agentProviders),
     }
   } catch {
     return defaultSettings()

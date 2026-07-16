@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { AgentProviderSettings } from '../../shared/types'
+import type { AgentProviderSettings } from './types'
 import {
   defaultAgentProviderSettings,
   sanitizeAgentProviderSettings,

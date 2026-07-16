@@ -23,7 +23,7 @@ import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, S
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
-import { defaultAgentProviderSettings, sanitizeAgentProviderSettings } from './agentProviderSettings'
+import { defaultAgentProviderSettings, sanitizeAgentProviderSettings } from '../../shared/agentProviderSettings'
 import { createIpcRegistrar } from './ipcRegistrar'
 import { createAckProtocol } from './ackProtocol'
 import { createPtyOutputRouter } from './ptyOutputRouter'

@@ -72,4 +72,12 @@ describe('draftMatchesDefaults drives the disabled state', () => {
   it('ignores non-defaulted fields (authToken does not affect the comparison)', () => {
     expect(draftMatchesDefaults({ ...CLAUDE_PRESET_DEFAULTS.alibaba, authToken: 'sk-x' }, CLAUDE_PRESET_DEFAULTS.alibaba)).toBe(true)
   })
+  // Regression for the Providers-tab freeze: a stale legacy preset value (e.g.
+  // `"custom"` from pre-048 localStorage) is not a key in the defaults map, so the
+  // reset comparison used to receive `undefined` and throw during render. It must
+  // return false instead.
+  it('returns false (does not throw) when defaults is undefined', () => {
+    expect(() => draftMatchesDefaults({ preset: 'custom' }, undefined)).not.toThrow()
+    expect(draftMatchesDefaults({ preset: 'custom' }, undefined)).toBe(false)
+  })
 })

@@ -6,8 +6,8 @@ import type {
   CodexBuiltinPreset,
   CodexWireApi,
   EnvVarEntry,
-} from '../../shared/types'
-import { isCustomId } from '../../shared/types'
+} from './types'
+import { isCustomId } from './types'
 
 const CLAUDE_BUILTINS: readonly ClaudeBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
 const CODEX_BUILTINS: readonly CodexBuiltinPreset[] = ['native', 'alibaba-token', 'alibaba-payg']

@@ -110,8 +110,22 @@ function newCodexConfig(preset: CodexPresetId, enabled: boolean): CodexProviderC
 
 // True when every field a preset ships a default for already equals that default.
 // Driven by the defaults map keys, so it stays correct as presets add fields.
-export function draftMatchesDefaults<T extends object>(draft: T, defaults: Partial<T>): boolean {
+// Guards against a missing defaults entry (e.g. a stale legacy preset value that
+// has not yet been sanitized) — returns false rather than throwing, since a preset
+// with no known defaults has nothing to reset.
+export function draftMatchesDefaults<T extends object>(draft: T, defaults: Partial<T> | undefined): boolean {
+  if (!defaults) return false
   return (Object.keys(defaults) as (keyof T)[]).every((k) => draft[k] === defaults[k])
+}
+
+// Type guard: the active preset is a real built-in (a key in the defaults map).
+// Needed because a stale unsanitized value (e.g. the legacy `"custom"` slot) is
+// neither a built-in nor a `custom:<id>` and must not index the defaults map.
+function isClaudeBuiltin(preset: ClaudePresetId): preset is ClaudeBuiltinPreset {
+  return Object.prototype.hasOwnProperty.call(CLAUDE_PRESET_DEFAULTS, preset)
+}
+function isCodexBuiltin(preset: CodexPresetId): preset is CodexBuiltinPreset {
+  return Object.prototype.hasOwnProperty.call(CODEX_PRESET_DEFAULTS, preset)
 }
 
 // Compact key-value editor extracted from the old EnvVarsSection
@@ -590,9 +604,8 @@ export function AgentProvidersSection(): JSX.Element {
   // custom providers (no shipped defaults). Persists into the preset's saved slot
   // via flushClaude so the reset survives a switch-away-and-back.
   function resetClaudeDefaults(): void {
-    if (isCustomId(claudeDraft.preset)) return
-    const preset = claudeDraft.preset as ClaudeBuiltinPreset
-    const reset = { ...claudeDraft, ...CLAUDE_PRESET_DEFAULTS[preset] }
+    if (!isClaudeBuiltin(claudeDraft.preset)) return
+    const reset = { ...claudeDraft, ...CLAUDE_PRESET_DEFAULTS[claudeDraft.preset] }
     setClaudeDraft(reset)
     flushClaude(reset)
   }
@@ -673,9 +686,8 @@ export function AgentProvidersSection(): JSX.Element {
   // the env-var *name* (routing), not the secret (apiKey, preserved). No-op for
   // custom providers. Persists into the preset's saved slot via flushCodex.
   function resetCodexDefaults(): void {
-    if (isCustomId(codexDraft.preset)) return
-    const preset = codexDraft.preset as CodexBuiltinPreset
-    const reset = { ...codexDraft, ...CODEX_PRESET_DEFAULTS[preset] }
+    if (!isCodexBuiltin(codexDraft.preset)) return
+    const reset = { ...codexDraft, ...CODEX_PRESET_DEFAULTS[codexDraft.preset] }
     setCodexDraft(reset)
     flushCodex(reset)
   }
@@ -731,12 +743,15 @@ export function AgentProvidersSection(): JSX.Element {
 
   const claudeDisabled = !claudeDraft.enabled
   const codexDisabled = !codexDraft.enabled
-  // Reset is available only for built-ins that render routing fields (non-native,
-  // non-custom). Native ships no visible fields; custom has no shipped defaults.
-  const claudeResetVisible = claudeDraft.preset !== 'native' && !isCustomId(claudeDraft.preset)
-  const codexResetVisible = codexDraft.preset !== 'native' && !isCustomId(codexDraft.preset)
-  const claudeAtDefaults = claudeResetVisible && draftMatchesDefaults(claudeDraft, CLAUDE_PRESET_DEFAULTS[claudeDraft.preset as ClaudeBuiltinPreset])
-  const codexAtDefaults = codexResetVisible && draftMatchesDefaults(codexDraft, CODEX_PRESET_DEFAULTS[codexDraft.preset as CodexBuiltinPreset])
+  // Reset is available only for real built-ins that render routing fields. Native
+  // ships no visible fields; custom providers have no shipped defaults; a stale
+  // unsanitized preset value is neither and is ignored until hydration fixes it.
+  const claudeActiveDefaults = isClaudeBuiltin(claudeDraft.preset) ? CLAUDE_PRESET_DEFAULTS[claudeDraft.preset] : undefined
+  const codexActiveDefaults = isCodexBuiltin(codexDraft.preset) ? CODEX_PRESET_DEFAULTS[codexDraft.preset] : undefined
+  const claudeResetVisible = !!claudeActiveDefaults && claudeDraft.preset !== 'native'
+  const codexResetVisible = !!codexActiveDefaults && codexDraft.preset !== 'native'
+  const claudeAtDefaults = claudeResetVisible && draftMatchesDefaults(claudeDraft, claudeActiveDefaults)
+  const codexAtDefaults = codexResetVisible && draftMatchesDefaults(codexDraft, codexActiveDefaults)
   const claudeCustoms: CustomEntryView[] = (agentProviders.claudeCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
   const codexCustoms: CustomEntryView[] = (agentProviders.codexCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
 
