@@ -329,6 +329,11 @@ export class WindowManager {
         sandbox: false,
         contextIsolation: true,
         nodeIntegration: false,
+        // Keep the detached renderer painting while it's covered by another window, so resizing
+        // a window over it doesn't leave the exposed terminal strip compositing a stale frame
+        // (corrupted/duplicated text until a resize forces a repaint). See index.ts for the
+        // matching setting on the primary window.
+        backgroundThrottling: false
       },
     })
 
