@@ -75,7 +75,12 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Keep the renderer painting while the window is (partially) occluded. Without this,
+      // Chromium throttles a covered window, so resizing another window over it leaves the
+      // exposed strip compositing from a stale frame — the detached terminal shows corrupted /
+      // duplicated text until its own resize forces a repaint. See docs/pty-and-terminals.md.
+      backgroundThrottling: false
     }
   })
 
