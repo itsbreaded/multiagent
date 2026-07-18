@@ -144,9 +144,11 @@ describe('ManagedHookController (IO)', () => {
     // changes no badge state and only adds Codex TUI "running" noise; see spec 032).
     expect(ourCmds(claude)).toHaveLength(7)
     expect(ourCmds(codex)).toHaveLength(5)
-    // SessionStart stays arg-less (byte-identical to 047, preserves Codex trust).
+    // SessionStart stays arg-less (byte-identical to 047, preserves Codex trust). Build the
+    // expected command via the same helper the controller uses (defaults to process.platform),
+    // so the assertion is portable across the win/mac/linux CI runners.
     const claudeSS = claude.hooks.SessionStart.find((g: { hooks: { command: string }[] }) => g.hooks.some((h) => h.command.includes(HOOK_SENTINEL)))!.hooks[0].command
-    expect(claudeSS).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${f.installedScriptPath}" claude`)
+    expect(claudeSS).toBe(generateHookCommand(f.installedScriptPath, 'claude'))
     // A lifecycle event carries its snake_case arg + points at the stable script.
     const claudePre = claude.hooks.PreToolUse.find((g: { hooks: { command: string }[] }) => g.hooks.some((h) => h.command.includes(HOOK_SENTINEL)))!.hooks[0].command
     expect(claudePre).toContain(base)
