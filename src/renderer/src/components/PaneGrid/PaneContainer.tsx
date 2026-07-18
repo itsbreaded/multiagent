@@ -20,7 +20,7 @@ export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Elem
   return (
     <div
       data-pane-id={pane.id}
-      onClick={() => focusPane(pane.id)}
+      onMouseDown={(e) => { if (e.button === 0) focusPane(pane.id) }}
       style={{
         position: 'relative',
         display: 'flex',
