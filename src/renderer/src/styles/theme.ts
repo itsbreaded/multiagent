@@ -20,6 +20,8 @@ export const ui = {
     accent: '#4ade80',
     accentBg: '#1a3a1a',
     danger: '#f87171',
+    statusWorking: '#60a5fa',   // spec 032: turn in progress (incl. thinking)
+    statusWaiting: '#fbbf24',  // spec 032: permission prompt -- needs you
   },
   radius: {
     xs: 2,

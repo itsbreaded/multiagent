@@ -114,6 +114,34 @@ export interface McpStatus {
 
 export type AgentKind = 'claude' | 'codex'
 
+// Agent status badge (spec 032). Honest set -- no "thinking" (collapses into working).
+// `error` is Claude-only for v1 (Claude StopFailure; Codex has no error hook).
+export type AgentStatus = 'idle' | 'working' | 'waiting' | 'error' | 'unknown'
+
+// In-memory per-pane status. NOT serialized (stripped in normalizeNodeForLayout, like
+// promotedFromShell). `turnId` is the Claude `prompt_id` / Codex `turn_id` of the turn
+// this status reflects; used by eventToState to drop out-of-order late tool events.
+export interface AgentStatusState {
+  status: AgentStatus
+  detail?: string        // tool name, permission message, error type -- shown in the tooltip
+  turnId?: string
+  event?: AgentLifecycleEvent
+  updatedAt: number      // Date.now() at the reducer call (injected for testability)
+}
+
+// Lifecycle events the hook script reports. `promote`/`demote` are synthetic, fed by the
+// pane:agent-detected listener (sweeper), not by a hook. `session_start` doubles as the
+// 047 session-linking trigger (see the hook script dispatch).
+export type AgentLifecycleEvent =
+  | 'session_start' | 'user_prompt_submit' | 'pre_tool_use' | 'post_tool_use'
+  | 'stop' | 'permission_request' | 'stop_failure' | 'promote' | 'demote'
+
+// What main forwards on pane:agent-event, and what the reducer consumes.
+export interface AgentStatusInput {
+  event: AgentLifecycleEvent
+  detail?: string
+  turnId?: string
+}
 // A CLI agent session as stored/displayed
 export interface Session {
   agentKind: AgentKind
@@ -202,6 +230,10 @@ export interface PaneLeaf {
   // it before writing layout.json (a phase-1-only promotion with no sessionId reverts to
   // a shell on restart via applyLayout's sanitizeNode).
   promotedFromShell?: boolean
+  // In-memory only (spec 032): the live agent status badge state, driven by lifecycle
+  // hook events the agent emits. NOT serialized -- stripped in normalizeNodeForLayout
+  // alongside promotedFromShell. Undefined until the first hook event (renders unknown).
+  agentStatus?: AgentStatusState
 }
 
 export type SplitDirection = 'horizontal' | 'vertical'
@@ -432,6 +464,9 @@ export interface IPCChannels {
   // a shell pane's process tree (spec 047). agentKind non-null = promote the shell pane to
   // an agent pane; null = demote a previously-promoted pane back to a shell.
   'pane:agent-detected': (ptyId: string, agentKind: AgentKind | null) => void
+  // Main -> renderer: a lifecycle hook event from an agent pane (spec 032). Raw forward;
+  // main does NOT reduce -- the renderer owns per-pane prev state and runs eventToState.
+  'pane:agent-event': (ptyId: string, event: AgentLifecycleEvent, detail: string | undefined, turnId: string | undefined) => void
 
   // --- Multi-window: window identity / init ---
   'window:get-id': () => number | null
@@ -593,6 +628,7 @@ export type EventChannels = ChannelSubset<
   | 'session:detected'
   | 'session:detection-failed'
   | 'pane:agent-detected'
+  | 'pane:agent-event'
   | 'window:snap-zones'
   | 'window:maximized-changed'
   | 'window:focus-state-request'

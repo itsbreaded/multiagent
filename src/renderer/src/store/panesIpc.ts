@@ -1,5 +1,6 @@
-import type { CwdRepairMapping, FocusTarget, PaneLeaf, Tab } from '../../../shared/types'
+import type { AgentLifecycleEvent, CwdRepairMapping, FocusTarget, PaneLeaf, Tab } from '../../../shared/types'
 import { collectLeaves, findLeafByPtyId } from '../../../shared/paneTree'
+import { eventToState } from '../../../shared/agentStatus'
 import { PANE_DRAG_MIME } from '../utils/paneDrag'
 import { focusArming, LOCAL_REARM_MS } from './focusArming'
 import { clearPendingRemoteFocus, isSpawnInTabPayload, reportCurrentFocusTarget, usePanesStore } from './panes'
@@ -69,6 +70,26 @@ export function wirePanesIpc(): void {
         } else {
           store.demoteAgentPaneToShell(pane.id)
         }
+        break
+      }
+    }
+  })
+
+  // spec 032: a lifecycle hook event from an agent pane. Main forwards it raw (it does NOT
+  // reduce); the renderer owns per-pane prev state and runs the pure eventToState reducer.
+  // Pane not yet hydrated is not a concern: the tab tree (incl. rootNode) exists for every
+  // tab regardless of runtime hydration (spec 001), so findLeafByPtyId resolves and the
+  // badge renders when PaneHeader mounts on first focus.
+  const safeStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+  window.ipc.on('pane:agent-event', (ptyId: unknown, event: unknown, detail: unknown, turnId: unknown) => {
+    if (typeof ptyId !== 'string' || typeof event !== 'string') return
+    const store = usePanesStore.getState()
+    for (const tab of store.tabs) {
+      if (!tab.rootNode) continue
+      const pane = findLeafByPtyId(tab.rootNode, ptyId)
+      if (pane) {
+        const next = eventToState(pane.agentStatus, { event: event as AgentLifecycleEvent, detail: safeStr(detail), turnId: safeStr(turnId) }, Date.now())
+        store.setPaneAgentStatus(pane.id, next)
         break
       }
     }

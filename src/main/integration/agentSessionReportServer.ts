@@ -1,22 +1,30 @@
 /**
- * agentSessionReportServer — a localhost HTTP loopback endpoint the managed agent
- * SessionStart hook (assets/multiagent-agent-state.ps1) POSTs to, reporting the session
- * id + transcript path for a (CLI-launched, promoted) agent (spec 047 phase 3 / phase 4).
+ * agentSessionReportServer -- a localhost HTTP loopback endpoint the managed agent
+ * hook (assets/multiagent-agent-state.ps1 / .sh) POSTs to.
+ *
+ * Two routes (spec 047 + spec 032):
+ *   - POST /agent-session : the 047 session-linking report
+ *     `{ ptyId, agentKind, sessionId, transcriptPath? }` -> onReport -> `session:detected`.
+ *   - POST /agent-event   : the 032 lifecycle-event report (status badges)
+ *     `{ ptyId, agentKind, event, detail?, turnId? }` -> onEvent -> `pane:agent-event`.
  *
  * Self-contained transport: no external host runtime, no named-pipe complexity. The hook
- * inherits MULTIAGENT_HOOK_PORT from the pane env and POSTs
- * `{ ptyId, agentKind, sessionId, transcriptPath }` to `http://127.0.0.1:<port>/agent-
- * session`. Main links the session to the pane by ptyId and emits `session:detected`
- * with the reported `agentKind`.
- *
- * Only runs while the session-linking feature is enabled (default-on under phase 4).
- * Bound to 127.0.0.1 only — never exposes a port to the network.
+ * inherits MULTIAGENT_HOOK_PORT from the pane env. Only runs while the session-linking
+ * feature is enabled (default-on). Bound to 127.0.0.1 only -- never exposes a port to the
+ * network.
  */
 
 import * as http from 'http'
-import type { AgentKind } from '../../shared/types'
+import type { AgentKind, AgentLifecycleEvent } from '../../shared/types'
 
 const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex']
+
+// The lifecycle events the hook script may report (spec 032). NO promote/demote (those are
+// synthetic, renderer-only via the sweeper) and NO subagent_* (out of scope for v1).
+const VALID_EVENTS: readonly AgentLifecycleEvent[] = [
+  'session_start', 'user_prompt_submit', 'pre_tool_use', 'post_tool_use',
+  'stop', 'permission_request', 'stop_failure',
+] as const
 
 export interface AgentSessionReport {
   ptyId: string
@@ -25,9 +33,19 @@ export interface AgentSessionReport {
   transcriptPath?: string
 }
 
+export interface AgentEventReport {
+  ptyId: string
+  agentKind: AgentKind
+  event: AgentLifecycleEvent
+  detail?: string
+  turnId?: string
+}
+
 export interface AgentSessionReportServerDeps {
-  /** Called for each well-formed report. Main emits `session:detected` from here. */
+  /** Called for each well-formed /agent-session report. Main emits `session:detected`. */
   onReport: (report: AgentSessionReport) => void
+  /** Called for each well-formed /agent-event report. Main forwards `pane:agent-event`. */
+  onEvent: (report: AgentEventReport) => void
 }
 
 export class AgentSessionReportServer {
@@ -49,13 +67,10 @@ export class AgentSessionReportServer {
       this._port = addr && typeof addr === 'object' ? addr.port : null
       assigned = true
     })
-    // http.Server.listen is async, but a port is assigned synchronously on the next tick
-    // in practice; callers that need the port immediately poll `this.port` after a tick.
     this.server.on('error', (err) => {
       console.error('[MultiAgent] agent session report server error:', err)
       this.stop()
     })
-    // Return a provisional true; the actual port is available after listen's callback.
     void assigned
     return true
   }
@@ -83,12 +98,20 @@ export class AgentSessionReportServer {
   }
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
-    if (req.method !== 'POST' || req.url !== '/agent-session') {
-      res.writeHead(404); res.end(); return
-    }
+    if (req.method !== 'POST') { res.writeHead(404); res.end(); return }
+    if (req.url === '/agent-session') { this.handleSession(req, res); return }
+    if (req.url === '/agent-event') { this.handleEvent(req, res); return }
+    res.writeHead(404); res.end()
+  }
+
+  private readBody(req: http.IncomingMessage): Promise<string> {
     let body = ''
     req.on('data', (chunk: Buffer) => { body += chunk.toString() })
-    req.on('end', () => {
+    return new Promise((resolve) => req.on('end', () => resolve(body)))
+  }
+
+  private handleSession(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req).then((body) => {
       try {
         const parsed = JSON.parse(body) as Partial<AgentSessionReport>
         if (
@@ -102,6 +125,34 @@ export class AgentSessionReportServer {
             agentKind: parsed.agentKind as AgentKind,
             sessionId: parsed.sessionId,
             transcriptPath: parsed.transcriptPath,
+          })
+          res.writeHead(204); res.end()
+        } else {
+          res.writeHead(400); res.end()
+        }
+      } catch {
+        res.writeHead(400); res.end()
+      }
+    })
+  }
+
+  private handleEvent(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.readBody(req).then((body) => {
+      try {
+        const parsed = JSON.parse(body) as Partial<AgentEventReport>
+        if (
+          typeof parsed.ptyId === 'string' && parsed.ptyId &&
+          typeof parsed.agentKind === 'string' &&
+          (VALID_AGENT_KINDS as readonly string[]).includes(parsed.agentKind) &&
+          typeof parsed.event === 'string' &&
+          (VALID_EVENTS as readonly string[]).includes(parsed.event)
+        ) {
+          this.deps.onEvent({
+            ptyId: parsed.ptyId,
+            agentKind: parsed.agentKind as AgentKind,
+            event: parsed.event as AgentLifecycleEvent,
+            detail: typeof parsed.detail === 'string' ? parsed.detail : undefined,
+            turnId: typeof parsed.turnId === 'string' ? parsed.turnId : undefined,
           })
           res.writeHead(204); res.end()
         } else {

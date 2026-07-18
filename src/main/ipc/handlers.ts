@@ -80,6 +80,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       // codex) so app/CLI Codex sessions now link the same way Claude does (spec 047 p4).
       windowManager.sendToWindowForPty(r.ptyId, 'session:detected', r.ptyId, r.agentKind, r.sessionId)
     },
+    // spec 032: forward each lifecycle event to the owning pane's window. Main does NOT
+    // reduce -- the renderer owns per-pane prev state and runs eventToState.
+    onEvent: (e) => windowManager.sendToWindowForPty(e.ptyId, 'pane:agent-event', e.ptyId, e.event, e.detail, e.turnId),
   })
   const managedHook = new ManagedHookController({
     claudeSettingsPath: ManagedHookController.defaultClaudeSettingsPath(),

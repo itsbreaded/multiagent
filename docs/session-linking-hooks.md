@@ -283,13 +283,13 @@ again under [The toggle](#the-toggle).
 
 This is the scoped exception to the "don't mutate agent config" rule, and it's reversible
 from the toggle. With the toggle **on** (default), `ManagedHookController`
-(`src/main/integration/managedHookController.ts`) writes a managed, marked, idempotent
-`SessionStart` hook entry into:
+(`src/main/integration/managedHookController.ts`) writes a managed, marked, idempotent set of managed hook entries into each file
+(spec 047 `SessionStart` for linking + spec 032 lifecycle events for status badges):
 
 | File | What | Surgery |
 |---|---|---|
-| `~/.claude/settings.json` | Claude `SessionStart` hook | `managedHooks.ts` (JSON) |
-| `~/.codex/hooks.json` | Codex `SessionStart` hook | `managedHooks.ts` (same JSON shape) |
+| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matcher `permission_prompt`), `Stop`, `StopFailure` | `managedHooks.ts` (JSON) |
+| `~/.codex/hooks.json` | Codex `SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PermissionRequest` (matcher `.*`), `Stop` | `managedHooks.ts` (same JSON shape) |
 | `~/.codex/config.toml` | `[features] hooks = true` | `codexConfigFeatures.ts` (line-based TOML) |
 
 Properties:
@@ -299,6 +299,12 @@ Properties:
   *our* entry in place instead of duplicating. Unrelated hooks/keys are never touched.
 - **Idempotent**: if nothing changed, the file isn't rewritten (no `.bak` spam on every
   startup).
+- **Self-cleaning on install (reconcile)**: `install` is not additive-only. Before injecting
+  the current event set it prunes any of our (sentinel-tagged) entries from event keys NOT in
+  that set, so an event dropped in a new version (e.g. Codex `PostToolUse`, dropped in spec
+  032 because `PreToolUse` + `Stop` already cover the badge state) is swept on the next
+  startup — no manual cleanup, no full uninstall needed. `uninstall` is the empty-allow-list
+  case of the same sweep (removes our entries across all keys).
 - **`.bak` on every actual change** + atomic temp-file-and-rename.
 - **Legacy cleanup**: also strips any stray managed hook a prior version left in
   `~/.claude.json` (Claude doesn't read hooks from there).
@@ -377,7 +383,7 @@ no-op for app-launched Claude panes.
 
 ## The toggle
 
-Settings → Terminal → **"Session linking (managed hooks)"**, **default-on**.
+Settings → Terminal → **"Session linking & live status (managed hooks)"**, **default-on**.
 
 - Main is the authority (`<userData>/cli-session-linking.json`). The renderer hydrates its
   checkbox from main at startup (`settings:get-cli-session-linking`) so the two never drift.
@@ -439,6 +445,47 @@ In all cases the pane continues to work as a terminal — only the session linka
 
 ---
 
+## Live status badges (spec 032)
+
+The same managed hooks also drive a per-pane status badge (`idle` / `working` / `waiting` /
+`error` / `unknown`) in each agent's `PaneHeader`. The hook script POSTs each lifecycle
+event to a second report-server route, `/agent-event`, which main forwards raw to the
+owning pane's renderer; the renderer runs a pure `eventToState` reducer per pane. State is
+in-memory only (never persisted) and sourced **entirely from the agent's own hook events** —
+never from screen/OSC scraping (the lesson of the rolled-back spec 048). No hook events yet
+=> `unknown`, the honest fallback.
+
+Event -> state mapping (the reducer in `src/shared/agentStatus.ts`):
+
+| Event | State |
+|---|---|
+| `session_start` | `idle` (session ready, waiting for input; seeded only on cold start) |
+| `user_prompt_submit` | `working` (turn started) |
+| `pre_tool_use` / `post_tool_use` | `working` (detail = tool name) |
+| `permission_request` | `waiting` (permission prompt — needs you) |
+| `stop` | `idle` (turn ended) |
+| `stop_failure` | `error` (Claude only) |
+| `promote` / `demote` (synthetic, from the process sweeper) | `working` / clears the badge |
+
+Claude vs Codex for badges:
+- **Claude** reports permission prompts via the `Notification` hook (matcher
+  `permission_prompt`) and turn failures via `StopFailure`, so all five states are
+  reachable.
+- **Codex** has **no `Notification` hook** and **no `StopFailure`**. Permission prompts come
+  from the `PermissionRequest` hook (matcher `.*`); a failed Codex turn simply shows `idle`
+  (honest — there is no error signal to report). `error` is therefore Claude-only for v1.
+- Both seed `working` on every turn via `UserPromptSubmit` (Codex ignores the matcher for
+  that event but still fires it; turn identity is Codex's `turn_id`, Claude's `prompt_id`).
+- Turn identity (`prompt_id` / `turn_id`) lets the reducer drop out-of-order late tool
+  events after a `stop` without a monotonic counter; when it is absent (older Claude) the
+  reducer stays `idle` rather than flap.
+
+The `SessionStart` command is intentionally kept arg-less (byte-identical to the 047
+install) so Codex's persisted `/hooks` trust for `SessionStart` survives the 032 upgrade;
+only the **new** lifecycle-event commands add a 2nd positional arg and require a fresh
+one-time trust via `codex /hooks`.
+
+---
 ## Quick reference: the full Claude flow
 
 1. User spawns a Claude pane (UI) → `SessionSpawner.spawnNew` generates UUID, launches

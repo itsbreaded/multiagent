@@ -87,4 +87,20 @@ describe('layoutStore pure helpers', () => {
     expect(out[0].rootNode.second['agentKind']).toBe('codex')
     expect(out[0].rootNode.second['sessionId']).toBe('s')
   })
+
+  it('strips agentStatus from every leaf (spec 032) -- promoted, native, and stray', () => {
+    const tabs = [{
+      id: 't',
+      rootNode: {
+        type: 'split',
+        first: { type: 'leaf', id: 'a', paneType: 'agent', agentKind: 'claude', promotedFromShell: true, cwd: 'C:\\a', agentStatus: { status: 'working', updatedAt: 1 } },
+        second: { type: 'leaf', id: 'b', paneType: 'agent', agentKind: 'codex', sessionId: 's', cwd: 'C:\\b', agentStatus: { status: 'idle', updatedAt: 2 } },
+      },
+    }]
+    const out = normalizeTabsForLayout(tabs) as Array<{ rootNode: { first: Record<string, unknown>; second: Record<string, unknown> } }>
+    expect(out[0].rootNode.first['agentStatus']).toBeUndefined()
+    expect(out[0].rootNode.second['agentStatus']).toBeUndefined()
+    // The rest of the pane is preserved.
+    expect(out[0].rootNode.second['sessionId']).toBe('s')
+  })
 })

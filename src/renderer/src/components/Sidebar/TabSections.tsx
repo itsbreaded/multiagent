@@ -13,6 +13,7 @@ import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { border, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
+import { StatusDot } from '../PaneHeader/StatusDot'
 import closeIcon from '../../assets/close.png'
 import threeDotIcon from '../../assets/threedot.png'
 import addBoxIcon from '../../assets/addbox.png'
@@ -670,6 +671,7 @@ function PaneRow({
             }}
           >
             <AgentIcon agentKind={pane.agentKind} size={14} />
+            <StatusDot status={pane.agentStatus?.status ?? 'unknown'} detail={pane.agentStatus?.detail} />
           </span>
         ) : (
           <span style={{ width: 14, height: 14, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: 0.9 }}>

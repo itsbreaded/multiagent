@@ -10,6 +10,7 @@ import { setPaneDragData } from '../../utils/paneDrag'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
+import { StatusDot } from './StatusDot'
 import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnChoiceMenu'
 import vsCodeIcon from '../../assets/vscode.png'
 import folderOpenIcon from '../../assets/folderopen.png'
@@ -214,6 +215,7 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
         }}
       >
         {isAgent ? <AgentIcon agentKind={pane.agentKind ?? 'claude'} size={16} /> : <ShellIcon size={16} />}
+        {isAgent && <StatusDot status={pane.agentStatus?.status ?? 'unknown'} detail={pane.agentStatus?.detail} />}
       </span>
 
       {/* Title — double-click to rename */}

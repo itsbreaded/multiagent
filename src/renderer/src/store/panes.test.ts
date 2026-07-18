@@ -32,6 +32,14 @@ function tabRoot(tabId: string): PaneNode | undefined {
   return usePanesStore.getState().tabs.find((t) => t.id === tabId)?.rootNode
 }
 
+// Captured at module load: the pane:agent-event handler registered by wirePanesIpc
+// against the setup mock's window.ipc.on, before any test nulls window.ipc. The handler
+// closes over the live store, so it stays valid across the per-test state reset.
+const paneAgentEventHandler = (() => {
+  const on = (window as unknown as { ipc?: { on: { mock: { calls: Array<[string, (...a: unknown[]) => void]> } } } }).ipc?.on
+  return on?.mock.calls.find((c) => c[0] === 'pane:agent-event')?.[1]
+})()
+
 describe('usePanesStore — stale resume failures', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -517,6 +525,61 @@ describe('usePanesStore — identity-preserving pane patches', () => {
     const after = usePanesStore.getState().tabs
     expect(after.find((tab) => tab.id === shellTabId)).toBe(before.find((tab) => tab.id === shellTabId))
     expect(after.find((tab) => tab.id === agentTabId)).not.toBe(before.find((tab) => tab.id === agentTabId))
+  })
+})
+
+describe('usePanesStore — agent status badge (spec 032)', () => {
+  it('setPaneAgentStatus sets and clears the in-memory agentStatus', () => {
+    const pane = makeLeaf('C:\\work', 'agent', 'claude')
+    pane.ptyId = 'pty-1'
+    plantTab(pane)
+    const store = usePanesStore.getState()
+    store.setPaneAgentStatus(pane.id, { status: 'working', event: 'pre_tool_use', detail: 'Bash', updatedAt: 1 })
+    expect(store.findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('working')
+    store.setPaneAgentStatus(pane.id, undefined)
+    expect(store.findPaneInAnyTab(pane.id)?.agentStatus).toBeUndefined()
+  })
+
+  it('promoteShellPaneToAgent seeds agentStatus working (CLI-launched agent detected)', () => {
+    const shell = makeLeaf('C:\\repo', 'shell')
+    shell.ptyId = 'shell-pty'
+    plantTab(shell)
+    usePanesStore.getState().promoteShellPaneToAgent(shell.id, 'claude')
+    const pane = usePanesStore.getState().findPaneInAnyTab(shell.id)
+    expect(pane?.paneType).toBe('agent')
+    expect(pane?.agentStatus?.status).toBe('working')
+    expect(pane?.agentStatus?.event).toBe('promote')
+  })
+
+  it('demoteAgentPaneToShell clears agentStatus (missed-Stop fallback)', () => {
+    const shell = makeLeaf('C:\\repo', 'shell')
+    shell.ptyId = 'shell-pty'
+    plantTab(shell)
+    const store = usePanesStore.getState()
+    store.promoteShellPaneToAgent(shell.id, 'codex')
+    expect(store.findPaneInAnyTab(shell.id)?.agentStatus?.status).toBe('working')
+    store.demoteAgentPaneToShell(shell.id)
+    expect(store.findPaneInAnyTab(shell.id)?.agentStatus).toBeUndefined()
+  })
+
+  it('pane:agent-event listener runs eventToState and stores the result by ptyId', () => {
+    const pane = makeLeaf('C:\\work', 'agent', 'claude')
+    pane.ptyId = 'pty-evt'
+    plantTab(pane)
+    // The handler was captured at module load (see paneAgentEventHandler below).
+    expect(paneAgentEventHandler).toBeDefined()
+    const handler = paneAgentEventHandler!
+    handler('pty-evt', 'session_start', undefined, 'turn-1')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
+    handler('pty-evt', 'pre_tool_use', 'Bash', 'turn-1')
+    const mid = usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus
+    expect(mid?.status).toBe('working')
+    expect(mid?.detail).toBe('Bash')
+    handler('pty-evt', 'stop', undefined, 'turn-1')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
+    // Unknown ptyId is a no-op (no throw, no state change).
+    handler('pty-missing', 'stop', undefined, 'turn-x')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
   })
 })
 

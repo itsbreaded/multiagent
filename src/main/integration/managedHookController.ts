@@ -35,6 +35,7 @@ import { timestampForFilename } from '../ipc/layoutStore'
 import {
   injectManagedHook,
   removeManagedHook,
+  pruneManagedHooks,
   hasManagedHook,
   generateHookCommand,
 } from './managedHooks'
@@ -42,6 +43,47 @@ import {
   ensureCodexHooksFeatureEnabled,
   codexHooksFeatureEnabled,
 } from './codexConfigFeatures'
+
+// Per-agent managed hook event sets (spec 032). Each entry installs one hook entry under
+// the agent config's `configKey`, with the given matcher policy, whose command appends
+// `scriptArg` as the hook script's 2nd positional arg (the lifecycle event it reports).
+// `SessionStart` carries NO scriptArg so its command stays byte-identical to the 047
+// install -- preserving Codex's persisted /hooks trust for SessionStart across the 032
+// upgrade; only the new lifecycle events add an arg (and require a fresh trust). The
+// hook script treats an absent 2nd arg as `session_start` for back-compat.
+interface ManagedEvent {
+  configKey: string
+  matcher: string | null
+  scriptArg?: string
+}
+
+// Claude: '' matcher = match-all (sources/tools); Notification uses the literal
+// 'permission_prompt' matcher. No Codex-only events (Notification/StopFailure are Claude).
+const CLAUDE_EVENTS: readonly ManagedEvent[] = [
+  { configKey: 'SessionStart', matcher: '' },
+  { configKey: 'UserPromptSubmit', matcher: '', scriptArg: 'user_prompt_submit' },
+  { configKey: 'PreToolUse', matcher: '', scriptArg: 'pre_tool_use' },
+  { configKey: 'PostToolUse', matcher: '', scriptArg: 'post_tool_use' },
+  { configKey: 'Notification', matcher: 'permission_prompt', scriptArg: 'permission_request' },
+  { configKey: 'Stop', matcher: '', scriptArg: 'stop' },
+  { configKey: 'StopFailure', matcher: '', scriptArg: 'stop_failure' },
+]
+
+// Codex: null matcher = OMIT the key (Codex treats '' as match-nothing for source events);
+// PreToolUse uses '.*' to match all tool names. No Notification (not a Codex hook) and no
+// StopFailure (does not exist) -- a failed Codex turn shows idle (honest fallback).
+// PostToolUse is intentionally omitted for Codex: the reducer treats pre/post tool use
+// identically (both -> working with the tool name), and Stop clears it, so PostToolUse
+// changes no badge state. Each Codex hook fire also prints a "running <hook>" TUI status
+// line, so dropping the redundant PostToolUse cuts ~half those announcements with no status
+// loss. Claude keeps PostToolUse (different surface, no such TUI noise). See spec 032.
+const CODEX_EVENTS: readonly ManagedEvent[] = [
+  { configKey: 'SessionStart', matcher: null },
+  { configKey: 'UserPromptSubmit', matcher: null, scriptArg: 'user_prompt_submit' },
+  { configKey: 'PreToolUse', matcher: '.*', scriptArg: 'pre_tool_use' },
+  { configKey: 'PermissionRequest', matcher: '.*', scriptArg: 'permission_request' },
+  { configKey: 'Stop', matcher: null, scriptArg: 'stop' },
+]
 
 export interface ManagedHookControllerDeps {
   /** Path to the user-scope Claude settings file (~/.claude/settings.json). */
@@ -116,20 +158,31 @@ export class ManagedHookController {
   install(): void {
     this.refreshInstalledScript()
     const scriptPath = this.installedScriptPath()
-    this.writeJsonConfig(this.deps.claudeSettingsPath, (cfg) =>
-      // Claude treats matcher "" as match-all (verified: the hook fires on SessionStart).
-      injectManagedHook(cfg, generateHookCommand(scriptPath, 'claude'), ''),
-    )
-    this.writeJsonConfig(this.deps.codexHooksPath, (cfg) =>
-      // Codex does NOT treat "" as match-all (an empty matcher matches nothing → hook never
-      // fires); OMIT the matcher key so it matches every source (mirrors herdr's codex install).
-      injectManagedHook(cfg, generateHookCommand(scriptPath, 'codex'), null),
-    )
+    // Install every event in the per-agent set under its own config key. SessionStart is
+    // installed with no scriptArg (legacy command string, preserves Codex trust); the rest
+    // append their snake_case scriptArg. Idempotent: injectManagedHook updates an existing
+    // managed entry in place rather than duplicating.
+    this.writeJsonConfig(this.deps.claudeSettingsPath, (cfg) => {
+      // Reconcile first: drop managed entries from event keys no longer in the desired set
+      // (orphans left by a prior version), then inject/update the current set. Idempotent --
+      // a steady-state install produces a byte-identical config and writeJsonConfig skips.
+      let next = pruneManagedHooks(cfg, new Set(CLAUDE_EVENTS.map((e) => e.configKey)))
+      for (const ev of CLAUDE_EVENTS) {
+        next = injectManagedHook(next, ev.configKey, generateHookCommand(scriptPath, 'claude', ev.scriptArg), ev.matcher)
+      }
+      return next
+    })
+    this.writeJsonConfig(this.deps.codexHooksPath, (cfg) => {
+      let next = pruneManagedHooks(cfg, new Set(CODEX_EVENTS.map((e) => e.configKey)))
+      for (const ev of CODEX_EVENTS) {
+        next = injectManagedHook(next, ev.configKey, generateHookCommand(scriptPath, 'codex', ev.scriptArg), ev.matcher)
+      }
+      return next
+    })
     this.ensureCodexFeaturesEnabled()
     // Always clean up a stray managed hook from the legacy ~/.claude.json location.
     this.cleanupLegacy()
   }
-
   uninstall(): void {
     this.writeJsonConfig(this.deps.claudeSettingsPath, (cfg) =>
       hasManagedHook(cfg) ? removeManagedHook(cfg) : cfg,

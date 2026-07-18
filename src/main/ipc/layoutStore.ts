@@ -150,6 +150,7 @@ function normalizeNodeForLayout(node: unknown): unknown {
     if (record['promotedFromShell'] === true) {
       const promoted = { ...record }
       delete promoted['promotedFromShell']
+      delete promoted['agentStatus'] // spec 032: in-memory only, never serialized
       if (!promoted['sessionId']) {
         // Phase-1-only promotion (no session linked): persist as the original shell pane.
         promoted['paneType'] = 'shell'
@@ -166,6 +167,13 @@ function normalizeNodeForLayout(node: unknown): unknown {
     if ('promotedFromShell' in record) {
       const cleaned = { ...record }
       delete cleaned['promotedFromShell']
+      delete cleaned['agentStatus'] // spec 032: in-memory only, never serialized
+      return cleaned
+    }
+    // spec 032: a native (non-promoted) agent leaf still must not persist agentStatus.
+    if ('agentStatus' in record) {
+      const cleaned = { ...record }
+      delete cleaned['agentStatus']
       return cleaned
     }
     return record

@@ -620,14 +620,6 @@ export function TabBar(): JSX.Element {
     setRenamingTabId(null)
   }, [renamingTabId, renameValue, renameTab])
 
-  const agentTabIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const tab of tabs) {
-      if (tab.rootNode && collectLeaves(tab.rootNode).some((leaf) => leaf.paneType === 'agent')) ids.add(tab.id)
-    }
-    return ids
-  }, [tabs])
-
   function clearPaneDragHover(): void {
     if (hoverActivateTimer.current !== null) {
       window.clearTimeout(hoverActivateTimer.current)
@@ -763,7 +755,6 @@ export function TabBar(): JSX.Element {
         {tabs.filter((t) => !t.detached).map((tab, idx) => {
           const isActive = tab.id === activeTabId
           const label = labels.get(tab.id) ?? 'Shell'
-          const live = agentTabIds.has(tab.id)
           const isRenaming = renamingTabId === tab.id
 
           return (
@@ -954,18 +945,6 @@ export function TabBar(): JSX.Element {
                 if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'
               }}
             >
-              {live && (
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    backgroundColor: ui.color.accent,
-                    flexShrink: 0,
-                  }}
-                />
-              )}
-
               {isRenaming ? (
                 <input
                   ref={renameInputRef}

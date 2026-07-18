@@ -107,4 +107,30 @@ describe('PaneHeader - presentation and actions', () => {
     expect(tab.focusedPaneId).not.toBe(pane.id)
     expect(findLeaf(tab.rootNode!, tab.focusedPaneId)?.ptyId).toBe('new-agent-pty')
   })
+
+  it('shows a status dot for an agent pane with the working tooltip (spec 032)', () => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = 'claude'
+    pane.agentStatus = { status: 'working', detail: 'Bash', event: 'pre_tool_use', updatedAt: 1 }
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Working: Bash (includes thinking)')).toBeInTheDocument()
+  })
+
+  it('shows the honest unknown dot for an agent pane with no hook events yet (spec 032)', () => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = 'codex'
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Status unknown')).toBeInTheDocument()
+  })
+
+  it('does not render a status dot for a shell pane (spec 032)', () => {
+    const pane = makeLeaf('C:\\work')
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.queryByTitle('Status unknown')).not.toBeInTheDocument()
+  })
 })

@@ -148,8 +148,11 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   transcript → `resumeError`, no spawn.
 - **Don't mutate user/project agent config** (`~/.claude.json`, `~/.codex/config.toml`,
   `.mcp.json`). MCP injection is process-scoped only. The **one** scoped exception is the
-  managed `SessionStart` hook install (marked-block, `.bak`, atomic, reversible from the
-  Settings → Terminal toggle). Codex hook `matcher` is **omitted**, not `""`; Claude uses `""`.
+  managed `SessionStart` + lifecycle hook install (spec 047 + 032: marked-block, `.bak`, atomic, reversible from the
+  Settings → Terminal toggle). Codex hook `matcher` is **omitted** for source events and `".*"` for tool events, not `""`; Claude uses `""`.
+  `install` **reconciles**: it prunes sentinel-tagged entries from event keys not in the current
+  per-agent set (so a dropped event self-cleans on next startup), and `uninstall` is the same sweep
+  with an empty allow-list — never leave stale managed hooks behind.
   → [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md).
 - Claude uses a PID-scoped temp `--mcp-config` file (no `--strict-mcp-config`); Codex gets MCP
   via `-c` overrides. Browser MCP tools live in `src/main/mcp/tools/` — keep the tool list in

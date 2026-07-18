@@ -1,10 +1,11 @@
 import { create } from 'zustand'
-import type { AgentKind, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
+import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
   collectLeaves, markLeafExitedByPtyId,
 } from '../../../shared/paneTree'
+import { eventToState } from '../../../shared/agentStatus'
 import { replaceCwdPrefix } from '../../../shared/cwdRepair'
 import * as xtermRegistry from '../utils/xtermRegistry'
 import type { SettingsSection } from './settings'
@@ -336,6 +337,8 @@ interface PanesStore {
   // neither kills the pty nor clears scrollback. Only promotedFromShell panes demote.
   promoteShellPaneToAgent: (paneId: string, agentKind: AgentKind) => void
   demoteAgentPaneToShell: (paneId: string) => void
+  // spec 032: set/clear the in-memory agent status badge state (pure patchLeafInTabs).
+  setPaneAgentStatus: (paneId: string, state: AgentStatusState | undefined) => void
   updatePane: (paneId: string, patch: Partial<PaneLeaf>) => void
   markPtyExited: (ptyId: string, exitCode: number | null, signal?: number) => void
   applyCwdRepair: (mapping: CwdRepairMapping) => void
@@ -1267,16 +1270,20 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => {
       // Only promote a current shell pane; never clobber a native agent pane.
       let isShell = false
+      let prevStatus: AgentStatusState | undefined
       for (const tab of s.tabs) {
         if (!tab.rootNode) continue
         const leaf = findLeaf(tab.rootNode, paneId)
-        if (leaf && leaf.paneType === 'shell') { isShell = true; break }
+        if (leaf && leaf.paneType === 'shell') { isShell = true; prevStatus = leaf.agentStatus; break }
       }
       if (!isShell) return s
+      // spec 032: seed the badge working immediately (a CLI-launched agent was detected);
+      // the first real hook event refines it. Mirrors the pane:agent-detected -> promote path.
       const tabs = patchLeafInTabs(s.tabs, paneId, {
         paneType: 'agent',
         agentKind,
         promotedFromShell: true,
+        agentStatus: eventToState(prevStatus, { event: 'promote' }, Date.now()),
       })
       return tabs ? { tabs } : s
     })
@@ -1299,11 +1306,19 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         agentKind: undefined,
         sessionId: undefined,
         promotedFromShell: undefined,
+        agentStatus: undefined,
         sessionDetectionState: undefined,
         sessionDetectionStartedAt: undefined,
         sessionDetectionCwd: undefined,
         sessionDetectionError: undefined,
       })
+      return tabs ? { tabs } : s
+    })
+  },
+
+  setPaneAgentStatus: (paneId, state) => {
+    set((s) => {
+      const tabs = patchLeafInTabs(s.tabs, paneId, { agentStatus: state })
       return tabs ? { tabs } : s
     })
   },

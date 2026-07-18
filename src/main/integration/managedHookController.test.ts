@@ -125,6 +125,45 @@ describe('ManagedHookController (IO)', () => {
     expect(codexHooksFeatureEnabled(fs.readFileSync(f.codexConfigPath, 'utf8'))).toBe(true)
   })
 
+  it('installs the full per-agent lifecycle event set (spec 032), SessionStart arg-less, others arg-ful', () => {
+    const ctrl = mkCtrl(f)
+    ctrl.install()
+    const claude = JSON.parse(fs.readFileSync(f.settingsPath, 'utf8'))
+    const codex = JSON.parse(fs.readFileSync(f.codexHooksPath, 'utf8'))
+    const base = path.basename(f.installedScriptPath)
+    type HookCfg = { hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+    const ourCmds = (cfg: HookCfg): string[] => {
+      const out: string[] = []
+      for (const key of Object.keys(cfg.hooks ?? {})) {
+        for (const g of cfg.hooks![key]) for (const h of g.hooks) if (h.command.includes(HOOK_SENTINEL)) out.push(h.command)
+      }
+      return out
+    }
+    // Claude: 7 events; Codex: 5 events (no Notification/StopFailure/PostToolUse -- the
+    // last is intentionally omitted: pre/post tool use are reducer-identical, so PostToolUse
+    // changes no badge state and only adds Codex TUI "running" noise; see spec 032).
+    expect(ourCmds(claude)).toHaveLength(7)
+    expect(ourCmds(codex)).toHaveLength(5)
+    // SessionStart stays arg-less (byte-identical to 047, preserves Codex trust).
+    const claudeSS = claude.hooks.SessionStart.find((g: { hooks: { command: string }[] }) => g.hooks.some((h) => h.command.includes(HOOK_SENTINEL)))!.hooks[0].command
+    expect(claudeSS).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${f.installedScriptPath}" claude`)
+    // A lifecycle event carries its snake_case arg + points at the stable script.
+    const claudePre = claude.hooks.PreToolUse.find((g: { hooks: { command: string }[] }) => g.hooks.some((h) => h.command.includes(HOOK_SENTINEL)))!.hooks[0].command
+    expect(claudePre).toContain(base)
+    expect(claudePre).toContain(' claude pre_tool_use')
+    // Claude Notification uses the permission_prompt matcher; Codex PermissionRequest exists.
+    expect(claude.hooks.Notification[0].matcher).toBe('permission_prompt')
+    expect(codex.hooks.PermissionRequest).toBeDefined()
+    expect(codex.hooks.PermissionRequest[0].matcher).toBe('.*')
+    // Codex has no Notification / StopFailure.
+    expect(codex.hooks.Notification).toBeUndefined()
+    expect(codex.hooks.StopFailure).toBeUndefined()
+    // Uninstall removes every managed entry across all event keys; unrelated hooks remain.
+    ctrl.uninstall()
+    expect(hasManagedHook(JSON.parse(fs.readFileSync(f.settingsPath, 'utf8')))).toBe(false)
+    expect(hasManagedHook(JSON.parse(fs.readFileSync(f.codexHooksPath, 'utf8')))).toBe(false)
+  })
+
   it('is idempotent: a second install does not rewrite the hook files', () => {
     const ctrl = mkCtrl(f)
     ctrl.install()
@@ -135,6 +174,33 @@ describe('ManagedHookController (IO)', () => {
     expect(fs.readFileSync(f.settingsPath, 'utf8')).toBe(claudeBefore)
     expect(fs.readFileSync(f.codexHooksPath, 'utf8')).toBe(codexBefore)
     expect(fs.readFileSync(f.codexConfigPath, 'utf8')).toBe(configBefore)
+  })
+
+  it('reconciles on install: an orphaned managed event from a prior version is removed', () => {
+    // Seed a Codex hooks.json as a PRIOR version left it: the full current set PLUS a managed
+    // PostToolUse that the current CODEX_EVENTS no longer includes (dropped in spec 032).
+    const staleCmd = generateHookCommand(f.installedScriptPath, 'codex', 'post_tool_use')
+    const prior = {
+      hooks: {
+        SessionStart: [{ hooks: [{ type: 'command', command: generateHookCommand(f.installedScriptPath, 'codex') }] }],
+        UserPromptSubmit: [{ hooks: [{ type: 'command', command: generateHookCommand(f.installedScriptPath, 'codex', 'user_prompt_submit') }] }],
+        PreToolUse: [{ matcher: '.*', hooks: [{ type: 'command', command: generateHookCommand(f.installedScriptPath, 'codex', 'pre_tool_use') }] }],
+        PostToolUse: [{ matcher: '.*', hooks: [{ type: 'command', command: staleCmd }] }],
+        PermissionRequest: [{ matcher: '.*', hooks: [{ type: 'command', command: generateHookCommand(f.installedScriptPath, 'codex', 'permission_request') }] }],
+        Stop: [{ hooks: [{ type: 'command', command: generateHookCommand(f.installedScriptPath, 'codex', 'stop') }] }],
+      },
+    }
+    fs.writeFileSync(f.codexHooksPath, JSON.stringify(prior))
+    const ctrl = mkCtrl(f)
+    ctrl.install()
+    const codex = JSON.parse(fs.readFileSync(f.codexHooksPath, 'utf8'))
+    // The orphaned PostToolUse key is gone; the current 5-event set is intact.
+    expect(codex.hooks.PostToolUse).toBeUndefined()
+    expect(codex.hooks.SessionStart).toBeDefined()
+    expect(codex.hooks.PermissionRequest).toBeDefined()
+    // No managed command anywhere references post_tool_use anymore.
+    const cmds = JSON.stringify(codex)
+    expect(cmds).not.toContain('post_tool_use')
   })
 
   it('refreshes the stable script only when the bundled content changed', () => {
@@ -162,7 +228,9 @@ describe('ManagedHookController (IO)', () => {
     const parsed = JSON.parse(fs.readFileSync(f.settingsPath, 'utf8'))
     expect(parsed.theme).toBe('dark')
     expect(parsed.permissions).toEqual(original.permissions)
-    expect(parsed.hooks.UserPromptSubmit).toEqual(original.hooks.UserPromptSubmit)
+    // The unrelated UserPromptSubmit group is preserved; our managed entry is added
+    // alongside it (spec 032 installs a managed UserPromptSubmit hook too).
+    expect(parsed.hooks.UserPromptSubmit).toContainEqual(original.hooks.UserPromptSubmit[0])
     expect(hasManagedHook(parsed)).toBe(true)
     const baks = fs.readdirSync(path.dirname(f.settingsPath)).filter((x) => x.startsWith(path.basename(f.settingsPath) + '.bak'))
     expect(baks.length).toBeGreaterThanOrEqual(1)
@@ -207,7 +275,7 @@ describe('ManagedHookController (IO)', () => {
 
   it('cleans up a stray managed hook from the legacy ~/.claude.json on install', () => {
     const stableCmd = generateHookCommand(f.installedScriptPath, 'claude')
-    fs.writeFileSync(f.legacyPath, JSON.stringify(injectManagedHook({ theme: 'dark' }, stableCmd)))
+    fs.writeFileSync(f.legacyPath, JSON.stringify(injectManagedHook({ theme: 'dark' }, 'SessionStart', stableCmd)))
     const ctrl = mkCtrl(f)
     ctrl.install()
     const legacyParsed = JSON.parse(fs.readFileSync(f.legacyPath, 'utf8'))
@@ -219,7 +287,7 @@ describe('ManagedHookController (IO)', () => {
 
   it('cleans up the legacy hook on uninstall too', () => {
     const stableCmd = generateHookCommand(f.installedScriptPath, 'claude')
-    fs.writeFileSync(f.legacyPath, JSON.stringify(injectManagedHook({}, stableCmd)))
+    fs.writeFileSync(f.legacyPath, JSON.stringify(injectManagedHook({}, 'SessionStart', stableCmd)))
     const ctrl = mkCtrl(f)
     ctrl.uninstall()
     expect(hasManagedHook(JSON.parse(fs.readFileSync(f.legacyPath, 'utf8')))).toBe(false)
