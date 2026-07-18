@@ -38,9 +38,12 @@ jobs:
 
   release:
     needs: create-release
-    # Tag-triggered 3-OS build + publish. Each runner builds for its host OS (native modules
-    # rebuild natively — no cross-compilation) and uploads its artifacts to the GitHub release
-    # created by the `create-release` job. CI publishes with the auto GITHUB_TOKEN.
+    # Tag-triggered 3-OS test-gated build + publish. Each runner typechecks + tests, then
+    # builds for its host OS (native modules rebuild natively — no cross-compilation) and
+    # uploads its artifacts to the GitHub release created by the `create-release` job. The
+    # test step is a PER-OS gate: with fail-fast: false, a test failure on one OS fails only
+    # that OS's job, so the release still ships artifacts from the passing OSes (partial
+    # release by design -- no OS holds up another). CI publishes with the auto GITHUB_TOKEN.
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +84,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Typecheck
+        # Per-OS release gate (part 1): the build + publish steps below only run if this
+        # OS's typecheck + tests pass. fail-fast: false keeps each OS independent, so a
+        # failure here fails ONLY this OS's job -- the GitHub release still ships artifacts
+        # from the passing OSes (partial release by design).
+        run: npm run typecheck
+
+      - name: Test
+        # Per-OS release gate (part 2): see Typecheck step above.
+        run: npm test
 
       - name: Generate macOS icon (iconutil from build/icon.png)
         if: runner.os == 'macOS'
