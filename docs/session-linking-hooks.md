@@ -473,7 +473,11 @@ Claude vs Codex for badges:
   reachable.
 - **Codex** has **no `Notification` hook** and **no `StopFailure`**. Permission prompts come
   from the `PermissionRequest` hook (matcher `.*`); a failed Codex turn simply shows `idle`
-  (honest — there is no error signal to report). `error` is therefore Claude-only for v1.
+  (honest — there is no hook error signal to report). `error` is therefore Claude-only via
+  hooks. Spec 050 adds the scoped, opt-in `agentStatusScraping` complement that detects
+  Codex fatal terminal errors (e.g. provider-compat 4xx/5xx) from the PTY byte stream as a
+  latched `terminal_error` event — see `docs/pty-and-terminals.md`. It is off by default and
+  composes at the reducer; it does not add a hook or a second status write path.
 - Both seed `working` on every turn via `UserPromptSubmit` (Codex ignores the matcher for
   that event but still fires it; turn identity is Codex's `turn_id`, Claude's `prompt_id`).
 - Turn identity (`prompt_id` / `turn_id`) lets the reducer drop out-of-order late tool

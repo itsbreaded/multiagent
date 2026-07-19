@@ -131,10 +131,15 @@ export interface AgentStatusState {
 
 // Lifecycle events the hook script reports. `promote`/`demote` are synthetic, fed by the
 // pane:agent-detected listener (sweeper), not by a hook. `session_start` doubles as the
-// 047 session-linking trigger (see the hook script dispatch).
+// 047 session-linking trigger (see the hook script dispatch). The `terminal_*` family
+// (spec 050) is the ONE scoped exception to the hooks-only badge discipline: it is fed by
+// the opt-in `agentStatusScraping` terminal-output observer, not by a hook, and exists
+// only because some fatal errors (notably Codex provider-compat failures) print to the
+// terminal and emit no hook at all. v1 detects fatal terminal errors only.
 export type AgentLifecycleEvent =
   | 'session_start' | 'user_prompt_submit' | 'pre_tool_use' | 'post_tool_use'
   | 'stop' | 'permission_request' | 'stop_failure' | 'promote' | 'demote'
+  | 'terminal_error'
 
 // What main forwards on pane:agent-event, and what the reducer consumes.
 export interface AgentStatusInput {
@@ -451,6 +456,14 @@ export interface IPCChannels {
   'settings:get-cli-session-linking': () => boolean
   'settings:set-cli-session-linking': (enabled: boolean) => boolean
 
+  // --- Agent status scraping (spec 050) ---
+  // Opt-in terminal-output observer for fatal errors the hooks cannot report (notably
+  // Codex provider-compat failures). Default OFF. Main is the authority; the detector
+  // runs only in main and reads this copy. Complementary to cliSessionLinking -- the
+  // two are fully independent and all four on/off combinations are valid.
+  'settings:get-terminal-status-scraping': () => boolean
+  'settings:set-terminal-status-scraping': (enabled: boolean) => boolean
+
   // --- GPU / renderer diagnostics ---
   // Renderer asks main for Chromium's GPU feature status. Used to corroborate
   // the renderer-side WebGL probe (primary signal); never on the critical path.
@@ -467,6 +480,11 @@ export interface IPCChannels {
   // Main -> renderer: a lifecycle hook event from an agent pane (spec 032). Raw forward;
   // main does NOT reduce -- the renderer owns per-pane prev state and runs eventToState.
   'pane:agent-event': (ptyId: string, event: AgentLifecycleEvent, detail: string | undefined, turnId: string | undefined) => void
+  // Main -> renderer: a fatal-terminal-error event from the opt-in scraping observer
+  // (spec 050). Same shape as pane:agent-event (sans turnId) and feeds the SAME reducer;
+  // scraping is explicitly NOT a second write path -- it adds one event type to the union.
+  // `detail` is the badge tooltip; turnId is omitted (the detector has no turn context).
+  'pane:terminal-status': (ptyId: string, event: 'terminal_error', detail: string | undefined) => void
 
   // --- Multi-window: window identity / init ---
   'window:get-id': () => number | null
@@ -592,6 +610,8 @@ export type InvokeChannels = ChannelSubset<
   | 'settings:save-agent-providers'
   | 'settings:get-cli-session-linking'
   | 'settings:set-cli-session-linking'
+  | 'settings:get-terminal-status-scraping'
+  | 'settings:set-terminal-status-scraping'
   | 'gpu:feature-status'
   | 'updater:check'
   | 'updater:get-version'
@@ -629,6 +649,7 @@ export type EventChannels = ChannelSubset<
   | 'session:detection-failed'
   | 'pane:agent-detected'
   | 'pane:agent-event'
+  | 'pane:terminal-status'
   | 'window:snap-zones'
   | 'window:maximized-changed'
   | 'window:focus-state-request'

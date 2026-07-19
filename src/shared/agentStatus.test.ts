@@ -203,3 +203,99 @@ describe('eventToState -- cold start and forward-compat', () => {
     expect(eventToState(undefined, { event: 'subagent_start' as AgentLifecycleEvent }, NOW)).toBeUndefined()
   })
 })
+
+// Spec 050: the opt-in terminal-output scraping source. terminal_error latches the badge
+// red and holds through any late hook from the dead turn; the only legitimate clears are a
+// fresh user prompt, a fresh session, or process exit.
+describe('eventToState -- terminal_error latch + clearing precedence (spec 050)', () => {
+  const latched: AgentStatusState = {
+    status: 'error',
+    detail: 'terminal error (HTTP 404)',
+    turnId: 'turn-1',
+    event: 'terminal_error',
+    updatedAt: NOW - 10,
+  }
+
+  it('terminal_error sets error and inherits the prior turn id for tooltip coherence', () => {
+    const working: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW - 5 }
+    expect(eventToState(working, { event: 'terminal_error', detail: 'terminal error (HTTP 404)' }, NOW)).toEqual({
+      status: 'error',
+      detail: 'terminal error (HTTP 404)',
+      turnId: 'turn-1',
+      event: 'terminal_error',
+      updatedAt: NOW,
+    })
+  })
+
+  it('terminal_error from cold start seeds error with no turn id', () => {
+    expect(ev('terminal_error', 'terminal error (HTTP 503)')).toEqual({
+      status: 'error',
+      detail: 'terminal error (HTTP 503)',
+      event: 'terminal_error',
+      updatedAt: NOW,
+    })
+  })
+
+  it('terminal_error detail falls back to "terminal error" when omitted', () => {
+    expect(ev('terminal_error')?.detail).toBe('terminal error')
+  })
+
+  it('LATCH: late post_tool_use from the dead turn does not flap to working', () => {
+    expect(eventToState(latched, { event: 'post_tool_use', detail: 'Bash', turnId: 'turn-1' }, NOW)).toBe(latched)
+  })
+
+  it('LATCH: late pre_tool_use short-circuits before the turn-id guard runs', () => {
+    // A different turn id on a straggler tool event would normally promote to working;
+    // latched, it must stay put (the dead turn's error is the truth).
+    expect(eventToState(latched, { event: 'pre_tool_use', detail: 'Bash', turnId: 'turn-2' }, NOW)).toBe(latched)
+  })
+
+  it('LATCH: late stop does not flap to idle', () => {
+    expect(eventToState(latched, { event: 'stop', turnId: 'turn-1' }, NOW)).toBe(latched)
+  })
+
+  it('LATCH: late permission_request does not flap to waiting', () => {
+    expect(eventToState(latched, { event: 'permission_request', detail: 'Allow Bash?', turnId: 'turn-1' }, NOW)).toBe(latched)
+  })
+
+  it('LATCH: a re-promote does not resurrect working', () => {
+    expect(eventToState(latched, { event: 'promote' }, NOW)).toBe(latched)
+  })
+
+  it('CLEAR: user_prompt_submit clears the latch to a fresh working turn (user retried)', () => {
+    const next = eventToState(latched, { event: 'user_prompt_submit', turnId: 'turn-2' }, NOW)
+    expect(next?.status).toBe('working')
+    expect(next?.turnId).toBe('turn-2')
+    expect(next?.event).toBe('user_prompt_submit')
+  })
+
+  it('CLEAR: session_start clears the latch to idle (resume / clear / compact)', () => {
+    // This is the case the spec calls out explicitly: today session_start preserves prev,
+    // but a latched error must re-arm so the badge does not stay red across restarts.
+    const next = eventToState(latched, { event: 'session_start' }, NOW)
+    expect(next?.status).toBe('idle')
+    expect(next?.event).toBe('session_start')
+  })
+
+  it('CLEAR: demote clears the latch entirely (process exited)', () => {
+    expect(eventToState(latched, { event: 'demote' }, NOW)).toBeUndefined()
+  })
+
+  it('stop_failure still applies its own error path over a non-latched state', () => {
+    const working: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(working, { event: 'stop_failure', detail: 'api_error', turnId: 'turn-1' }, NOW)).toEqual({
+      status: 'error',
+      detail: 'api_error',
+      turnId: 'turn-1',
+      event: 'stop_failure',
+      updatedAt: NOW,
+    })
+  })
+
+  it('NON-LATCHED: session_start still preserves a live working state (032 behavior unchanged)', () => {
+    // The latch is the ONLY change to the non-latched paths. A normal working turn must
+    // still survive an in-flight session_start without flipping to idle.
+    const working: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW - 5 }
+    expect(eventToState(working, { event: 'session_start' }, NOW)).toBe(working)
+  })
+})

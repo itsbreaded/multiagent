@@ -95,6 +95,24 @@ export function wirePanesIpc(): void {
     }
   })
 
+  // spec 050: a fatal-terminal-error event from the opt-in scraping observer. Same shape
+  // as pane:agent-event (sans turnId) and feeds the SAME eventToState reducer -- scraping
+  // is explicitly NOT a second write path, it adds one event type to the existing union.
+  // Emitted only by main, only for codex panes (v1), only when agentStatusScraping is on.
+  window.ipc.on('pane:terminal-status', (ptyId: unknown, event: unknown, detail: unknown) => {
+    if (typeof ptyId !== 'string' || event !== 'terminal_error') return
+    const store = usePanesStore.getState()
+    for (const tab of store.tabs) {
+      if (!tab.rootNode) continue
+      const pane = findLeafByPtyId(tab.rootNode, ptyId)
+      if (pane) {
+        const next = eventToState(pane.agentStatus, { event: 'terminal_error', detail: safeStr(detail) }, Date.now())
+        store.setPaneAgentStatus(pane.id, next)
+        break
+      }
+    }
+  })
+
   window.ipc.on('session:detection-failed', (ptyId: unknown, agentKind: unknown, reason: unknown, mode: unknown) => {
     if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex')) return
     const message = mode === 'resume'

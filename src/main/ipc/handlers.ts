@@ -12,6 +12,7 @@ import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner, setAgentProviderSettings } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
+import { TerminalStatusScraper } from '../pty/terminalStatusScraper'
 import { AgentSessionReportServer } from '../integration/agentSessionReportServer'
 import { ManagedHookController } from '../integration/managedHookController'
 import { openExternalUrl } from '../external'
@@ -119,6 +120,33 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return p
   }
 
+  // spec 050: agent status scraping -- the opt-in, default-OFF, complementary fatal-error
+  // observer. Fully independent of cliSessionLinking (all four on/off combinations are
+  // valid). Main is the authority and persists the flag alongside the CLI-linking flag.
+  // Read-only observer on the PTY stream: installs no hooks, mutates no agent config.
+  const scrapingPath = path.join(app.getPath('userData'), 'agent-status-scraping.json')
+  let agentStatusScrapingEnabled = true
+  try {
+    const parsedScraping = JSON.parse(fs.readFileSync(scrapingPath, 'utf8'))
+    if (parsedScraping && typeof parsedScraping.enabled === 'boolean') {
+      agentStatusScrapingEnabled = parsedScraping.enabled
+    }
+  } catch { /* missing/corrupt -> default-on */ }
+  function persistAgentStatusScraping(enabled: boolean): void {
+    try {
+      writeJsonAtomic(scrapingPath, { enabled }, 2)
+    } catch (err) {
+      console.error('[MultiAgent] agent-status-scraping persist failed:', err)
+    }
+  }
+
+  // spec 050 phase 4: PtyManager does not track agentKind, so a main-side ptyId -> agentKind
+  // map is populated by the session:new / session:resume handlers (the only callers of
+  // SessionSpawner.spawnNew/spawnResume). CLI-launched agents in shell panes are promoted
+  // by the sweeper at runtime -- wiring the detector on sweeper promotion is a follow-up,
+  // not v1 (the spec calls this out explicitly). The map is authoritative for v1 scope.
+  const ptyAgentKind = new Map<string, AgentKind>()
+
   const ptyManager = new PtyManager({
     getPaneEnv: (ptyId) => {
       if (!cliSessionLinkingEnabled) return {}
@@ -133,10 +161,22 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const gitBranchWatcher = new GitBranchWatcher((cwdKeys, branch) => {
     windowManager.broadcastAll('git:branch-updated', cwdKeys, branch)
   })
+  // spec 050: the per-pane terminal-status scraper. The detector seam is ptyOutputRouter's
+  // data listener (the single existing per-pane byte subscriber). Gating reads main's
+  // authoritative `agentStatusScrapingEnabled` flag -- the renderer never decides whether
+  // to scrape. Lazy detector creation happens inside the scraper on the first eligible
+  // codex-pane chunk; release/drop is wired to the router's releasePty on PTY exit.
+  const statusScraper = new TerminalStatusScraper({
+    getAgentKind: (ptyId) => ptyAgentKind.get(ptyId),
+    isEnabled: () => agentStatusScrapingEnabled,
+    sendToWindowForPty: (ptyId, channel, ...args) => windowManager.sendToWindowForPty(ptyId, channel, ...args),
+  })
+
   const ptyOutputRouter = createPtyOutputRouter({
     ptyManager,
     windowManager,
     onCommandComplete: (cwd) => { void gitBranchWatcher.retryUnresolvedCwd(cwd) },
+    scraper: statusScraper,
   })
 
   // spec 047 phase 1 / phase 4: CLI-launched agent detection. The sweeper promotes a shell
@@ -294,6 +334,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     // app-Codex pane gets MULTIAGENT_HOOK_PORT and links at start (spec 047 p4 race fix).
     await linkingApplyPromise
     const result = await spawner.spawnNew(agentKind, cwd)
+    // spec 050: record the ptyId -> agentKind association so the scraper can gate its
+    // detector on agentKind without PtyManager having to track it.
+    ptyAgentKind.set(result.ptyId, agentKind)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
     ptyOutputRouter.flushDirectOutput(result.ptyId)
     return result
@@ -303,6 +346,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     await linkingApplyPromise
     const result = await spawner.spawnResume(agentKind, sessionId, cwd)
+    ptyAgentKind.set(result.ptyId, agentKind)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
     ptyOutputRouter.flushDirectOutput(result.ptyId)
     return result
@@ -490,6 +534,18 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return runLinkingApply(enabled === true)
   })
 
+  // --- Agent status scraping (spec 050) ---
+  // Default-off, independent of cliSessionLinking. Toggling off drops all per-pane
+  // detector state so a disabled feature carries nothing; toggling on lazily re-creates
+  // detectors on the next eligible codex-pane chunk.
+  registrar.handle('settings:get-terminal-status-scraping', () => agentStatusScrapingEnabled)
+  registrar.handle('settings:set-terminal-status-scraping', (_e, enabled: boolean) => {
+    agentStatusScrapingEnabled = enabled === true
+    persistAgentStatusScraping(agentStatusScrapingEnabled)
+    if (!agentStatusScrapingEnabled) statusScraper.clearAll()
+    return agentStatusScrapingEnabled
+  })
+
   // --- GPU feature status ---
   registrar.handle('gpu:feature-status', () => {
     const status = app.getGPUFeatureStatus()
@@ -566,6 +622,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       registrar.disposeAll()
       clearInterval(contentTimer)
       ptyOutputRouter.dispose()
+      statusScraper.dispose()
       index.close()
       spawner.dispose()
       agentSweeper.dispose()

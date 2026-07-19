@@ -21,6 +21,7 @@ import { HotkeyRow } from './HotkeyRow'
 import { UpdatesSection } from './UpdatesSection'
 import { ContrastRatioSetting } from './settings/ContrastRatioSetting'
 import { CliSessionLinkingSetting } from './settings/CliSessionLinkingSetting'
+import { AgentStatusScrapingSetting } from './settings/AgentStatusScrapingSetting'
 import { GitBranchBadgesSetting } from './settings/GitBranchBadgesSetting'
 import { GpuAccelerationSetting } from './settings/GpuAccelerationSetting'
 import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
@@ -441,6 +442,7 @@ export function SettingsPanel(): JSX.Element {
 
                     <div style={{ marginTop: 8 }}><SectionLabel>Session detection</SectionLabel></div>
                     <CliSessionLinkingSetting />
+                    <AgentStatusScrapingSetting />
                     {!anyTerminalSetting && (
                       <EmptyMessage>No terminal settings match your search.</EmptyMessage>
                     )}

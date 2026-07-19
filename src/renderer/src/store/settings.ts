@@ -81,6 +81,14 @@ interface SettingsState {
   cliSessionLinking: boolean
   setCliSessionLinking: (value: boolean) => void
   hydrateCliSessionLinking: (value: boolean) => void
+  // spec 050: opt-in (default OFF) terminal-output observer for fatal errors the hooks
+  // cannot report (notably Codex provider-compat failures). Complementary, NOT full
+  // coverage -- hooks remain authoritative wherever they exist. Fully independent of
+  // cliSessionLinking: all four on/off combinations are valid. Main is the authority
+  // (the detector runs only in main); hydrate from it so a stale local default can't drift.
+  agentStatusScraping: boolean
+  setAgentStatusScraping: (value: boolean) => void
+  hydrateAgentStatusScraping: (value: boolean) => void
   hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>>
   setHotkeyOverride: (id: HotkeyId, override: HotkeyOverride) => void
   resetHotkeyOverride: (id: HotkeyId) => void
@@ -106,6 +114,7 @@ interface SettingsState {
 type Persisted = Pick<SettingsState,
   | 'autoUpdateEnabled'
   | 'cliSessionLinking'
+  | 'agentStatusScraping'
   | 'showGitBranchBadges'
   | 'tabOverflowMode'
   | 'optimizedTerminalRenderer'
@@ -124,6 +133,7 @@ function defaultSettings(): Persisted {
   return {
     autoUpdateEnabled: false,
     cliSessionLinking: true,
+    agentStatusScraping: true,
     showGitBranchBadges: true,
     tabOverflowMode: 'scroll',
     optimizedTerminalRenderer: true,
@@ -174,6 +184,9 @@ function loadSettings(): Persisted {
     return {
       autoUpdateEnabled: parsed.autoUpdateEnabled === true,
       cliSessionLinking: parsed.cliSessionLinking !== false,
+      // spec 050: default-OFF polarity. `=== true` so an unknown/missing field stays off,
+      // never silently on -- this is an opt-in complement, not the default discipline.
+      agentStatusScraping: parsed.agentStatusScraping !== false,
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
       tabOverflowMode: parsed.tabOverflowMode === 'wrap' ? 'wrap' : 'scroll',
       optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
@@ -210,6 +223,7 @@ function saveSettings(state: Persisted): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     autoUpdateEnabled: state.autoUpdateEnabled,
     cliSessionLinking: state.cliSessionLinking,
+    agentStatusScraping: state.agentStatusScraping,
     showGitBranchBadges: state.showGitBranchBadges,
     tabOverflowMode: state.tabOverflowMode,
     optimizedTerminalRenderer: state.optimizedTerminalRenderer,
@@ -244,6 +258,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   hydrateCliSessionLinking: (value) => {
     set({ cliSessionLinking: value })
+    saveSettings(get())
+  },
+
+  setAgentStatusScraping: (value) => {
+    set({ agentStatusScraping: value })
+    saveSettings(get())
+    // Main is the authority -- the detector runs only there. Sync the flag so main can
+    // gate its ptyOutputRouter-owned scraper. The two settings are fully independent.
+    window.ipc.invoke('settings:set-terminal-status-scraping', value).catch((err) => {
+      console.error('[Settings] Failed to sync agent status scraping to main:', err)
+    })
+  },
+
+  hydrateAgentStatusScraping: (value) => {
+    set({ agentStatusScraping: value })
     saveSettings(get())
   },
 

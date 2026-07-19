@@ -181,3 +181,102 @@ access to full visible history. Users can adjust this in Settings → Terminal; 
 persisted in `useSettingsStore.terminalScrollbackLines` and applied to both new and existing
 xterm instances through `xtermRegistry.setScrollbackLines()`. Lowering the value can trim
 existing scrollback, so do not silently lower the default as a performance fix.
+
+## Terminal-error scraping (spec 050 — the scoped hooks-only exception)
+
+Expands the `CLAUDE.md` Terminals & PTY guardrail about `agentStatusScraping`. The hook
+system (spec 032) is the authoritative status source, but it has honest gaps the hooks
+literally cannot close. This is the one scoped exception; it is **on by default**
+(toggleable off via `agentStatusScraping`) so the codex-404-stays-blue bug is fixed out of
+the box — the hooks-only discipline remains the default *behavior source* (scraping only
+fills gaps hooks can't, it never overrides them).
+
+### The gap, and why scraping is the only available signal
+
+Codex has **no StopFailure and no error hook** (see `docs/session-linking-hooks.md`). When
+Codex hits a fatal API error it prints the error to the terminal and returns to its prompt —
+it does **not** exit (so the sweeper/demote path never fires) and emits no hook. The last
+lifecycle event was `user_prompt_submit` → `working`, so the status dot stays blue
+indefinitely on a dead turn. The concrete trigger this was built for: a provider-compat
+failure against a provider lacking `/responses` (e.g. z.ai/GLM), which prints
+
+```
+unexpected status 404 Not Found: Unknown error, url: https://api.z.ai/...
+API failed after N retries — ...
+```
+
+The agent's own terminal output is the only available signal.
+
+### The lesson from spec 048 (read before touching any pattern)
+
+Spec 048 built a scraping rule engine and was rolled back: loose single-phrase substring
+matches over a large scrollback window misread ordinary chat that *discussed* the detection
+rules (e.g. quoting "do you want to proceed?") as a live prompt. This feature avoids that
+failure by construction:
+
+1. **Canonical, high-specificity signatures only.** Never keywords. v1 matches exactly:
+   - `unexpected status \d{3}\b[^\n]*?, url:` (the `, url:` tail is required for specificity),
+   - and `API failed after \d+ retries`.
+   These are Codex's own fatal-output formats. **Reject any "also match `Error:`/`panic`/
+   `fatal`" instinct** — they appear in legitimate tool output. If a false positive ever
+   bites, tighten the specific pattern; never broaden it.
+2. **Never scan scrollback.** The detector keeps a small rolling fresh-output buffer
+   (line-aligned, ~2 KiB cap) and reports a match only when its END falls inside the
+   freshly-arrived bytes. The matched region is what just arrived, not the pane's history.
+3. **Per-agentKind gating.** Wired only for panes whose `agentKind === 'codex'` (and only
+   when the setting is on). Never runs on shell panes or other agents in v1.
+
+### Compose at the reducer — not a second status path
+
+Scraping does **not** add a second write path. It produces a new `terminal_error` event that
+travels the same IPC channel shape and reducer hooks use:
+
+```
+PTY bytes → main detector (ptyOutputRouter seam) → pane:terminal-status IPC →
+panesIpc.ts → eventToState(prev, input) → setPaneAgentStatus
+```
+
+`eventToState` (`src/shared/agentStatus.ts`) stays the single merge point. The error is a
+**latch**: once set, `const latched = prev?.event === 'terminal_error'`, and:
+
+- **Keeps error** (ignores dead-turn noise): `pre_tool_use` / `post_tool_use` / `stop` /
+  `permission_request` / `promote` → `if (latched) return prev`. For `pre_tool_use` /
+  `post_tool_use` the latch check sits at the top of the case so it short-circuits the
+  existing turn-id guard.
+- **Clears error** (legitimate re-arm): `user_prompt_submit` → `working`, `session_start`
+  → `idle` (the one case where the existing preserve-prev rule is overridden — without this
+  the dot would stay red across restarts), `demote` → `undefined`.
+
+### The setting matrix
+
+Two independent, main-authoritative settings compose at the reducer:
+
+| Setting | Controls | Default |
+|---|---|---|
+| `cliSessionLinking` (existing) | managed hook install → hook-based status events | ON |
+| `agentStatusScraping` (new) | the terminal-scrape observer | **OFF** |
+
+All four combinations are valid: hooks-only (the spec-032 default); hooks + scrape (the
+expected steady state for users who hit the gap); scrape-only (limited but works for users
+who disable managed hooks); both off (dot renders `unknown`).
+
+### File map
+
+- `src/main/pty/terminalStatusDetector.ts` — pure detector + the per-agentKind pattern
+  registry (`Record<AgentKind, PatternEntry[]>`). No Electron deps, no IO, no clock.
+- `src/main/pty/terminalStatusScraper.ts` — main-side orchestrator: lazy `ptyId → Detector`
+  map, gating, IPC fanout. The seam that keeps the detector pure.
+- `src/main/ipc/ptyOutputRouter.ts` — the detector feed point (the single existing per-pane
+  byte subscriber). Detectors are dropped on `releasePty` so they never leak.
+- `src/main/ipc/handlers.ts` — main-authoritative `agentStatusScrapingEnabled` flag (persisted
+  to `<userData>/agent-status-scraping.json`, default on); the `ptyId → agentKind` map
+  populated by `session:new`/`session:resume`.
+- `src/renderer/src/store/panesIpc.ts` — the `pane:terminal-status` handler, symmetric with
+  `pane:agent-event`.
+
+### Scope and follow-ups
+
+v1 wires app-spawned Codex panes only. CLI-launched Codex in a shell pane is promoted at
+runtime by the sweeper (see `agentProcessSweeper.ts`), whose private `emitted` map holds the
+transition — wiring the detector on sweeper promotion is a follow-up, not v1. Claude is empty
+in the pattern table today (StopFailure covers its error path).

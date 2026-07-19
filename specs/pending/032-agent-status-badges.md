@@ -1,8 +1,11 @@
 # 032 — Agent status badges via managed lifecycle hooks
 
-> **Status:** pending / design, **ready for handoff to an AI implementer.** Open questions
-> resolved (see "Research findings" and "Open questions (resolved)"). Not implemented. This
-> spec is a direct extension of the managed-hook + report-server infrastructure 047 shipped
+> **Status:** shipped (code lives in `src/shared/agentStatus.ts`, `src/renderer/src/store/panesIpc.ts`,
+> the managed hooks in `src/main/integration/`, and the `pane:agent-event` channel). Originally
+> pending / design; kept here as the design record. **Amended by spec 050** — the "no scraping"
+> hard line in handoff contract #1 below now reads "no scraping except the scoped
+> `agentStatusScraping` complement in spec 050." This spec is a direct extension of the
+> managed-hook + report-server infrastructure 047 shipped
 > (Phase 3 / Phase 4).
 >
 > **For the AI implementer (read this first):**
@@ -562,7 +565,11 @@ to the pane `error` badge; the turn is still in progress.)
 
 1. **No screen/OSC scraping as a status source.** The `unknown` fallback is the hard line.
    This is the lesson of 048. Any PR reintroducing rendered-text content as a status
-   signal is out of scope and should be rejected.
+   signal is out of scope and should be rejected. **Amended by spec 050**: the *one* scoped
+   exception is the opt-in `agentStatusScraping` fatal-terminal-error detector — default off,
+   Codex-only at launch, canonical-signature-only from a rolling fresh-output buffer, feeding
+   the same reducer as a `terminal_error` event. Read contract #1 as "no scraping except the
+   scoped `agentStatusScraping` complement in spec 050."
 2. **Reuse 047's infrastructure; do not fork it.** Same report server (add a route), same
    hook script (add an event arg), same managed-hook controller (add event entries), same
    env injection, same toggle, same marked-block/`.bak`/atomic/reversible discipline. One
