@@ -56,6 +56,7 @@ export function useSessions() {
 
   return {
     sessions: withLive,
+    liveIds,
     loading,
     resumable,
     search,

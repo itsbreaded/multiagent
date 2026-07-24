@@ -35,7 +35,7 @@ export function SessionBrowser(): JSX.Element {
   const resumeSession = usePanesStore((s) => s.resumeSession)
   const resumeSessionInNewTab = usePanesStore((s) => s.resumeSessionInNewTab)
   const repairSessionCwd = useSessionsStore((s) => s.repairSessionCwd)
-  const { sessions, search } = useSessions()
+  const { sessions, search, liveIds } = useSessions()
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'summary' | 'deep'>('summary')
   const [selectedProject, setSelectedProject] = useState<string | null>(null)
@@ -94,7 +94,21 @@ export function SessionBrowser(): JSX.Element {
 
   const summarySessions = useMemo(() => query ? search(query) : sessions, [query, sessions, search])
   const summaryGrouped = useMemo(() => groupByProject(summarySessions), [summarySessions])
-  const deepGrouped = useMemo(() => groupResultsByProject(deepResults), [deepResults])
+  // The session index only ever reports `resumable`; `live-attached` is a
+  // renderer-side derivation from the panes store (see useSessions). Deep-search
+  // results come straight from the index via `sessions:search-deep`, so we
+  // re-stamp live status here the same way the summary list does — otherwise the
+  // green active dot never lights for open sessions in Deep mode.
+  const deepWithLive = useMemo(
+    () =>
+      deepResults.map((r) =>
+        liveIds.has(`${r.session.agentKind}:${r.session.sessionId}`)
+          ? { ...r, session: { ...r.session, status: 'live-attached' as const } }
+          : r,
+      ),
+    [deepResults, liveIds],
+  )
+  const deepGrouped = useMemo(() => groupResultsByProject(deepWithLive), [deepWithLive])
 
   const projects = mode === 'deep' ? Array.from(deepGrouped.keys()) : Array.from(summaryGrouped.keys())
   const activeProject = selectedProject ?? projects[0] ?? null
