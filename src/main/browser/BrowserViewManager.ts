@@ -86,26 +86,67 @@ export class BrowserViewManager extends EventEmitter {
   }
 
   async navigate(url: string): Promise<{ url: string; title: string }> {
+    // Spec 051, BG-I1: validate the scheme before opening a window. The agent
+    // (and clickText's http-href branch) can otherwise load file:// / data: /
+    // javascript: into the agent-controlled panel, which it can then evaluate
+    // against — a filesystem read path. http/https/about only.
+    const normalized = normalizeNavigableUrl(url)
     const win = this._ensureWindow()
     win.show()
     this.state = 'agent-controlled'
     this.emit('state-changed', this.state)
-    await win.webContents.loadURL(url)
+    await win.webContents.loadURL(normalized)
     return { url: win.webContents.getURL(), title: win.webContents.getTitle() }
+  }
+
+  async reload(): Promise<{ url: string; title: string }> {
+    // Spec 051, BG-B5: Playwright has browser_reload; this repo only had
+    // back/forward, so an agent had to re-navigate by URL (losing form state)
+    // to refresh.
+    const wc = this._requireWebContents()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wc.reload()
+    await this.waitForLoad(10000)
+    return { url: wc.getURL(), title: wc.getTitle() }
+  }
+
+  /**
+   * JS probe that resolves `selector` to center coords after a visibility +
+   * enabled (actionability) check. Returns `{x,y}` on success, `null` if the
+   * element is absent, or `{ error }` if found but not actionable. Spec 051,
+   * RF-4.2: click/type/hover previously fired sendInputEvent at a computed
+   * center the instant the element was found, with no visible/enabled check,
+   * so a click on a `display:none`/occluded/disabled target silently missed.
+   */
+  private _actionableSelectorProbe(selector: string): string {
+    return `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (!(r.width > 0 && r.height > 0)) return { error: 'not visible' };
+      if ((el).disabled) return { error: 'disabled' };
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`
+  }
+
+  /** Resolve a probe result into coords, throwing not-found / not-actionable. */
+  private _resolveActionable(
+    pos: { x: number; y: number } | { error: string } | null,
+    selector: string
+  ): { x: number; y: number } {
+    if (!pos) throw new Error(`Selector not found: ${selector}`)
+    if ('error' in pos) throw new Error(`Element not actionable (${pos.error}): ${selector}`)
+    return pos
   }
 
   async click(selector: string): Promise<{ url: string; title: string }> {
     const wc = this._requireWebContents()
     const urlBefore = wc.getURL()
-    const pos = await wc.executeJavaScript(`
-      (() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-      })()
-    `, true) as { x: number; y: number } | null
-    if (!pos) throw new Error(`Selector not found: ${selector}`)
+    const pos = this._resolveActionable(
+      await wc.executeJavaScript(this._actionableSelectorProbe(selector), true) as
+        { x: number; y: number } | { error: string } | null,
+      selector
+    )
     this.win!.focus()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
@@ -116,15 +157,11 @@ export class BrowserViewManager extends EventEmitter {
 
   async type(selector: string, text: string): Promise<void> {
     const wc = this._requireWebContents()
-    const pos = await wc.executeJavaScript(`
-      (() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-      })()
-    `, true) as { x: number; y: number } | null
-    if (!pos) throw new Error(`Selector not found: ${selector}`)
+    const pos = this._resolveActionable(
+      await wc.executeJavaScript(this._actionableSelectorProbe(selector), true) as
+        { x: number; y: number } | { error: string } | null,
+      selector
+    )
     this.win!.focus()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
@@ -151,7 +188,19 @@ export class BrowserViewManager extends EventEmitter {
 
   async evaluate(js: string): Promise<unknown> {
     const wc = this._requireWebContents()
-    return wc.executeJavaScript(js, true)
+    // Evaluate the submitted string in an async context so top-level `await`
+    // works (spec 051, RF-3: raw executeJavaScript rejects top-level await
+    // under this Electron/Chromium config). The string is eval'd as an
+    // expression; if it resolves to a function we call it (so `async () =>
+    // { ... }` bodies run), otherwise we return its value. This mirrors
+    // Playwright's browser_evaluate and preserves the "any JS string" contract
+    // for bare expressions, `;`-terminated statements, and multi-statement
+    // scripts. executeJavaScript is a privileged injection (like the DevTools
+    // console), so the nested eval is not subject to page CSP unsafe-eval.
+    return wc.executeJavaScript(
+      `(async () => { const v = eval(${JSON.stringify(js)}); return typeof v === 'function' ? await v() : v; })()`,
+      true
+    )
   }
 
   async getContent(options: BrowserContentOptions = {}): Promise<BrowserContentResult> {
@@ -185,9 +234,12 @@ export class BrowserViewManager extends EventEmitter {
   async waitFor(selector: string, timeoutMs = 5000): Promise<void> {
     const wc = this._requireWebContents()
     const deadline = Date.now() + timeoutMs
+    // Spec 051, RF-4.6: poll *visibility*, not bare existence — an element with
+    // `display:none`/`hidden` satisfied the old `!!querySelector` check, so the
+    // following click/type hit a non-rendered target.
     while (Date.now() < deadline) {
       const found = await wc.executeJavaScript(
-        `!!document.querySelector(${JSON.stringify(selector)})`
+        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()`
       ) as boolean
       if (found) return
       await new Promise((r) => setTimeout(r, 200))
@@ -244,15 +296,11 @@ export class BrowserViewManager extends EventEmitter {
 
   async hover(selector: string): Promise<void> {
     const wc = this._requireWebContents()
-    const pos = await wc.executeJavaScript(`
-      (() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-      })()
-    `) as { x: number; y: number } | null
-    if (!pos) throw new Error(`Selector not found: ${selector}`)
+    const pos = this._resolveActionable(
+      await wc.executeJavaScript(this._actionableSelectorProbe(selector)) as
+        { x: number; y: number } | { error: string } | null,
+      selector
+    )
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wc.sendInputEvent({ type: 'mouseMove', x: pos.x, y: pos.y } as any)
     await wc.executeJavaScript(`
@@ -300,11 +348,14 @@ export class BrowserViewManager extends EventEmitter {
     return this._waitForNavigationIfStarted(urlBefore)
   }
 
-  async clickText(text: string, exact = false): Promise<{ url: string; title: string }> {
+  async clickText(text: string, exact = false): Promise<{ url: string; title: string; matchCount: number }> {
     const wc = this._requireWebContents()
     // Three-pass search: <a> first (preferred for navigation), then buttons, then
     // structural containers — for containers, walk up to the nearest <a> ancestor.
-    // Returns coordinates + href so we can navigate directly for real links.
+    // Spec 051, RF-2: collect ALL visible actionable matches (deduped) across the
+    // three passes — not just the first — so the caller can warn when the label
+    // is ambiguous (e.g. 20 "Add" buttons). The clicked target is still the first
+    // match in pass order. RF-4.2: matches must also be visible + not disabled.
     const found = await wc.executeJavaScript(`
       (() => {
         const exact = ${JSON.stringify(exact)};
@@ -313,39 +364,45 @@ export class BrowserViewManager extends EventEmitter {
           const t = (el.innerText || el.textContent || '').trim();
           return exact ? t === needle : t.toLowerCase().includes(needle.toLowerCase());
         };
-        const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const actionable = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.disabled; };
         const toResult = (el) => {
           const r = el.getBoundingClientRect();
           return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), href: el.href || null };
         };
+        const seen = new Set();
+        const found = [];
+        const consider = (el) => {
+          if (!el || seen.has(el) || !matches(el) || !actionable(el)) return;
+          seen.add(el); found.push(el);
+        };
         // Pass 1: <a> elements — exact link targets, preferred for navigation
-        for (const el of document.querySelectorAll('a')) {
-          if (matches(el) && visible(el)) return toResult(el);
-        }
+        for (const el of document.querySelectorAll('a')) consider(el);
         // Pass 2: buttons and interactive ARIA roles
-        for (const el of document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="option"]')) {
-          if (matches(el) && visible(el)) return toResult(el);
-        }
+        for (const el of document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="option"]')) consider(el);
         // Pass 3: structural containers — walk up to nearest <a> ancestor so
-        // complex product cards (e.g. Amazon <li> wrapping a link) resolve correctly
+        // complex product cards (e.g. Amazon <li> wrapping a link) resolve correctly.
+        // If an <a> ancestor exists, attribute the match to it (dedups vs pass 1);
+        // otherwise the structural element itself is the match.
         for (const el of document.querySelectorAll('li, td, th, label, span, div, p')) {
-          if (matches(el) && visible(el)) {
-            let cur = el.parentElement;
-            while (cur && cur !== document.body) {
-              if (cur.tagName === 'A' && visible(cur)) return toResult(cur);
-              cur = cur.parentElement;
-            }
-            return toResult(el);
+          if (!matches(el) || !actionable(el) || seen.has(el)) continue;
+          let cur = el.parentElement, linkAncestor = null;
+          while (cur && cur !== document.body) {
+            if (cur.tagName === 'A' && actionable(cur)) { linkAncestor = cur; break; }
+            cur = cur.parentElement;
           }
+          if (linkAncestor) consider(linkAncestor); else consider(el);
         }
-        return null;
+        if (!found.length) return null;
+        return { ...toResult(found[0]), count: found.length };
       })()
-    `, true) as { x: number; y: number; href: string | null } | null
+    `, true) as { x: number; y: number; href: string | null; count: number } | null
     if (!found) throw new Error(`No visible element with text: ${JSON.stringify(text)}`)
     // For real http(s) links, navigate directly — bypasses coordinate precision issues
     // on deeply nested link structures and waits for the page to finish loading.
+    // (Spec 051 RF-4.4 notes this skips SPA preventDefault / target=_blank / download
+    // handlers; a "dispatch click first, fall back to navigate" rework is deferred.)
     if (found.href && /^https?:/.test(found.href)) {
-      return this.navigate(found.href)
+      return { ...(await this.navigate(found.href)), matchCount: found.count }
     }
     const urlBefore = wc.getURL()
     this.win!.focus()
@@ -359,7 +416,7 @@ export class BrowserViewManager extends EventEmitter {
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       })()
     `, true)
-    return this._waitForNavigationIfStarted(urlBefore)
+    return { ...(await this._waitForNavigationIfStarted(urlBefore)), matchCount: found.count }
   }
 
   async getElements(selector: string): Promise<Array<{ tag: string; text: string; value: string; id: string; classes: string; href: string; role: string; x: number; y: number; width: number; height: number; visible: boolean }>> {
@@ -448,15 +505,26 @@ export class BrowserViewManager extends EventEmitter {
 
   async selectOption(selector: string, value: string): Promise<void> {
     const wc = this._requireWebContents()
-    await wc.executeJavaScript(`
+    // Spec 051, RF-4.5: verify the target is a <select> — the old code set
+    // `el.value` and fired change/input on whatever querySelector returned; for
+    // a non-select the assignment silently no-ops but the synthetic events
+    // still fire on the wrong element and can trigger unrelated handlers.
+    const result = await wc.executeJavaScript(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return;
+        if (!el) return { error: 'not found' };
+        if (el.tagName !== 'SELECT') return { error: 'not a <select>' };
         el.value = ${JSON.stringify(value)};
         el.dispatchEvent(new Event('change', { bubbles: true }));
         el.dispatchEvent(new Event('input', { bubbles: true }));
+        return { ok: true };
       })()
-    `)
+    `, true) as { ok: true } | { error: string } | null | undefined
+    if (!result || !('ok' in result)) {
+      const err = (result as { error?: string } | null)?.error
+      if (err === 'not found') throw new Error(`Selector not found: ${selector}`)
+      throw new Error(`browser_select target is not a <select> (${selector})`)
+    }
   }
 
   async setCookies(
@@ -482,4 +550,34 @@ function normalizeMaxChars(maxChars: number | undefined): number | undefined {
 function countLines(text: string): number {
   if (text.length === 0) return 0
   return text.split(/\r\n|\r|\n/).length
+}
+
+const ALLOWED_NAV_SCHEMES = new Set(['http:', 'https:', 'about:'])
+
+/**
+ * Validate and normalize a navigation URL. Spec 051, BG-I1: block non-http(s)
+ * schemes (`file:`, `data:`, `javascript:`, …) so the agent can't drive the
+ * browser panel at the user's filesystem. Allow `about:` (blank). Normalize
+ * bare `localhost`/IPv4 (no scheme) to `http://` — mirrors Playwright's
+ * `checkUrlAndNavigate` so the common dev-server case still works.
+ */
+function normalizeNavigableUrl(url: string): string {
+  // Recognize bare host forms (`localhost`, `localhost:3000`, IPv4, `host:port`)
+  // that `new URL` either rejects or misparses as a custom scheme (e.g.
+  // `localhost:3000` parses with protocol `localhost:`), and prefix `http://`.
+  const hostLike =
+    /^localhost(:\d+)?(\/.*)?$/.test(url) ||
+    /^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/.*)?$/.test(url)
+  let parsed: URL
+  try {
+    parsed = new URL(hostLike ? 'http://' + url : url)
+  } catch {
+    throw new Error(`Invalid URL: ${JSON.stringify(url)}`)
+  }
+  if (!ALLOWED_NAV_SCHEMES.has(parsed.protocol)) {
+    throw new Error(
+      `Refusing to navigate to non-http(s) URL (${parsed.protocol || 'no scheme'}): ${JSON.stringify(url)} — file:, data:, javascript: schemes are blocked`
+    )
+  }
+  return parsed.href
 }
