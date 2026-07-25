@@ -163,8 +163,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   with an empty allow-list — never leave stale managed hooks behind.
   → [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md).
 - Claude uses a PID-scoped temp `--mcp-config` file (no `--strict-mcp-config`); Codex gets MCP
-  via `-c` overrides. Browser MCP tools live in `src/main/mcp/tools/` — keep the tool list in
-  sync there, not in docs.
+  via `-c` overrides. Browser MCP tools are inlined in `BrowserMcpServer.ts` (registrations +
+  descriptions) backed by `BrowserViewManager.ts` (methods) — keep the tool list in sync
+  there, not in docs.
 
 ### Packaging → [`docs/packaging-and-release.md`](docs/packaging-and-release.md)
 

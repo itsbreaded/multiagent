@@ -124,11 +124,12 @@ CLI `-c` overrides generated from the template, along with the TUI flags noted i
 ## Browser Panel (MCP)
 
 `BrowserViewManager` embeds a `BrowserView` that an MCP server (`BrowserMcpServer`, server
-name `multiagent-browser`) controls via neutral primitive tools in `src/main/mcp/tools/`
-(navigate, click, click_text, click_at, type, hover, hover_at, keyboard, select, scroll,
-screenshot, get_content/url/elements/links, evaluate, wait_for/wait_for_text/wait_for_load,
-set_cookies). The renderer shows/hides it via `browser:toggle`. The tool surface and
-recommended selection order are documented with the MCP server itself — keep that list in sync
-with `src/main/mcp/tools/`, not in `CLAUDE.md` or here. To override JS dialogs
-(`alert`/`confirm`/`prompt`), use `browser_evaluate` to patch `window.confirm = () => true`
-etc. after navigation.
+name `multiagent-browser`) controls via neutral primitive tools registered inline in
+`BrowserMcpServer.ts` and backed by `BrowserViewManager.ts` (navigate, click, click_text,
+click_at, type, hover, hover_at, keyboard, select, scroll, screenshot,
+get_content/url/elements/links, evaluate, wait_for/wait_for_text/wait_for_load, go_back,
+go_forward, reload, set_cookies). The renderer shows/hides it via `browser:toggle`. The tool
+surface and recommended selection order are documented with the MCP server itself — keep that
+list in sync with `BrowserMcpServer.ts`/`BrowserViewManager.ts`, not in `CLAUDE.md` or here.
+To override JS dialogs (`alert`/`confirm`/`prompt`), use `browser_evaluate` to patch
+`window.confirm = () => true` etc. after navigation.
