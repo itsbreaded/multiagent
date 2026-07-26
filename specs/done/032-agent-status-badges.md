@@ -47,7 +47,7 @@ standardized way* — not by guessing from screen contents.
   failure: normal chat text that merely *discussed* the detection rules (quoting phrases
   like "do you want to proceed?") was misread as a live permission prompt, because the
   rules matched loose single-phrase substrings over a large scrollback window. See
-  `specs/pending/046-herdr-detection-findings-and-improvements.md` "Correction to the
+  `specs/done/046-herdr-detection-findings-and-improvements.md` "Correction to the
   record."
 - **There is currently no status-detection code anywhere in this tree.** No `agentStatus`
   store slice, no status dot in `PaneHeader`, no `src/renderer/src/terminal/status/`
