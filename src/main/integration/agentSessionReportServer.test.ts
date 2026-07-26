@@ -45,6 +45,16 @@ describe('AgentSessionReportServer -- /agent-session (spec 047)', () => {
     expect(reports).toEqual([{ ptyId: 'p2', agentKind: 'codex', sessionId: 'sess-2', transcriptPath: undefined }])
   })
 
+  it('accepts an opencode report (spec 052) and surfaces its agentKind', async () => {
+    const reports: AgentSessionReport[] = []
+    server = new AgentSessionReportServer({ onReport: (r) => reports.push(r), onEvent: () => {} })
+    server.start()
+    const port = await server.ready()
+    const status = await post(port!, '/agent-session', { ptyId: 'p4', agentKind: 'opencode', sessionId: 'ses_062dac63dffeJwxszoGRWwfIgQ' })
+    expect(status).toBe(204)
+    expect(reports).toEqual([{ ptyId: 'p4', agentKind: 'opencode', sessionId: 'ses_062dac63dffeJwxszoGRWwfIgQ', transcriptPath: undefined }])
+  })
+
   it('rejects an unknown agentKind with 400 and does not invoke onReport', async () => {
     const reports: unknown[] = []
     server = new AgentSessionReportServer({ onReport: (r) => reports.push(r), onEvent: () => {} })

@@ -121,6 +121,13 @@ const COMMANDS: Command[] = [
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'codex'); ctx.closeOverlays() },
   },
   {
+    id: 'session.newOpencode',
+    title: 'New OpenCode Session',
+    category: 'Panes',
+    agentKind: 'opencode',
+    run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'opencode'); ctx.closeOverlays() },
+  },
+  {
     id: 'pane.newShell',
     title: 'New Shell Pane',
     category: 'Panes',

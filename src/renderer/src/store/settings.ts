@@ -51,6 +51,11 @@ function defaultAgentProviderSettings(): AgentProviderSettings {
       providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '',
       wireApi: 'responses', extraEnvVars: [],
     },
+    opencode: {
+      enabled: false, preset: 'native',
+      providerId: '', model: '', baseUrl: '', apiKey: '', npmAdapter: '',
+      extraEnvVars: [],
+    },
   }
 }
 

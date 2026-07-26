@@ -37,7 +37,7 @@ export function wirePanesIpc(): void {
   })
 
   window.ipc.on('session:detected', (ptyId: unknown, agentKind: unknown, sessionId: unknown) => {
-    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex') || typeof sessionId !== 'string') return
+    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex' && agentKind !== 'opencode') || typeof sessionId !== 'string') return
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
       if (!tab.rootNode) continue
@@ -65,7 +65,7 @@ export function wirePanesIpc(): void {
       if (!tab.rootNode) continue
       const pane = findLeafByPtyId(tab.rootNode, ptyId)
       if (pane) {
-        if (agentKind === 'claude' || agentKind === 'codex') {
+        if (agentKind === 'claude' || agentKind === 'codex' || agentKind === 'opencode') {
           store.promoteShellPaneToAgent(pane.id, agentKind)
         } else {
           store.demoteAgentPaneToShell(pane.id)
@@ -114,7 +114,7 @@ export function wirePanesIpc(): void {
   })
 
   window.ipc.on('session:detection-failed', (ptyId: unknown, agentKind: unknown, reason: unknown, mode: unknown) => {
-    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex')) return
+    if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex' && agentKind !== 'opencode')) return
     const message = mode === 'resume'
       ? 'Session resumed, but the live session id could not be confirmed'
       : 'Session detection timed out'

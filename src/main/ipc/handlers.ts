@@ -8,13 +8,15 @@ import { SessionIndex } from '../sessions/SessionIndex'
 import { createSessionPoller } from '../sessions/sessionPoll'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
 import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
+import { OpencodeSessionScanner } from '../sessions/OpencodeSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
-import { SessionSpawner, setAgentProviderSettings } from '../sessions/SessionSpawner'
+import { SessionSpawner, setAgentProviderSettings, setOpencodePluginPath } from '../sessions/SessionSpawner'
 import { PtyManager } from '../pty/PtyManager'
 import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
 import { TerminalStatusScraper } from '../pty/terminalStatusScraper'
 import { AgentSessionReportServer } from '../integration/agentSessionReportServer'
 import { ManagedHookController } from '../integration/managedHookController'
+import { installOpencodePlugin } from '../integration/opencodePluginInstall'
 import { openExternalUrl } from '../external'
 import { getRecentDirs, addRecentDir } from '../recentDirs'
 import { mcpManager } from '../mcp/McpManager'
@@ -58,6 +60,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const index = new SessionIndex()
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
+  const opencodeScanner = new OpencodeSessionScanner()
 
   // spec 047 phase 3 / phase 4: managed SessionStart hooks for session linking. Default-ON
   // under phase 4 — app-launched Codex can ONLY link via the managed hook now that the
@@ -192,11 +195,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   async function scanAllSessions() {
-    const [claudeSessions, codexSessions] = await Promise.all([
+    const [claudeSessions, codexSessions, opencodeSessions] = await Promise.all([
       claudeScanner.scanAll(),
       codexScanner.scanAll(),
+      opencodeScanner.scanAll(),
     ])
-    return [...claudeSessions, ...codexSessions]
+    return [...claudeSessions, ...codexSessions, ...opencodeSessions]
   }
 
   // Per-window setup: send current session list when a new window loads,
@@ -235,7 +239,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     index,
     broadcast: (sessions) => windowManager.broadcastAll('sessions:updated', sessions),
   })
-  const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index, () => sessionPoller.markDirty())
+  const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index, () => sessionPoller.markDirty(), opencodeScanner)
   sessionPoller.poll(true).catch((err) => {
     console.error('[MultiAgent] Session scan failed:', err)
     windowManager.broadcastAll('sessions:updated', [])
@@ -314,7 +318,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('sessions:latest-for-cwd', async (_e, agentKind, cwd: string) => {
-    const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+    const scanner = agentKind === 'codex' ? codexScanner : agentKind === 'opencode' ? opencodeScanner : claudeScanner
     const sessions = await scanner.scanAll()
     const normalizedCwd = normalizePath(cwd)
     const latest = sessions
@@ -432,10 +436,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('sessions:validate', async (_e, agentKind: AgentKind, sessionId: string, cwd: string) => {
-    if ((agentKind !== 'claude' && agentKind !== 'codex') || typeof sessionId !== 'string') {
+    if ((agentKind !== 'claude' && agentKind !== 'codex' && agentKind !== 'opencode') || typeof sessionId !== 'string') {
       return { found: false, cwdMatch: false, transcriptPath: null, transcriptCwd: null }
     }
-    const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+    const scanner = agentKind === 'codex' ? codexScanner : agentKind === 'opencode' ? opencodeScanner : claudeScanner
     const sessions = await scanner.scanAll()
     const match = sessions.find((s) => s.agentKind === agentKind && s.sessionId === sessionId)
     if (!match) return { found: false, cwdMatch: false, transcriptPath: null, transcriptCwd: null }
@@ -450,10 +454,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('sessions:recover-pending', async (_e, agentKind: AgentKind, cwd: string, startedAt: number) => {
-    if ((agentKind !== 'claude' && agentKind !== 'codex') || typeof cwd !== 'string' || typeof startedAt !== 'number') {
+    if ((agentKind !== 'claude' && agentKind !== 'codex' && agentKind !== 'opencode') || typeof cwd !== 'string' || typeof startedAt !== 'number') {
       return null
     }
-    const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+    const scanner = agentKind === 'codex' ? codexScanner : agentKind === 'opencode' ? opencodeScanner : claudeScanner
     const sessions = await scanner.scanAll()
     const normalizedCwd = normalizePath(cwd)
 
@@ -517,6 +521,13 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   // Load and apply on startup
   setAgentProviderSettings(loadAgentProviderSettings())
+
+  // spec 052: install the managed OpenCode plugin to <userData>/opencode-plugin and point
+  // SessionSpawner at its file path (injected into the `plugin` array of the per-pane
+  // OPENCODE_CONFIG_CONTENT). Process-scoped, no user-config mutation, no toggle — the
+  // plugin loads unconditionally for any OpenCode pane MultiAgent spawns (it bails unless
+  // MULTIAGENT_ENV is set).
+  setOpencodePluginPath(installOpencodePlugin(app.getPath('userData')))
 
   registrar.handle('settings:get-agent-providers', () => loadAgentProviderSettings())
 

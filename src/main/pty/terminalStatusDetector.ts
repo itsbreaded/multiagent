@@ -90,6 +90,10 @@ export const TERMINAL_STATUS_PATTERNS: Record<AgentKind, PatternEntry[]> = {
       },
     },
   ],
+  // OpenCode surfaces fatal errors via its plugin's session.error event (spec 052 §7),
+  // so terminal-output scraping is intentionally empty for opencode -- matching Claude,
+  // whose error path is covered by the StopFailure hook.
+  opencode: [],
 }
 
 export interface DetectorOptions {

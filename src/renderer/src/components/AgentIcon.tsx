@@ -3,6 +3,7 @@ import type { AgentKind } from '../../../shared/types'
 import { agentLabel } from '../utils/agents'
 import claudeCodeIcon from '../assets/claudecode.png'
 import codexIcon from '../assets/codex.png'
+import opencodeIcon from '../assets/opencode.png'
 import terminalIcon from '../assets/terminal.png'
 
 interface AgentIconProps {
@@ -14,7 +15,7 @@ interface AgentIconProps {
 export function AgentIcon({ agentKind, size = 14, style }: AgentIconProps): JSX.Element {
   return (
     <img
-      src={agentKind === 'claude' ? claudeCodeIcon : codexIcon}
+      src={agentKind === 'claude' ? claudeCodeIcon : agentKind === 'codex' ? codexIcon : opencodeIcon}
       alt={agentLabel(agentKind)}
       title={agentLabel(agentKind)}
       style={{

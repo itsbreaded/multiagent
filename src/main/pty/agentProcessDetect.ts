@@ -38,6 +38,7 @@ const RUNTIME_WRAPPERS = new Set([
 // Agent program names (after suffix stripping). `claude-code` is the npm package bin name.
 const CLAUDE_NAMES = new Set(['claude', 'claude-code'])
 const CODEX_NAMES = new Set(['codex'])
+const OPENCODE_NAMES = new Set(['opencode'])
 
 // Package-path markers used by npm-installed agents. On this machine:
 //   - claude is a standalone .exe at C:\Users\cdhan\.local\bin\claude.exe (direct name match)
@@ -45,8 +46,10 @@ const CODEX_NAMES = new Set(['codex'])
 // We match the package scope loosely so a different install root still classifies.
 const CODEX_PACKAGE_RE = /(?:^|[\\/])@openai[\\/]codex(?:[\\/]|\b)/i
 const CLAUDE_PACKAGE_RE = /(?:^|[\\/])@anthropic-ai[\\/]claude-code(?:[\\/]|\b)/i
+const OPENCODE_PACKAGE_RE = /(?:^|[\\/])opencode-ai(?:[\\/]|\b)/i
 const CODEX_FILE_RE = /(?:^|[\\/])codex\.(?:js|mjs|cjs|cmd|bat|ps1)$/i
 const CLAUDE_FILE_RE = /(?:^|[\\/])claude(?:-code)?\.(?:js|mjs|cjs|cmd|bat|ps1)$/i
+const OPENCODE_FILE_RE = /(?:^|[\\/])opencode\.(?:js|mjs|cjs|cmd|bat|ps1)$/i
 
 /** Strip a Windows/Unix executable suffix so `claude.exe`/`codex.cmd` → `claude`/`codex`. */
 function stripExecutableSuffix(name: string): string {
@@ -59,9 +62,11 @@ function classifyToken(token: string): AgentKind | null {
   // A bare agent name as an argv token (e.g. `cmd /c claude` → token "claude").
   if (CLAUDE_NAMES.has(stripped)) return 'claude'
   if (CODEX_NAMES.has(stripped)) return 'codex'
+  if (OPENCODE_NAMES.has(stripped)) return 'opencode'
   // Package paths / file shims.
   if (CODEX_PACKAGE_RE.test(token) || CODEX_FILE_RE.test(token)) return 'codex'
   if (CLAUDE_PACKAGE_RE.test(token) || CLAUDE_FILE_RE.test(token)) return 'claude'
+  if (OPENCODE_PACKAGE_RE.test(token) || OPENCODE_FILE_RE.test(token)) return 'opencode'
   return null
 }
 
@@ -79,6 +84,7 @@ export function identifyAgentFromProcess(name: string, argv: string[]): AgentKin
   // Direct agent process (e.g. the standalone claude.exe on this machine).
   if (CLAUDE_NAMES.has(baseName)) return 'claude'
   if (CODEX_NAMES.has(baseName)) return 'codex'
+  if (OPENCODE_NAMES.has(baseName)) return 'opencode'
 
   // Only unwrap known generic runtimes/shells. An unknown program named "build.js" that
   // happens to sit next to a codex dir must not classify as an agent.

@@ -13,6 +13,7 @@ export type SpawnChoice = {
 export const SPAWN_CHOICES: SpawnChoice[] = [
   { paneType: 'agent', agentKind: 'claude' },
   { paneType: 'agent', agentKind: 'codex' },
+  { paneType: 'agent', agentKind: 'opencode' },
   { paneType: 'shell' },
 ]
 
@@ -182,7 +183,7 @@ function DirectionButton({
 
 export function spawnChoiceLabel(choice: SpawnChoice): string {
   if (choice.paneType === 'shell') return 'Shell'
-  return choice.agentKind === 'codex' ? 'Codex CLI' : 'Claude Code'
+  return choice.agentKind === 'codex' ? 'Codex CLI' : choice.agentKind === 'opencode' ? 'OpenCode' : 'Claude Code'
 }
 
 export function spawnChoiceKey(choice: SpawnChoice): string {

@@ -46,6 +46,11 @@ export type ClaudeBuiltinPreset = 'native' | 'deepseek' | 'alibaba' | 'ollama' |
 export type CodexBuiltinPreset  = 'native' | 'deepseek' | 'alibaba' | 'ollama' | 'zai'
 export type CodexWireApi = 'responses' | 'chat'
 
+// OpenCode built-in presets (spec 052). `native` = no override (user's own opencode.json +
+// auth.json apply). `ollama` = local Ollama token-less. `zai` = z.ai OpenAI-compatible
+// endpoint. `chatgpt` = OpenAI API-key path (Plus/Pro OAuth is a Non-Goal -- use `native`).
+export type OpencodeBuiltinPreset = 'native' | 'ollama' | 'zai' | 'chatgpt'
+
 // A named custom provider id, stored in the active config's `preset` field so
 // the runtime + sanitizer can tell it apart from a built-in. Format: `custom:<id>`.
 // The legacy migration uses the fixed id `custom:legacy`; user-created providers
@@ -56,6 +61,7 @@ export type CustomProviderId = `custom:${string}`
 // `custom:<id>` reference into the matching custom-providers array.
 export type ClaudePresetId = ClaudeBuiltinPreset | CustomProviderId
 export type CodexPresetId = CodexBuiltinPreset | CustomProviderId
+export type OpencodePresetId = OpencodeBuiltinPreset | CustomProviderId
 
 // Type guard — pure, no imports, safe to live alongside the types it inspects.
 export function isCustomId(preset: string): preset is CustomProviderId {
@@ -88,22 +94,46 @@ export interface CodexProviderConfig {
   extraEnvVars: EnvVarEntry[]
 }
 
+// OpenCode provider config (spec 052). OpenCode routes providers via its JSON config
+// (`provider.<id>.options`), not CLI flags. MultiAgent injects this as a process-scoped
+// `OPENCODE_CONFIG_CONTENT` env var (merged inline JSON), never writing to the user's
+// `~/.config/opencode/opencode.json`. `providerId` is the OpenCode provider key (e.g.
+// 'openai', 'ollama', 'zai', or a custom id); `model` is the `provider/model` string
+// OpenCode expects (e.g. 'openai/gpt-4o', 'ollama/llama2').
+export interface OpencodeProviderConfig {
+  enabled: boolean
+  preset: OpencodePresetId          // built-in name OR the active custom provider's `custom:<id>`
+  providerId: string                // OpenCode provider key in the merged config
+  model: string                     // 'provider/model' string passed via --model / config.model
+  baseUrl: string                   // provider.<id>.options.baseURL (optional)
+  apiKey: string                    // provider.<id>.options.apiKey (masked in UI; unset for ollama)
+  // provider.<id>.npm — required for OpenAI-compatible/custom gateways not in OpenCode's
+  // models.dev catalog (e.g. '@ai-sdk/openai-compatible' for ollama/zai) so OpenCode knows
+  // how to talk to the provider at all. Empty for catalog providers (e.g. 'openai').
+  npmAdapter: string
+  extraEnvVars: EnvVarEntry[]
+}
+
 // A saved named custom provider. `id` is its identity; `config.preset === id`
 // (self-referential, so activating/deactivating needs no marker toggling). `name`
 // is the user-facing label shown on the picker chip (inline-renameable).
 export interface ClaudeCustomProvider { id: CustomProviderId; name: string; config: ClaudeProviderConfig }
 export interface CodexCustomProvider  { id: CustomProviderId; name: string; config: CodexProviderConfig }
+export interface OpencodeCustomProvider { id: CustomProviderId; name: string; config: OpencodeProviderConfig }
 
 export interface AgentProviderSettings {
   claude: ClaudeProviderConfig
   codex: CodexProviderConfig
+  opencode: OpencodeProviderConfig
   // Per-built-in drafts keep provider-specific credentials/overrides intact while
-  // `claude` / `codex` hold the active runtime config. Custom drafts live in the
-  // arrays below; switching providers never mutates another provider's saved draft.
+  // `claude` / `codex` / `opencode` hold the active runtime config. Custom drafts live
+  // in the arrays below; switching providers never mutates another provider's saved draft.
   claudePresets?: Partial<Record<ClaudeBuiltinPreset, ClaudeProviderConfig>>
   codexPresets?: Partial<Record<CodexBuiltinPreset, CodexProviderConfig>>
+  opencodePresets?: Partial<Record<OpencodeBuiltinPreset, OpencodeProviderConfig>>
   claudeCustomProviders?: ClaudeCustomProvider[]
   codexCustomProviders?: CodexCustomProvider[]
+  opencodeCustomProviders?: OpencodeCustomProvider[]
 }
 
 export interface McpStatus {
@@ -112,7 +142,7 @@ export interface McpStatus {
   tools: string[]
 }
 
-export type AgentKind = 'claude' | 'codex'
+export type AgentKind = 'claude' | 'codex' | 'opencode'
 
 // Agent status badge (spec 032). Honest set -- no "thinking" (collapses into working).
 // `error` is Claude-only for v1 (Claude StopFailure; Codex has no error hook).

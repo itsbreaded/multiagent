@@ -237,6 +237,16 @@ describe('sanitizeAgentProviderSettings', () => {
         wireApi: 'responses',
         extraEnvVars: [],
       },
+      opencode: {
+        enabled: false,
+        preset: 'native',
+        providerId: '',
+        model: '',
+        baseUrl: '',
+        apiKey: '',
+        npmAdapter: '',
+        extraEnvVars: [],
+      },
     }
     expect(sanitizeAgentProviderSettings(valid)).toEqual(valid)
   })
@@ -257,5 +267,99 @@ describe('sanitizeAgentProviderSettings', () => {
     expect(result.claudePresets?.deepseek?.enabled).toBe(true)
     expect(Object.keys(result.codexPresets ?? {}).sort()).toEqual(['alibaba'])
     expect(result.codexPresets?.alibaba?.wireApi).toBe('responses')
+  })
+})
+
+describe('sanitizeAgentProviderSettings — opencode (spec 052)', () => {
+  it('seeds a disabled native opencode config by default', () => {
+    const result = sanitizeAgentProviderSettings({})
+    expect(result.opencode.enabled).toBe(false)
+    expect(result.opencode.preset).toBe('native')
+    expect(result.opencode.providerId).toBe('')
+    expect(result.opencode.model).toBe('')
+    expect(result.opencode.baseUrl).toBe('')
+    expect(result.opencode.apiKey).toBe('')
+    expect(Array.isArray(result.opencode.extraEnvVars)).toBe(true)
+    expect(result.opencodePresets).toBeUndefined()
+    expect(result.opencodeCustomProviders).toBeUndefined()
+  })
+
+  it('keeps a valid built-in opencode preset and fields', () => {
+    const result = sanitizeAgentProviderSettings({
+      opencode: {
+        enabled: true, preset: 'ollama',
+        providerId: 'ollama', model: 'ollama/llama2',
+        baseUrl: 'http://localhost:11434/v1', apiKey: '', extraEnvVars: [],
+      },
+    })
+    expect(result.opencode.enabled).toBe(true)
+    expect(result.opencode.preset).toBe('ollama')
+    expect(result.opencode.providerId).toBe('ollama')
+    expect(result.opencode.model).toBe('ollama/llama2')
+  })
+
+  it('rejects an unknown opencode preset and falls back to native', () => {
+    const result = sanitizeAgentProviderSettings({ opencode: { preset: 'zen' } })
+    expect(result.opencode.preset).toBe('native')
+  })
+
+  it('accepts a custom:<id> preset reference', () => {
+    const result = sanitizeAgentProviderSettings({
+      opencode: { enabled: true, preset: 'custom:gw', providerId: 'gw', model: 'gw/m', extraEnvVars: [] },
+      opencodeCustomProviders: [
+        { id: 'custom:gw', name: 'Gateway', config: { preset: 'custom:gw', providerId: 'gw', model: 'gw/m', extraEnvVars: [] } },
+      ],
+    })
+    expect(result.opencode.preset).toBe('custom:gw')
+  })
+
+  it('sanitizes opencodeCustomProviders: drops bad ids, blank names, de-dupes', () => {
+    const result = sanitizeAgentProviderSettings({
+      opencodeCustomProviders: [
+        { id: 'custom:a', name: 'A', config: { preset: 'custom:a', providerId: 'a', extraEnvVars: [] } },
+        { id: 'not-custom', name: 'Bad', config: { preset: 'x' } },
+        { id: 'custom:b', name: ' ', config: { preset: 'custom:b' } },
+        { id: 'custom:a', name: 'A2', config: { enabled: false, preset: 'custom:a', providerId: 'a2', extraEnvVars: [] } },
+      ],
+    })
+    const customs = result.opencodeCustomProviders ?? []
+    expect(customs).toHaveLength(1)
+    expect(customs[0].id).toBe('custom:a')
+    expect(customs[0].name).toBe('A2')
+    expect(customs[0].config.preset).toBe('custom:a')
+  })
+
+  it('resets a dangling active opencode custom:<id> to native', () => {
+    const result = sanitizeAgentProviderSettings({
+      opencode: { enabled: true, preset: 'custom:ghost', providerId: 'g', extraEnvVars: [] },
+    })
+    expect(result.opencode.preset).toBe('native')
+    expect(result.opencode.enabled).toBe(false)
+    expect(result.opencode.providerId).toBe('')
+  })
+
+  it('drops invalid opencode preset-map keys and keeps valid built-ins', () => {
+    const result = sanitizeAgentProviderSettings({
+      opencodePresets: {
+        ollama: { preset: 'ollama', providerId: 'ollama', model: 'ollama/x', extraEnvVars: [] },
+        bogus: { preset: 'bogus' },
+      },
+    })
+    expect(Object.keys(result.opencodePresets ?? {})).toEqual(['ollama'])
+    expect(result.opencodePresets?.ollama?.model).toBe('ollama/x')
+  })
+
+  it('migrates a legacy opencode single-custom slot to custom:legacy and rewires active', () => {
+    const result = sanitizeAgentProviderSettings({
+      opencode: { enabled: true, preset: 'custom', extraEnvVars: [] },
+      opencodePresets: {
+        custom: { preset: 'custom', providerId: 'gw', model: 'm', baseUrl: 'http://gw', apiKey: 'k', extraEnvVars: [] },
+      },
+    })
+    expect(Object.keys(result.opencodePresets ?? {})).toEqual([])
+    expect(result.opencodeCustomProviders).toEqual([
+      { id: 'custom:legacy', name: 'Custom', config: expect.objectContaining({ preset: 'custom:legacy', providerId: 'gw', model: 'm', baseUrl: 'http://gw', apiKey: 'k' }) },
+    ])
+    expect(result.opencode.preset).toBe('custom:legacy')
   })
 })

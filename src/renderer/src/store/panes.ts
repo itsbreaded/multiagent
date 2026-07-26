@@ -239,7 +239,7 @@ export function isSpawnInTabPayload(value: unknown): value is SpawnInTabPayload 
   const payload = value as SpawnInTabPayload
   return (
     (payload.paneType === 'agent' || payload.paneType === 'shell') &&
-    (payload.agentKind === undefined || payload.agentKind === 'claude' || payload.agentKind === 'codex') &&
+    (payload.agentKind === undefined || payload.agentKind === 'claude' || payload.agentKind === 'codex' || payload.agentKind === 'opencode') &&
     typeof payload.cwd === 'string' &&
     (payload.direction === 'vertical' || payload.direction === 'horizontal')
   )

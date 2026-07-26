@@ -10,13 +10,17 @@ import type {
   CodexBuiltinPreset,
   CodexPresetId,
   CodexWireApi,
+  OpencodeProviderConfig,
+  OpencodeBuiltinPreset,
+  OpencodePresetId,
   CustomProviderId,
   EnvVarEntry,
 } from '../../../../shared/types'
 import { isCustomId } from '../../../../shared/types'
 
 // Built-in preset pickers + labels. `custom` is no longer a built-in — non-default
-// providers live as named chips in claudeCustomProviders / codexCustomProviders.
+// providers live as named chips in claudeCustomProviders / codexCustomProviders /
+// opencodeCustomProviders.
 const CLAUDE_BUILTIN_LIST: ClaudeBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
 const CLAUDE_BUILTIN_LABELS: Record<ClaudeBuiltinPreset, string> = {
   native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', ollama: 'Ollama', zai: 'z.ai',
@@ -24,6 +28,13 @@ const CLAUDE_BUILTIN_LABELS: Record<ClaudeBuiltinPreset, string> = {
 const CODEX_BUILTIN_LIST: CodexBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
 const CODEX_BUILTIN_LABELS: Record<CodexBuiltinPreset, string> = {
   native: 'Native', deepseek: 'DeepSeek', alibaba: 'Alibaba', ollama: 'Ollama', zai: 'z.ai',
+}
+// spec 052: OpenCode built-in presets. `native` = user's own opencode.json; `ollama` =
+// local Ollama token-less; `zai` = z.ai OpenAI-compatible endpoint; `chatgpt` = OpenAI
+// API-key path (Plus/Pro OAuth is a Non-Goal — use `native` + `/connect` for that).
+const OPENCODE_BUILTIN_LIST: OpencodeBuiltinPreset[] = ['native', 'ollama', 'zai', 'chatgpt']
+const OPENCODE_BUILTIN_LABELS: Record<OpencodeBuiltinPreset, string> = {
+  native: 'Native', ollama: 'Ollama', zai: 'z.ai', chatgpt: 'ChatGPT',
 }
 
 // Known built-in defaults. Custom providers (custom:<id>) get an empty body and
@@ -94,6 +105,25 @@ export const CODEX_PRESET_DEFAULTS: Record<CodexBuiltinPreset, Partial<CodexProv
   },
 }
 
+// spec 052: OpenCode preset defaults. `providerId` is the OpenCode provider key in the
+// merged config; `model` is the `provider/model` string. apiKey is user-filled and omitted
+// here per the SAFETY INVARIANT above (a reset must not wipe a secret). `npmAdapter` tells
+// OpenCode which SDK adapter package talks to a provider that isn't in its models.dev
+// catalog — required for any generic OpenAI-compatible endpoint (Ollama, z.ai, a custom
+// gateway); omitted for `openai`, which OpenCode already knows natively.
+export const OPENCODE_PRESET_DEFAULTS: Record<OpencodeBuiltinPreset, Partial<OpencodeProviderConfig>> = {
+  native:   { providerId: '', model: '', baseUrl: '', npmAdapter: '' },
+  // Local Ollama OpenAI-compatible endpoint. Token-less — local Ollama is logged in
+  // upstream; apiKey stays empty and is omitted here per the SAFETY INVARIANT.
+  ollama:   { providerId: 'ollama', model: 'ollama/llama2', baseUrl: 'http://localhost:11434/v1', npmAdapter: '@ai-sdk/openai-compatible' },
+  // z.ai OpenAI Chat endpoint (coding plan). apiKey is user-filled and omitted here.
+  zai:      { providerId: 'zai', model: 'zai/glm-5.2', baseUrl: 'https://api.z.ai/api/coding/paas/v4', npmAdapter: '@ai-sdk/openai-compatible' },
+  // OpenAI ChatGPT plan via API key (the manual API-key path only; Plus/Pro OAuth is a
+  // Non-Goal). apiKey is user-filled and omitted here per the SAFETY INVARIANT. `openai` is
+  // in OpenCode's built-in catalog, so no npm adapter override is needed.
+  chatgpt:  { providerId: 'openai', model: 'openai/gpt-4o', baseUrl: '', npmAdapter: '' },
+}
+
 function newClaudeConfig(preset: ClaudePresetId, enabled: boolean): ClaudeProviderConfig {
   const builtinDefaults = isCustomId(preset) ? {} : CLAUDE_PRESET_DEFAULTS[preset]
   return {
@@ -128,6 +158,21 @@ function newCodexConfig(preset: CodexPresetId, enabled: boolean): CodexProviderC
   }
 }
 
+function newOpencodeConfig(preset: OpencodePresetId, enabled: boolean): OpencodeProviderConfig {
+  const builtinDefaults = isCustomId(preset) ? {} : OPENCODE_PRESET_DEFAULTS[preset]
+  return {
+    enabled,
+    preset,
+    providerId: '',
+    model: '',
+    baseUrl: '',
+    apiKey: '',
+    npmAdapter: '',
+    extraEnvVars: [],
+    ...builtinDefaults,
+  }
+}
+
 // True when every field a preset ships a default for already equals that default.
 // Driven by the defaults map keys, so it stays correct as presets add fields.
 // Guards against a missing defaults entry (e.g. a stale legacy preset value that
@@ -146,6 +191,9 @@ function isClaudeBuiltin(preset: ClaudePresetId): preset is ClaudeBuiltinPreset 
 }
 function isCodexBuiltin(preset: CodexPresetId): preset is CodexBuiltinPreset {
   return Object.prototype.hasOwnProperty.call(CODEX_PRESET_DEFAULTS, preset)
+}
+function isOpencodeBuiltin(preset: OpencodePresetId): preset is OpencodeBuiltinPreset {
+  return Object.prototype.hasOwnProperty.call(OPENCODE_PRESET_DEFAULTS, preset)
 }
 
 // Compact key-value editor extracted from the old EnvVarsSection
@@ -590,14 +638,17 @@ export function AgentProvidersSection(): JSX.Element {
   // Local draft state so text fields don't trigger IPC on every keystroke
   const [claudeDraft, setClaudeDraft] = useState<ClaudeProviderConfig>(() => agentProviders.claude)
   const [codexDraft, setCodexDraft] = useState<CodexProviderConfig>(() => agentProviders.codex)
+  const [opencodeDraft, setOpencodeDraft] = useState<OpencodeProviderConfig>(() => agentProviders.opencode)
 
   // Sync draft when store changes (e.g. on hydration)
   useEffect(() => { setClaudeDraft(agentProviders.claude) }, [agentProviders.claude])
   useEffect(() => { setCodexDraft(agentProviders.codex) }, [agentProviders.codex])
+  useEffect(() => { setOpencodeDraft(agentProviders.opencode) }, [agentProviders.opencode])
 
   const [claudeTierExpanded, setClaudeTierExpanded] = useState(false)
   const [claudeEnvExpanded, setClaudeEnvExpanded] = useState(false)
   const [codexEnvExpanded, setCodexEnvExpanded] = useState(false)
+  const [opencodeEnvExpanded, setOpencodeEnvExpanded] = useState(false)
 
   // --- Claude slot routing ---
   // Write the active draft back to whichever slot is active: a built-in preset
@@ -761,19 +812,97 @@ export function AgentProvidersSection(): JSX.Element {
     }
   }
 
+  // --- OpenCode slot routing (mirrors Claude/Codex; spec 052) ---
+  function flushOpencode(draft: OpencodeProviderConfig = opencodeDraft): void {
+    const current = useSettingsStore.getState().agentProviders
+    if (isCustomId(draft.preset)) {
+      const customs = (current.opencodeCustomProviders ?? []).map((c) =>
+        c.id === draft.preset ? { ...c, config: draft } : c
+      )
+      setAgentProviders({ ...current, opencode: draft, opencodeCustomProviders: customs })
+    } else {
+      setAgentProviders({
+        ...current,
+        opencode: draft,
+        opencodePresets: { ...current.opencodePresets, [draft.preset]: draft },
+      })
+    }
+  }
+
+  function resetOpencodeDefaults(): void {
+    if (!isOpencodeBuiltin(opencodeDraft.preset)) return
+    const reset = { ...opencodeDraft, ...OPENCODE_PRESET_DEFAULTS[opencodeDraft.preset] }
+    setOpencodeDraft(reset)
+    flushOpencode(reset)
+  }
+
+  function activateOpencode(incomingId: OpencodePresetId): void {
+    if (opencodeDraft.preset === incomingId) return
+    const current = useSettingsStore.getState().agentProviders
+    const afterSave = saveOpencodeOutgoing(current, opencodeDraft)
+    const incoming = loadOpencodeDraft(afterSave, incomingId, opencodeDraft.enabled)
+    setOpencodeDraft(incoming)
+    commitOpencodeActive(afterSave, incoming)
+  }
+
+  function addOpencodeCustom(name: string): void {
+    const id = `custom:${crypto.randomUUID()}` as CustomProviderId
+    const current = useSettingsStore.getState().agentProviders
+    const afterSave = saveOpencodeOutgoing(current, opencodeDraft)
+    const config = newOpencodeConfig(id, opencodeDraft.enabled)
+    const entry = { id, name, config }
+    const incoming = { ...config, enabled: opencodeDraft.enabled }
+    setOpencodeDraft(incoming)
+    setAgentProviders({
+      ...afterSave,
+      opencode: incoming,
+      opencodeCustomProviders: [...(afterSave.opencodeCustomProviders ?? []), entry],
+    })
+  }
+
+  function renameOpencodeCustom(id: CustomProviderId, name: string): void {
+    const current = useSettingsStore.getState().agentProviders
+    setAgentProviders({
+      ...current,
+      opencodeCustomProviders: (current.opencodeCustomProviders ?? []).map((c) => c.id === id ? { ...c, name } : c),
+    })
+  }
+
+  function deleteOpencodeCustom(view: CustomProviderView): void {
+    const current = useSettingsStore.getState().agentProviders
+    const customs = (current.opencodeCustomProviders ?? []).filter((c) => c.id !== view.id)
+    if (current.opencode.preset === view.id) {
+      const native = newOpencodeConfig('native', false)
+      setOpencodeDraft(native)
+      setAgentProviders({
+        ...current,
+        opencode: native,
+        opencodeCustomProviders: customs,
+        opencodePresets: { ...current.opencodePresets, native },
+      })
+    } else {
+      setAgentProviders({ ...current, opencodeCustomProviders: customs })
+    }
+  }
+
   const claudeDisabled = !claudeDraft.enabled
   const codexDisabled = !codexDraft.enabled
+  const opencodeDisabled = !opencodeDraft.enabled
   // Reset is available only for real built-ins that render routing fields. Native
   // ships no visible fields; custom providers have no shipped defaults; a stale
   // unsanitized preset value is neither and is ignored until hydration fixes it.
   const claudeActiveDefaults = isClaudeBuiltin(claudeDraft.preset) ? CLAUDE_PRESET_DEFAULTS[claudeDraft.preset] : undefined
   const codexActiveDefaults = isCodexBuiltin(codexDraft.preset) ? CODEX_PRESET_DEFAULTS[codexDraft.preset] : undefined
+  const opencodeActiveDefaults = isOpencodeBuiltin(opencodeDraft.preset) ? OPENCODE_PRESET_DEFAULTS[opencodeDraft.preset] : undefined
   const claudeResetVisible = !!claudeActiveDefaults && claudeDraft.preset !== 'native'
   const codexResetVisible = !!codexActiveDefaults && codexDraft.preset !== 'native'
+  const opencodeResetVisible = !!opencodeActiveDefaults && opencodeDraft.preset !== 'native'
   const claudeAtDefaults = claudeResetVisible && draftMatchesDefaults(claudeDraft, claudeActiveDefaults)
   const codexAtDefaults = codexResetVisible && draftMatchesDefaults(codexDraft, codexActiveDefaults)
+  const opencodeAtDefaults = opencodeResetVisible && draftMatchesDefaults(opencodeDraft, opencodeActiveDefaults)
   const claudeCustoms: CustomEntryView[] = (agentProviders.claudeCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
   const codexCustoms: CustomEntryView[] = (agentProviders.codexCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
+  const opencodeCustoms: CustomEntryView[] = (agentProviders.opencodeCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
 
   return (
     <div>
@@ -1020,6 +1149,114 @@ export function AgentProvidersSection(): JSX.Element {
           </CollapsibleSection>
         </ProviderCard>
 
+        {/* OpenCode card (spec 052) */}
+        <ProviderCard title="OpenCode" disabled={opencodeDisabled}>
+          <FieldRow label="">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={opencodeDraft.enabled}
+                onChange={(e) => {
+                  const next = { ...opencodeDraft, enabled: e.target.checked }
+                  setOpencodeDraft(next)
+                  flushOpencode(next)
+                }}
+                style={{ accentColor: '#4ade80' }}
+              />
+              Enabled
+            </label>
+          </FieldRow>
+
+          <FieldRow label="Preset">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <ProviderPicker<OpencodeBuiltinPreset>
+                builtins={OPENCODE_BUILTIN_LIST}
+                builtinLabels={OPENCODE_BUILTIN_LABELS}
+                customs={opencodeCustoms}
+                activeId={opencodeDraft.preset}
+                onSelectBuiltin={(p) => activateOpencode(p)}
+                onSelectCustom={(id) => activateOpencode(id)}
+                onAddCustom={addOpencodeCustom}
+                onRenameCustom={renameOpencodeCustom}
+                onDeleteCustom={deleteOpencodeCustom}
+              />
+              {opencodeResetVisible && (
+                <button
+                  onClick={resetOpencodeDefaults}
+                  disabled={opencodeAtDefaults}
+                  title="Restore this preset's provider id, model, and base URL defaults (keeps API key)"
+                  style={{
+                    ...secondaryBtn,
+                    fontSize: 10,
+                    alignSelf: 'flex-start',
+                    opacity: opencodeAtDefaults ? 0.4 : 1,
+                    cursor: opencodeAtDefaults ? 'default' : 'pointer',
+                  }}
+                >
+                  Reset to defaults
+                </button>
+              )}
+            </div>
+          </FieldRow>
+
+          {opencodeDraft.preset !== 'native' && (
+            <>
+              <FieldRow label="Provider ID">
+                <TextInput
+                  value={opencodeDraft.providerId}
+                  onChange={(v) => setOpencodeDraft((d) => ({ ...d, providerId: v }))}
+                  onBlur={() => flushOpencode()}
+                  placeholder="openai / ollama / zai / custom-id"
+                />
+              </FieldRow>
+              <FieldRow label="Model">
+                <TextInput
+                  value={opencodeDraft.model}
+                  onChange={(v) => setOpencodeDraft((d) => ({ ...d, model: v }))}
+                  onBlur={() => flushOpencode()}
+                  placeholder="provider/model (e.g. openai/gpt-4o)"
+                />
+              </FieldRow>
+              <FieldRow label="Base URL">
+                <TextInput
+                  value={opencodeDraft.baseUrl}
+                  onChange={(v) => setOpencodeDraft((d) => ({ ...d, baseUrl: v }))}
+                  onBlur={() => flushOpencode()}
+                  placeholder="https://api.example.com/v1"
+                />
+              </FieldRow>
+              <FieldRow label="API key">
+                <TextInput
+                  value={opencodeDraft.apiKey}
+                  onChange={(v) => setOpencodeDraft((d) => ({ ...d, apiKey: v }))}
+                  onBlur={() => flushOpencode()}
+                  placeholder="sk-... (leave blank for token-less presets like Ollama)"
+                  masked
+                />
+              </FieldRow>
+              <FieldRow label="NPM adapter">
+                <TextInput
+                  value={opencodeDraft.npmAdapter}
+                  onChange={(v) => setOpencodeDraft((d) => ({ ...d, npmAdapter: v }))}
+                  onBlur={() => flushOpencode()}
+                  placeholder="@ai-sdk/openai-compatible (leave blank for OpenCode's own catalog)"
+                />
+              </FieldRow>
+            </>
+          )}
+
+          <CollapsibleSection label="Extra env vars" expanded={opencodeEnvExpanded} onToggle={() => setOpencodeEnvExpanded((v) => !v)}>
+            <EnvVarEditor
+              entries={opencodeDraft.extraEnvVars}
+              onChange={(extraEnvVars) => {
+                const next = { ...opencodeDraft, extraEnvVars }
+                setOpencodeDraft(next)
+                flushOpencode(next)
+              }}
+            />
+          </CollapsibleSection>
+        </ProviderCard>
+
       </div>
       <div style={{ padding: '0 14px 6px', fontSize: 10, color: '#4a4b4e', lineHeight: 1.4 }}>
         Provider settings take effect in new agent panes. Existing running panes are not affected.
@@ -1111,6 +1348,48 @@ function commitCodexActive(settings: AgentProviderSettings, incoming: CodexProvi
       ...settings,
       codex: incoming,
       codexPresets: { ...settings.codexPresets, [incoming.preset]: incoming },
+    })
+  }
+}
+
+// --- OpenCode slot helpers (mirror Claude/Codex; spec 052) ---
+function saveOpencodeOutgoing(settings: AgentProviderSettings, draft: OpencodeProviderConfig): AgentProviderSettings {
+  if (isCustomId(draft.preset)) {
+    return {
+      ...settings,
+      opencodeCustomProviders: (settings.opencodeCustomProviders ?? []).map((c) =>
+        c.id === draft.preset ? { ...c, config: draft } : c
+      ),
+    }
+  }
+  return { ...settings, opencodePresets: { ...settings.opencodePresets, [draft.preset]: draft } }
+}
+
+function loadOpencodeDraft(settings: AgentProviderSettings, incomingId: OpencodePresetId, enabled: boolean): OpencodeProviderConfig {
+  if (isCustomId(incomingId)) {
+    const entry = (settings.opencodeCustomProviders ?? []).find((c) => c.id === incomingId)
+    if (entry) return { ...entry.config, enabled, preset: incomingId }
+    return newOpencodeConfig(incomingId, enabled)
+  }
+  const saved = settings.opencodePresets?.[incomingId]
+  return saved ? { ...saved, enabled, preset: incomingId } : newOpencodeConfig(incomingId, enabled)
+}
+
+function commitOpencodeActive(settings: AgentProviderSettings, incoming: OpencodeProviderConfig): void {
+  const store = useSettingsStore.getState()
+  if (isCustomId(incoming.preset)) {
+    store.setAgentProviders({
+      ...settings,
+      opencode: incoming,
+      opencodeCustomProviders: (settings.opencodeCustomProviders ?? []).map((c) =>
+        c.id === incoming.preset ? { ...c, config: incoming } : c
+      ),
+    })
+  } else {
+    store.setAgentProviders({
+      ...settings,
+      opencode: incoming,
+      opencodePresets: { ...settings.opencodePresets, [incoming.preset]: incoming },
     })
   }
 }

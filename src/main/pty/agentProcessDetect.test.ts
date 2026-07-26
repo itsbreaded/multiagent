@@ -74,6 +74,29 @@ describe('identifyAgentFromProcess', () => {
   it('classifies npx-wrapped agents', () => {
     expect(identifyAgentFromProcess('npx.exe', ['npx.exe', '@openai/codex'])).toBe('codex')
   })
+
+  // spec 052: OpenCode detection — direct name, suffix-stripped, npm package path, bin shim.
+  it('classifies a direct opencode.exe / opencode.cmd', () => {
+    expect(identifyAgentFromProcess('opencode.exe', ['opencode.exe'])).toBe('opencode')
+    expect(identifyAgentFromProcess('opencode.cmd', ['opencode.cmd'])).toBe('opencode')
+    expect(identifyAgentFromProcess('opencode', ['opencode'])).toBe('opencode')
+  })
+
+  it('classifies node running the opencode-ai package path', () => {
+    const argv = [
+      'node.exe',
+      'C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.js',
+    ]
+    expect(identifyAgentFromProcess('node.exe', argv)).toBe('opencode')
+  })
+
+  it('classifies cmd /c opencode', () => {
+    expect(identifyAgentFromProcess('cmd.exe', ['cmd.exe', '/c', 'opencode'])).toBe('opencode')
+  })
+
+  it('classifies npx opencode-ai', () => {
+    expect(identifyAgentFromProcess('npx.exe', ['npx.exe', 'opencode-ai'])).toBe('opencode')
+  })
 })
 
 describe('selectForegroundAgent', () => {
@@ -107,6 +130,14 @@ describe('selectForegroundAgent', () => {
       { pid: 1002, parentPid: 1001, name: 'node.exe', argv: ['node.exe', 'C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js'] },
     ]
     expect(selectForegroundAgent(shell, entries)).toBe('codex')
+  })
+
+  it('picks a single direct opencode child (spec 052)', () => {
+    const entries: ProcessEntry[] = [
+      { pid: shell, parentPid: 0, name: 'powershell.exe', argv: ['powershell.exe'] },
+      { pid: 1001, parentPid: shell, name: 'opencode.exe', argv: ['opencode.exe'] },
+    ]
+    expect(selectForegroundAgent(shell, entries)).toBe('opencode')
   })
 
   it('returns null for two distinct agents in one pane', () => {

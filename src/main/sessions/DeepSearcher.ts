@@ -5,8 +5,9 @@ import * as readline from 'readline'
 import { readdir, stat } from 'fs/promises'
 import type { AgentKind, Session, SessionSearchRequest, SessionSearchMatch, SessionSearchResult } from '../../shared/types'
 import type { SessionIndex } from './SessionIndex'
-import type { TranscriptScanner } from './TranscriptScanner'
+import type { TranscriptScanner, ScannedSession } from './TranscriptScanner'
 import type { CodexSessionScanner } from './CodexSessionScanner'
+import type { OpencodeSessionScanner } from './OpencodeSessionScanner'
 import {
   buildMatcher,
   snippetAround,
@@ -183,6 +184,7 @@ export class DeepSearcher {
     private codexScanner: CodexSessionScanner,
     private index: SessionIndex,
     private onIndexMutation: () => void = () => {},
+    private opencodeScanner?: OpencodeSessionScanner,
   ) {}
 
   async search(request: SessionSearchRequest, allSessions: Session[]): Promise<SessionSearchResult[]> {
@@ -196,7 +198,8 @@ export class DeepSearcher {
     }
 
     const limit = request.limit ?? DEFAULT_LIMIT
-    const kinds = request.agentKinds ?? (['claude', 'codex'] as AgentKind[])
+    const matchesPerSession = request.matchesPerSession ?? DEFAULT_MATCHES_PER_SESSION
+    const kinds = request.agentKinds ?? (['claude', 'codex', 'opencode'] as AgentKind[])
 
     const sessionMap = new Map<string, Session>(allSessions.map((s) => [`${s.agentKind}:${s.sessionId}`, s]))
 
@@ -247,6 +250,28 @@ export class DeepSearcher {
     }
     await Promise.all(workers)
 
+    // spec 052: OpenCode deep search is SQL-based (no JSONL files to walk). Run the
+    // matcher against the SQLite part table and merge the results into the same
+    // resultsByKey map the file-walk path uses.
+    if (kinds.includes('opencode') && this.opencodeScanner) {
+      const opencodeResults = this.opencodeScanner.searchParts(
+        matcher,
+        request.query,
+        request.caseSensitive ?? false,
+        matchesPerSession,
+        request.cwd,
+      )
+      for (const fr of opencodeResults) {
+        const key = `${fr.agentKind}:${fr.sessionId}`
+        const existing = resultsByKey.get(key)
+        if (existing) {
+          existing.matches.push(...fr.matches)
+        } else {
+          resultsByKey.set(key, fr)
+        }
+      }
+    }
+
     const results: SessionSearchResult[] = []
 
     for (const [key, fileResult] of resultsByKey) {
@@ -255,10 +280,14 @@ export class DeepSearcher {
       if (!session) {
         // Not in the index yet — scan the file and upsert so the result is hydrated
         try {
-          const scanned =
-            fileResult.agentKind === 'claude'
-              ? await this.claudeScanner.scanFile(fileResult.filePath)
-              : await this.codexScanner.scanFile(fileResult.filePath)
+          let scanned: ScannedSession | null = null
+          if (fileResult.agentKind === 'claude') {
+            scanned = await this.claudeScanner.scanFile(fileResult.filePath)
+          } else if (fileResult.agentKind === 'codex') {
+            scanned = await this.codexScanner.scanFile(fileResult.filePath)
+          } else if (fileResult.agentKind === 'opencode' && this.opencodeScanner) {
+            scanned = await this.opencodeScanner.scanFile(fileResult.sessionId)
+          }
           if (scanned) {
             this.index.upsert(scanned)
             this.onIndexMutation()

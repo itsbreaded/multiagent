@@ -17,7 +17,7 @@
 import * as http from 'http'
 import type { AgentKind, AgentLifecycleEvent } from '../../shared/types'
 
-const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex']
+const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex', 'opencode']
 
 // The lifecycle events the hook script may report (spec 032). NO promote/demote (those are
 // synthetic, renderer-only via the sweeper) and NO subagent_* (out of scope for v1).

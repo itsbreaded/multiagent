@@ -24,7 +24,7 @@ type ProbeState =
   | { status: 'probing' }
   | { status: 'done'; tools: string[] }
   | { status: 'error'; message: string }
-type PreviewTab = 'claude' | 'codex'
+type PreviewTab = 'claude' | 'codex' | 'opencode'
 
 export function McpSection(): JSX.Element {
   const mcpSettings = useSettingsStore((s) => s.mcpSettings)
@@ -195,12 +195,13 @@ export function McpSection(): JSX.Element {
 
   const claudeJson = buildClaudePreviewJson(mcpSettings, status?.port ?? null)
   const codexArgs = buildCodexArgsPreview(mcpSettings, status?.port ?? null)
+  const opencodeJson = buildOpencodePreviewJson(mcpSettings, status?.port ?? null)
 
   return (
     <div>
       <SectionLabel>Model Context Protocol (MCP)</SectionLabel>
       <p style={{ color: ui.color.textMuted, fontSize: 11, padding: '0 14px 10px', lineHeight: 1.5, margin: 0 }}>
-        MCP servers are injected into each new Claude and Codex session at launch.
+        MCP servers are injected into each new Claude, Codex, and OpenCode session at launch.
         Changes apply to sessions started after saving — existing sessions are not affected.
       </p>
 
@@ -363,7 +364,7 @@ export function McpSection(): JSX.Element {
         {showJson && (
           <div>
             <div style={{ display: 'flex', borderBottom: border.default, marginBottom: 0 }}>
-              {(['claude', 'codex'] as PreviewTab[]).map((tab) => (
+              {(['claude', 'codex', 'opencode'] as PreviewTab[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setPreviewTab(tab)}
@@ -378,7 +379,7 @@ export function McpSection(): JSX.Element {
                     marginBottom: -1,
                   }}
                 >
-                  {tab === 'claude' ? 'Claude (claude-mcp.json)' : 'Codex (-c args)'}
+                  {tab === 'claude' ? 'Claude (claude-mcp.json)' : tab === 'codex' ? 'Codex (-c args)' : 'OpenCode (config)'}
                 </button>
               ))}
             </div>
@@ -397,7 +398,7 @@ export function McpSection(): JSX.Element {
               lineHeight: 1.5,
               whiteSpace: 'pre',
             }}>
-              {previewTab === 'claude' ? claudeJson : codexArgs}
+              {previewTab === 'claude' ? claudeJson : previewTab === 'codex' ? codexArgs : opencodeJson}
             </pre>
           </div>
         )}
@@ -1049,4 +1050,43 @@ function buildCodexArgsPreview(settings: McpSettings, port: number | null): stri
 
   if (lines.length === 2) lines.push('# (no MCP servers enabled)')
   return lines.join('\n')
+}
+
+// spec 052: OpenCode preview. MCP is injected via OPENCODE_CONFIG_CONTENT inline JSON
+// (merged at high precedence by OpenCode), not a CLI flag or temp file. The preview shows
+// the `mcp` object that would be merged into the inline config.
+function buildOpencodePreviewJson(settings: McpSettings, port: number | null): string {
+  const mcp: Record<string, unknown> = {}
+
+  if (settings.builtinBrowserEnabled) {
+    const url = port !== null ? `http://127.0.0.1:${port}/mcp` : 'http://127.0.0.1:<port>/mcp'
+    mcp['multiagent-browser'] = { type: 'remote', url, enabled: true }
+  }
+
+  for (const server of settings.customServers) {
+    if (!server.enabled || !server.name.trim()) continue
+    const key = server.name.trim()
+    if (server.type === 'stdio') {
+      if (server.command) {
+        mcp[key] = {
+          type: 'local',
+          command: [server.command, ...(server.args ?? [])],
+          ...(server.env && Object.keys(server.env).length ? { environment: server.env } : {}),
+          enabled: true,
+        }
+      }
+    } else {
+      if (server.url) {
+        mcp[key] = { type: 'remote', url: server.url, enabled: true }
+      }
+    }
+  }
+
+  const inline: Record<string, unknown> = { mcp }
+  return [
+    '// Injected via OPENCODE_CONFIG_CONTENT (inline JSON, merged by OpenCode at startup)',
+    '// Provider overrides from the OpenCode provider card merge into this same object.',
+    '',
+    JSON.stringify(inline, null, 2),
+  ].join('\n')
 }

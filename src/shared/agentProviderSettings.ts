@@ -2,8 +2,10 @@ import type {
   AgentProviderSettings,
   ClaudeProviderConfig,
   CodexProviderConfig,
+  OpencodeProviderConfig,
   ClaudeBuiltinPreset,
   CodexBuiltinPreset,
+  OpencodeBuiltinPreset,
   CodexWireApi,
   EnvVarEntry,
 } from './types'
@@ -11,6 +13,7 @@ import { isCustomId } from './types'
 
 const CLAUDE_BUILTINS: readonly ClaudeBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
 const CODEX_BUILTINS: readonly CodexBuiltinPreset[] = ['native', 'deepseek', 'alibaba', 'ollama', 'zai']
+const OPENCODE_BUILTINS: readonly OpencodeBuiltinPreset[] = ['native', 'ollama', 'zai', 'chatgpt']
 const WIRE_APIS: readonly CodexWireApi[] = ['responses', 'chat']
 
 const LEGACY_CUSTOM_ID = 'custom:legacy'
@@ -45,10 +48,24 @@ export function defaultCodexConfig(): CodexProviderConfig {
   }
 }
 
+export function defaultOpencodeConfig(): OpencodeProviderConfig {
+  return {
+    enabled: false,
+    preset: 'native',
+    providerId: '',
+    model: '',
+    baseUrl: '',
+    apiKey: '',
+    npmAdapter: '',
+    extraEnvVars: [],
+  }
+}
+
 export function defaultAgentProviderSettings(): AgentProviderSettings {
   return {
     claude: defaultClaudeConfig(),
     codex: defaultCodexConfig(),
+    opencode: defaultOpencodeConfig(),
   }
 }
 
@@ -131,12 +148,31 @@ function sanitizeCodexConfigWith(raw: unknown, builtins: readonly string[]): Cod
   }
 }
 
+function sanitizeOpencodeConfigWith(raw: unknown, builtins: readonly string[]): OpencodeProviderConfig {
+  const base = defaultOpencodeConfig()
+  if (!isObject(raw)) return base
+  return {
+    enabled: bool(raw['enabled'], base.enabled),
+    preset: sanitizePresetField(raw['preset'], builtins) as OpencodeProviderConfig['preset'],
+    providerId: str(raw['providerId'], base.providerId),
+    model: str(raw['model'], base.model),
+    baseUrl: str(raw['baseUrl'], base.baseUrl),
+    apiKey: str(raw['apiKey'], base.apiKey),
+    npmAdapter: str(raw['npmAdapter'], base.npmAdapter),
+    extraEnvVars: sanitizeExtraEnvVars(raw['extraEnvVars']),
+  }
+}
+
 export function sanitizeClaudeConfig(raw: unknown): ClaudeProviderConfig {
   return sanitizeClaudeConfigWith(raw, CLAUDE_BUILTINS)
 }
 
 export function sanitizeCodexConfig(raw: unknown): CodexProviderConfig {
   return sanitizeCodexConfigWith(raw, CODEX_BUILTINS)
+}
+
+export function sanitizeOpencodeConfig(raw: unknown): OpencodeProviderConfig {
+  return sanitizeOpencodeConfigWith(raw, OPENCODE_BUILTINS)
 }
 
 function sanitizePresetMap<P extends string, V>(
@@ -158,7 +194,7 @@ function sanitizePresetMap<P extends string, V>(
 // dropped; duplicate ids are de-duped (last wins) to survive manual file edits.
 // Each stored config's preset is forced to be self-referential (`=== id`) so it
 // can never be desynced from its entry by a hand edit.
-function sanitizeCustomProviders<C extends ClaudeProviderConfig | CodexProviderConfig>(
+function sanitizeCustomProviders<C extends ClaudeProviderConfig | CodexProviderConfig | OpencodeProviderConfig>(
   raw: unknown,
   sanitizeConfig: (v: unknown) => C,
 ): { id: `custom:${string}`; name: string; config: C }[] | undefined {
@@ -201,6 +237,7 @@ export function sanitizeAgentProviderSettings(parsed: unknown): AgentProviderSet
   const result: AgentProviderSettings = {
     claude: sanitizeClaudeConfig(migrated['claude']),
     codex: sanitizeCodexConfig(migrated['codex']),
+    opencode: sanitizeOpencodeConfig(migrated['opencode']),
   }
 
   const claudePresets = sanitizePresetMap(migrated['claudePresets'], CLAUDE_BUILTINS, sanitizeClaudeConfig)
@@ -208,6 +245,9 @@ export function sanitizeAgentProviderSettings(parsed: unknown): AgentProviderSet
 
   const codexPresets = sanitizePresetMap(migrated['codexPresets'], CODEX_BUILTINS, sanitizeCodexConfig)
   if (codexPresets) result.codexPresets = codexPresets
+
+  const opencodePresets = sanitizePresetMap(migrated['opencodePresets'], OPENCODE_BUILTINS, sanitizeOpencodeConfig)
+  if (opencodePresets) result.opencodePresets = opencodePresets
 
   const claudeCustoms = sanitizeCustomProviders<ClaudeProviderConfig>(
     migrated['claudeCustomProviders'],
@@ -221,6 +261,12 @@ export function sanitizeAgentProviderSettings(parsed: unknown): AgentProviderSet
   )
   if (codexCustoms) result.codexCustomProviders = codexCustoms
 
+  const opencodeCustoms = sanitizeCustomProviders<OpencodeProviderConfig>(
+    migrated['opencodeCustomProviders'],
+    sanitizeOpencodeConfig,
+  )
+  if (opencodeCustoms) result.opencodeCustomProviders = opencodeCustoms
+
   // --- Dangling active custom reference → reset to native ---
   // If the active config points at a `custom:<id>` that no longer exists in the
   // sanitized custom array, it must not reach SessionSpawner (half-empty routing).
@@ -230,6 +276,9 @@ export function sanitizeAgentProviderSettings(parsed: unknown): AgentProviderSet
   }
   if (isCustomId(result.codex.preset) && !result.codexCustomProviders?.some((c) => c.id === result.codex.preset)) {
     result.codex = defaultCodexConfig()
+  }
+  if (isCustomId(result.opencode.preset) && !result.opencodeCustomProviders?.some((c) => c.id === result.opencode.preset)) {
+    result.opencode = defaultOpencodeConfig()
   }
 
   return result
@@ -244,6 +293,7 @@ function migrateLegacyCustom(parsed: Record<string, unknown>): Record<string, un
 
   liftLegacyCustomSlot(out, 'claudePresets', 'claudeCustomProviders', 'claude')
   liftLegacyCustomSlot(out, 'codexPresets', 'codexCustomProviders', 'codex')
+  liftLegacyCustomSlot(out, 'opencodePresets', 'opencodeCustomProviders', 'opencode')
 
   return out
 }
@@ -265,7 +315,9 @@ function liftLegacyCustomSlot(
     str(legacy['baseUrl'], '').trim() !== '' ||
     str(legacy['model'], '').trim() !== '' ||
     str(legacy['providerName'], '').trim() !== '' ||
-    str(legacy['authToken'], '').trim() !== ''
+    str(legacy['providerId'], '').trim() !== '' ||
+    str(legacy['authToken'], '').trim() !== '' ||
+    str(legacy['apiKey'], '').trim() !== ''
 
   // Drop the legacy `custom` key from the preset map regardless (it is no longer
   // a built-in). Build the new preset map without it.

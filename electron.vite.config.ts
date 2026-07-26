@@ -42,6 +42,20 @@ export default defineConfig({
           })
         },
       },
+      {
+        // spec 052: the managed OpenCode plugin, emitted beside out/main/index.js so
+        // installOpencodePlugin finds it at runtime (dev and packaged). Loaded by OpenCode
+        // via OPENCODE_CONFIG_DIR=<userData>/opencode-plugin (process-scoped, no user-config
+        // mutation). Reports session.created + lifecycle events to the existing report server.
+        name: 'copy-opencode-plugin',
+        generateBundle() {
+          this.emitFile({
+            type: 'asset',
+            fileName: 'multiagent-opencode-plugin.js',
+            source: readFileSync(resolve('src/main/integration/assets/multiagent-opencode-plugin.js'), 'utf8'),
+          })
+        },
+      },
     ],
     build: {
       rollupOptions: {
