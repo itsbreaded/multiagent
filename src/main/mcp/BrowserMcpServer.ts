@@ -18,7 +18,6 @@ import {
   requireNumber,
   requireString,
 } from './toolArgs'
-
 export class BrowserMcpServer {
   constructor(private browser: BrowserViewManager) {}
 
@@ -73,7 +72,7 @@ export class BrowserMcpServer {
         {
           name: 'browser_evaluate',
           description:
-            'Execute JavaScript in the browser and return the result. The script is evaluated in an async context, so top-level `await` is allowed. Submit either a single expression (`document.querySelector(\'#x\').value`) or a function body (`async () => { const r = await fetch(...); return r.status }`) — if it evaluates to a function it is called and its return used.',
+            'Execute JavaScript in the browser and return the result. Submit either a single expression (`document.querySelector(\'#x\').value`) or a function (`async () => { const r = await fetch(...); return r.status }`); if it evaluates to a function it is called and its return used. Raw top-level `await` is not supported: use an async function for asynchronous work. Injected-script errors are returned by this tool and can also be visible in a target framework development overlay.',
           inputSchema: {
             type: 'object' as const,
             properties: { js: { type: 'string', description: 'JavaScript to execute (expression, or a function body that returns a value)' } },
@@ -182,9 +181,9 @@ export class BrowserMcpServer {
         {
           name: 'browser_click_text',
           description:
-            'Click the first visible element whose text content matches the given string. Preferred over browser_click when you know the label but not the CSS selector — e.g. clicking a menu item, button, or link by its visible label. ' +
-            'CAVEATS: (1) when the label matches more than one visible element the tool still clicks the first and reports "1 of N visible matches" — use browser_get_elements + browser_click_at to target a specific one. ' +
-            '(2) for a plain http(s) <a href> the tool navigates directly to the href instead of dispatching a click, so SPA client-side routers (onclick/preventDefault), target=_blank, and download attributes are skipped — use browser_evaluate to call .click() on the anchor if you need the page handler.',
+            'Click the first visible element whose text content matches the given string. Preferred over browser_click when you know the label but not the CSS selector â€” e.g. clicking a menu item, button, or link by its visible label. ' +
+            'CAVEATS: (1) when the label matches more than one visible element the tool still clicks the first and reports "1 of N visible matches" â€” use browser_get_elements + browser_click_at to target a specific one. ' +
+            '(2) for a plain http(s) <a href> the tool navigates directly to the href instead of dispatching a click, so SPA client-side routers (onclick/preventDefault), target=_blank, and download attributes are skipped â€” use browser_evaluate to call .click() on the anchor if you need the page handler.',
           inputSchema: {
             type: 'object' as const,
             properties: {
@@ -196,7 +195,7 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_click_at',
-          description: 'Click at specific (x, y) pixel coordinates in the browser viewport. Use when a CSS selector is ambiguous or two elements overlap — check element positions first with browser_get_elements.',
+          description: 'Click at specific (x, y) pixel coordinates in the browser viewport. Use when a CSS selector is ambiguous or two elements overlap â€” check element positions first with browser_get_elements.',
           inputSchema: {
             type: 'object' as const,
             properties: {
@@ -231,7 +230,7 @@ export class BrowserMcpServer {
         },
         {
           name: 'browser_get_links',
-          description: 'Return all visible <a> links on the page with their text and href URL. Use this when you need to navigate to a link — find the href here, then call browser_navigate with it directly. Much more reliable than browser_click_text for complex nested link structures. Optionally filter by text substring.',
+          description: 'Return all visible <a> links on the page with their text and href URL. Use this when you need to navigate to a link â€” find the href here, then call browser_navigate with it directly. Much more reliable than browser_click_text for complex nested link structures. Optionally filter by text substring.',
           inputSchema: {
             type: 'object' as const,
             properties: {
@@ -390,7 +389,7 @@ export class BrowserMcpServer {
             const exact = optionalBoolean(args, 'exact', false)
             const nav = await this.browser.clickText(text, exact)
             const ambiguity = nav.matchCount > 1
-              ? ` 1 of ${nav.matchCount} visible matches — use browser_get_elements + browser_click_at to target a specific one`
+              ? ` 1 of ${nav.matchCount} visible matches â€” use browser_get_elements + browser_click_at to target a specific one`
               : ''
             return { content: [{ type: 'text' as const, text: `Clicked element with text: ${text}${ambiguity}\nURL: ${nav.url}\nTitle: ${nav.title}` }] }
           }

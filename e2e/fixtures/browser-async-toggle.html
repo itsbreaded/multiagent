@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <button id="reveal">Reveal</button>
+    <p id="result" hidden>Reveal complete</p>
+    <script>
+      document.querySelector('#reveal').addEventListener('click', () => {
+        setTimeout(() => {
+          document.querySelector('#result').hidden = false
+        }, 25)
+      })
+    </script>
+  </body>
+</html>

@@ -16,6 +16,21 @@ export interface BrowserContentResult {
   selector?: string
 }
 
+interface BrowserMcpWaitTraceSample {
+  text: string
+  timestamp: number
+  found: boolean
+}
+
+function recordWaitForTextPoll(text: string, found: boolean): void {
+  if (process.env['MULTIAGENT_E2E_BROWSER_MCP_TRACE'] !== '1') return
+  const target = globalThis as typeof globalThis & {
+    __multiagentBrowserMcpWaitTrace?: BrowserMcpWaitTraceSample[]
+  }
+  target.__multiagentBrowserMcpWaitTrace ??= []
+  target.__multiagentBrowserMcpWaitTrace.push({ text, timestamp: Date.now(), found })
+}
+
 export class BrowserViewManager extends EventEmitter {
   private win: BrowserWindow | null = null
   private state: BrowserControlState = 'hidden'
@@ -188,15 +203,9 @@ export class BrowserViewManager extends EventEmitter {
 
   async evaluate(js: string): Promise<unknown> {
     const wc = this._requireWebContents()
-    // Evaluate the submitted string in an async context so top-level `await`
-    // works (spec 051, RF-3: raw executeJavaScript rejects top-level await
-    // under this Electron/Chromium config). The string is eval'd as an
-    // expression; if it resolves to a function we call it (so `async () =>
-    // { ... }` bodies run), otherwise we return its value. This mirrors
-    // Playwright's browser_evaluate and preserves the "any JS string" contract
-    // for bare expressions, `;`-terminated statements, and multi-statement
-    // scripts. executeJavaScript is a privileged injection (like the DevTools
-    // console), so the nested eval is not subject to page CSP unsafe-eval.
+    // A submitted expression is returned directly; a submitted function is
+    // invoked and awaited. Async work must be expressed as `async () => {}`:
+    // Electron does not provide a stable top-level-await contract here.
     return wc.executeJavaScript(
       `(async () => { const v = eval(${JSON.stringify(js)}); return typeof v === 'function' ? await v() : v; })()`,
       true
@@ -476,6 +485,7 @@ export class BrowserViewManager extends EventEmitter {
       const found = await wc.executeJavaScript(
         `document.body.innerText.toLowerCase().includes(${JSON.stringify(text.toLowerCase())})`
       ) as boolean
+      recordWaitForTextPoll(text, found)
       if (found) return
       await new Promise((r) => setTimeout(r, 200))
     }

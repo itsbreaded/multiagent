@@ -28,7 +28,6 @@ function makeManager() {
   let title = ''
   const loadURLCalls: string[] = []
   const reloadCalls: number[] = []
-
   const wc = {
     executeJavaScript: (s: string) => {
       scripts.push(s)
@@ -39,6 +38,7 @@ function makeManager() {
     getTitle: () => title,
     isLoading: () => false,
     reload: () => { reloadCalls.push(1) },
+    capturePage: async () => ({ toDataURL: () => 'data:image/png;base64,' }),
     loadURL: async (u: string) => { loadURLCalls.push(u); url = u },
     once: () => {},
     removeListener: () => {},
@@ -63,10 +63,10 @@ function makeManager() {
 
 describe('BrowserViewManager — spec 051 fixes', () => {
   describe('RF-3 evaluate — async context + function detect', () => {
-    it('wraps the script so top-level await is valid and eval/call works', async () => {
+    it('evaluates async function input through the function-call contract', async () => {
       const { mgr, scripts, returns } = makeManager()
       returns.push(42)
-      const result = await mgr.evaluate('await Promise.resolve(42)')
+      const result = await mgr.evaluate('async () => await Promise.resolve(42)')
       expect(result).toBe(42)
       // detect-then-call shape: eval the submitted string, call if function.
       expect(scripts[0]).toContain('(async () => { const v = eval(')

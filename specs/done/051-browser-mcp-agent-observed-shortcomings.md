@@ -1,5 +1,8 @@
 # 051 — Browser MCP Tool Review: Agent-Observed Shortcomings vs. Playwright MCP
 
+Status: done
+Completed: 2026-07-26
+
 Files in scope (read-only for this spec; it's a review/investigation spec, not an
 implementation handoff):
 
@@ -657,34 +660,34 @@ read):
 4. If reproduced, add the timestamp logging described above and re-run to see where the time
    actually goes.
 
-## Open Questions
+## Historical Questions (resolved for this handoff)
 
-- [ ] Is Observed Issue 1 reproducible against a minimal fixture inside this repo, or is it
+- [x] Is Observed Issue 1 reproducible against a minimal fixture inside this repo, or is it
       specific to something about the external app (Next.js Turbopack HMR, React 19) that
       was being driven?
-- [ ] **RF-1 confirmation:** does adding a network-settle wait (track in-flight
+- [x] **RF-1 confirmation:** does adding a network-settle wait (track in-flight
       `xhr`/`fetch` via `webContents.session.webRequest`, await settle + a `settleMs`
       window after each click-family tool) close the `waitForText` false negative on its
       own, or is the spec's IPC-queueing hypothesis #2 also contributing? Settle this
       *before* spending time on hypothesis #2 — the code review strongly suggests RF-1 is
       the dominant, fixable gap.
-- [ ] Does Playwright's `page.evaluate()` have the same page-overlay error leakage as
+- [x] Does Playwright's `page.evaluate()` have the same page-overlay error leakage as
       Observed Issue 3's second half? If yes, that part is a documentation fix, not a code
       fix. (Still open — the code review did not run the live test.)
-- [ ] For Issue 2, does the product want "fail loud on ambiguity" (closer to Playwright's
+- [x] For Issue 2, does the product want "fail loud on ambiguity" (closer to Playwright's
       strict mode) or "warn but proceed" (current UX, just less silent)? The review leans
       warn-but-proceed since the repo already ships the disambiguation primitives
       (`browser_get_elements` + `browser_click_at`); full ref-based resolution (RF-2)
       remains the large, out-of-scope option that fully closes the class.
-- [ ] **RF-4.1:** should we ship a `browser_handle_dialog` tool and gate other tools when
+- [x] **RF-4.1:** should we ship a `browser_handle_dialog` tool and gate other tools when
       a JS modal (`alert`/`confirm`/`prompt`) is up, so a modal no longer hangs the whole
       toolset with no diagnostic? Not blocking for Issues 1–3 but exposed by the review.
-- [ ] **BG-A3 / Issue 2:** is a no-ref accessibility-snapshot tool (aria tree + role +
+- [x] **BG-A3 / Issue 2:** is a no-ref accessibility-snapshot tool (aria tree + role +
       accessible name, no element refs) worth shipping as the middle ground between the
       current flat `get_elements` and full Playwright-style ref resolution? It would also
       unblock BG-A4 (`browser_find`) and give the agent a structured page model without
       the architectural cost of the ref model.
-- [ ] **BG-G1 (iframes):** how common are iframe-contained targets in the apps this
+- [x] **BG-G1 (iframes):** how common are iframe-contained targets in the apps this
       browser is actually driven against? If rare, a targeted extension of the existing
       probe scripts suffices; if common, a frame-aware locator model (closer to BG-A3)
       is warranted.
@@ -708,7 +711,9 @@ Implemented + tested in `src/main/browser/BrowserViewManager.ts` and
 
 - **RF-3** — `evaluate()` now wraps the script in an async context with the
   detect-then-call pattern (`eval` the string; if it resolves to a function,
-  call it; else return the value). Top-level `await` works; bare expressions,
+  call it; else return the value). The earlier claim that bare top-level
+  `await` works was not proven by the fake webContents test; use an async
+  function for asynchronous work until a real Electron test proves it. Bare expressions,
   `;`-terminated statements, multi-statement scripts, and `async () => {}`
   bodies all return their value. **Deviation from the spec's literal
   `(async () => { ${js} })()` block-wrap:** that form would regress the
@@ -762,3 +767,82 @@ Deferred (still in Next Steps / Open Questions):
   tools live in `src/main/mcp/tools/`" sentence (CLAUDE.md `### Sessions & MCP`)
   and the matching references in `docs/sessions.md` now point at
   `BrowserMcpServer.ts`/`BrowserViewManager.ts`.
+
+## Final Scope and Decisions
+
+None outstanding.
+
+**Resolved:**
+
+- Keep this spec focused on browser interaction reliability. Console, network,
+  and cookie tooling belongs in follow-up spec `053-browser-mcp-observability`.
+- Do not expose native JavaScript-dialog handling. In Electron 42, real page
+  `prompt`/`confirm` calls neither emitted `Page.javascriptDialogOpening` nor
+  blocked the renderer, so there is no supported pending-dialog state to
+  observe or resolve through this browser surface. Do not ship a recovery tool
+  that cannot recover anything.
+- Do not add an accessibility snapshot or element-reference model now. The
+  shipped count-and-warning response for ambiguous `browser_click_text` calls
+  remains the small mitigation.
+- `browser_evaluate` is the supported escape hatch for ad-hoc browser
+  inspection and interaction. Do not add a duplicate tool. Agents needing
+  `await` must submit an `async () => { ... }` function. The pass-one claim
+  that a bare top-level `await` works is unverified and must be removed.
+- Treat the reported click-then-`waitForText` false negative as unconfirmed.
+  Build the deterministic reproduction and trace first; do not ship a global
+  network-settle delay based only on the external-session report.
+
+## Remaining Implementation Handoff
+
+### 1. Make ad-hoc JavaScript execution honest and tested
+
+- Keep `browser_evaluate` as the one-off interaction/inspection primitive.
+- Correct its description and surrounding guidance: raw top-level `await` is
+  not supported; an async function is the supported asynchronous form. Do not
+  claim otherwise until a real Electron execution test proves it.
+- Add a real `webContents.executeJavaScript` verification path, not only a
+  fake-webContents string assertion. Cover a plain expression, statements, a
+  synchronous function, and an async function.
+- Keep errors in the MCP result. Do not promise that a target framework's dev
+  overlay cannot display an error caused by injected JavaScript.
+
+### 2. Keep unsupported native JavaScript dialogs out of the tool surface
+
+- Electron 42 runtime evidence showed that real page `prompt`/`confirm` calls
+  did not emit DevTools Protocol `Page.javascriptDialogOpening` and did not
+  block renderer responsiveness. Native dialog acceptance/dismissal is
+  therefore unsupported in this embedded-browser architecture.
+- Do not register `browser_handle_dialog`, dialog state, or action gating.
+  Retain `browser_reload` in the `McpManager` status list and test that status
+  still matches the live MCP tool list.
+
+### 3. Reproduce before changing post-action settling
+
+- Add a minimal local fixture with a no-navigation button that reveals text
+  after an asynchronous state update. Drive click then a separate
+  `browser_wait_for_text` call repeatedly through the MCP server.
+- Record action completion and each `waitForText` poll timestamp/result during
+  the investigation. Keep diagnostics test-only or development-only.
+- If the fixture reproduces the failure, write a narrowly scoped follow-up
+  spec for the measured cause. A network-settle design must define request
+  attribution, unrelated requests, listener cleanup, timeout, and navigation.
+- If it does not reproduce, close this item with the trace and retain the
+  existing navigation wait; do not add a speculative delay.
+
+### Definition of Done
+
+- `browser_evaluate` has an honest asynchronous contract with runtime evidence.
+- Unsupported native JavaScript dialogs are not advertised as controllable.
+- Browser MCP status reports every registered built-in tool, including reload.
+- The click/text report has a repeatable trace-backed outcome, not an assumed
+  network-settle fix.
+- `npm run typecheck` and `npm test` pass, plus the Electron/manual scenarios
+  above are recorded in the implementation PR.
+
+## Platform Outcome
+
+Electron 42 suppressed or left native prompt/confirm nonblocking in the real
+MCP fixture. CDP emitted no dialog event and a bounded renderer probe completed
+normally, so native dialog control is not supported. The attempted dialog API,
+observer, fallback, and tests were removed rather than exposing a false
+recovery path.

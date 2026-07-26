@@ -12,7 +12,7 @@ const BUILTIN_TOOLS = [
   'browser_navigate', 'browser_click', 'browser_click_text', 'browser_click_at',
   'browser_type', 'browser_screenshot', 'browser_evaluate', 'browser_get_content',
   'browser_scroll', 'browser_wait_for', 'browser_wait_for_text', 'browser_wait_for_load',
-  'browser_go_back', 'browser_go_forward', 'browser_hover', 'browser_hover_at',
+  'browser_go_back', 'browser_go_forward', 'browser_reload', 'browser_hover', 'browser_hover_at',
   'browser_keyboard', 'browser_select', 'browser_get_url', 'browser_get_elements',
   'browser_get_links', 'browser_set_cookies',
 ]
