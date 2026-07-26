@@ -287,3 +287,54 @@ describe('BrowserViewManager — closed-window honesty', () => {
     await expect(mgr.evaluate('1+1')).rejects.toThrow('Browser window not open — call browser_navigate to open it')
   })
 })
+
+describe('BrowserViewManager — observability', () => {
+  it('returns chronological bounded console and network buffers with truncation metadata', async () => {
+    const { mgr } = makeManager()
+    const internals = mgr as unknown as {
+      _appendConsole: (entry: { level: number; message: string; sourceUrl: string; line: number; timestamp: number }) => void
+      _appendNetwork: (entry: { method: string; url: string; resourceType: string; status: number | null; failure: string | null; timestamp: number; durationMs: number }) => void
+      consoleEntries: unknown[]
+      consoleTruncated: boolean
+    }
+    internals._appendConsole({ level: 3, message: 'first', sourceUrl: 'https://app.test/a.js', line: 1, timestamp: 1 })
+    internals._appendConsole({ level: 3, message: 'second', sourceUrl: 'https://app.test/a.js', line: 2, timestamp: 2 })
+    internals._appendNetwork({ method: 'GET', url: 'https://api.test/items', resourceType: 'fetch', status: 200, failure: null, timestamp: 3, durationMs: 12 })
+    internals.consoleEntries = Array.from({ length: 200 }, (_, i) => ({ level: 1, message: String(i), sourceUrl: '', line: 0, timestamp: i }))
+    internals._appendConsole({ level: 3, message: 'latest', sourceUrl: '', line: 0, timestamp: 201 })
+
+    const consoleResult = await mgr.getConsoleMessages()
+    expect(consoleResult.truncated).toBe(true)
+    expect(consoleResult.entries).toHaveLength(200)
+    expect(consoleResult.entries[0]).toMatchObject({ message: '1' })
+    expect(consoleResult.entries.at(-1)).toMatchObject({ message: 'latest' })
+    await expect(mgr.getNetworkRequests()).resolves.toEqual({
+      truncated: false,
+      entries: [{ method: 'GET', url: 'https://api.test/items', resourceType: 'fetch', status: 200, failure: null, timestamp: 3, durationMs: 12 }],
+    })
+  })
+
+  it('clears buffers when destroyed and only reports cookie values from the cookie API', async () => {
+    const { mgr } = makeManager()
+    const internals = mgr as unknown as {
+      _appendConsole: (entry: { level: number; message: string; sourceUrl: string; line: number; timestamp: number }) => void
+      consoleEntries: unknown[]
+      win: { webContents: { session: unknown } }
+    }
+    let cookies = [{ name: 'session', value: 'sensitive-value', domain: 'app.test', path: '/', hostOnly: true, httpOnly: true, secure: true, session: false, sameSite: 'lax' }]
+    const remove = vi.fn(async () => { cookies = [] })
+    internals.win.webContents.session = {
+      cookies: {
+        get: async () => cookies,
+        remove,
+      },
+    }
+    await expect(mgr.getCookies()).resolves.toMatchObject([{ name: 'session', value: 'sensitive-value' }])
+    await expect(mgr.deleteCookie('https://app.test/', 'session')).resolves.toBe(true)
+    expect(remove).toHaveBeenCalledWith('https://app.test/', 'session')
+    await expect(mgr.getCookies()).resolves.toEqual([])
+    internals._appendConsole({ level: 3, message: 'secret must not log', sourceUrl: '', line: 0, timestamp: 1 })
+    mgr.destroy()
+    expect(internals.consoleEntries).toEqual([])
+  })
+})

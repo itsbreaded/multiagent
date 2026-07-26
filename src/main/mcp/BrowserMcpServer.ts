@@ -277,6 +277,33 @@ export class BrowserMcpServer {
             required: ['cookies'],
           },
         },
+        {
+          name: 'browser_get_console',
+          description: 'Return the bounded chronological browser console buffer. Each entry includes level, message, source URL, line, and timestamp. The result reports whether older entries were truncated.',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+        {
+          name: 'browser_get_network',
+          description: 'Return bounded metadata for completed or failed main-frame, fetch, XHR, script, and stylesheet requests. Entries include method, URL, resource type, status or failure, timestamp, and duration; request and response bodies are never returned. The result reports whether older entries were truncated.',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+        {
+          name: 'browser_get_cookies',
+          description: 'Return cookies for the active browser session, including their values. Cookie values are sensitive credential material: they are returned only in this MCP tool result and are never written to application logs, status responses, or the renderer UI.',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+        {
+          name: 'browser_delete_cookie',
+          description: 'Delete the cookie identified explicitly by its URL and name from the active browser session. Returns whether a matching cookie was removed.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              url: { type: 'string', description: 'URL that identifies the cookie scope' },
+              name: { type: 'string', description: 'Cookie name' },
+            },
+            required: ['url', 'name'],
+          },
+        },
       ],
     }))
 
@@ -431,6 +458,28 @@ export class BrowserMcpServer {
             const cookies = requireCookies(args, 'cookies')
             await this.browser.setCookies(cookies)
             return { content: [{ type: 'text' as const, text: `Set ${cookies.length} cookie(s)` }] }
+          }
+
+          case 'browser_get_console': {
+            const result = await this.browser.getConsoleMessages()
+            return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+          }
+
+          case 'browser_get_network': {
+            const result = await this.browser.getNetworkRequests()
+            return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] }
+          }
+
+          case 'browser_get_cookies': {
+            const cookies = await this.browser.getCookies()
+            return { content: [{ type: 'text' as const, text: JSON.stringify(cookies, null, 2) }] }
+          }
+
+          case 'browser_delete_cookie': {
+            const url = requireString(args, 'url')
+            const name = requireString(args, 'name')
+            const removed = await this.browser.deleteCookie(url, name)
+            return { content: [{ type: 'text' as const, text: JSON.stringify({ removed }) }] }
           }
 
           default:

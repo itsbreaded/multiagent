@@ -16,6 +16,46 @@ export interface BrowserContentResult {
   selector?: string
 }
 
+export interface BrowserConsoleEntry {
+  level: number
+  message: string
+  sourceUrl: string
+  line: number
+  timestamp: number
+}
+
+export interface BrowserNetworkEntry {
+  method: string
+  url: string
+  resourceType: string
+  status: number | null
+  failure: string | null
+  timestamp: number
+  durationMs: number
+}
+
+export interface BrowserBufferResult<T> {
+  entries: T[]
+  truncated: boolean
+}
+
+export interface BrowserCookie {
+  name: string
+  value: string
+  domain: string
+  path: string
+  hostOnly: boolean
+  httpOnly: boolean
+  secure: boolean
+  session: boolean
+  expirationDate?: number
+  sameSite: string
+}
+
+const CONSOLE_BUFFER_LIMIT = 200
+const NETWORK_BUFFER_LIMIT = 200
+const OBSERVED_RESOURCE_TYPES = new Set(['mainFrame', 'fetch', 'xhr', 'script', 'stylesheet'])
+
 interface BrowserMcpWaitTraceSample {
   text: string
   timestamp: number
@@ -34,6 +74,12 @@ function recordWaitForTextPoll(text: string, found: boolean): void {
 export class BrowserViewManager extends EventEmitter {
   private win: BrowserWindow | null = null
   private state: BrowserControlState = 'hidden'
+  private consoleEntries: BrowserConsoleEntry[] = []
+  private networkEntries: BrowserNetworkEntry[] = []
+  private consoleTruncated = false
+  private networkTruncated = false
+  private requestStartedAt = new Map<number, number>()
+  private observabilityInstalled = false
 
   // No-op kept for API compatibility — window is created lazily on first use
   initialize(): void {}
@@ -64,13 +110,85 @@ export class BrowserViewManager extends EventEmitter {
           sandbox: true,
         },
       })
+      this._installObservability(this.win)
       this.win.on('closed', () => {
         this.win = null
         this.state = 'hidden'
+        this._clearObservability()
         this.emit('state-changed', this.state)
       })
     }
     return this.win
+  }
+
+  private _installObservability(win: BrowserWindow): void {
+    const wc = win.webContents
+    wc.on('console-message', (_event, level, message, line, sourceUrl) => {
+      if (this.win?.webContents !== wc) return
+      this._appendConsole({ level, message, sourceUrl, line, timestamp: Date.now() })
+    })
+
+    if (this.observabilityInstalled) return
+    this.observabilityInstalled = true
+    const webRequest = wc.session.webRequest
+    webRequest.onBeforeRequest((details, callback) => {
+      if (details.id !== undefined && this._isObservedRequest(details.webContentsId, details.resourceType)) {
+        this.requestStartedAt.set(details.id, Date.now())
+      }
+      callback({})
+    })
+    webRequest.onCompleted((details) => {
+      this._recordNetworkRequest(details, null)
+    })
+    webRequest.onErrorOccurred((details) => {
+      this._recordNetworkRequest(details, details.error)
+    })
+  }
+
+  private _isObservedRequest(webContentsId: number | undefined, resourceType: string): boolean {
+    return this.win?.webContents.id === webContentsId && OBSERVED_RESOURCE_TYPES.has(resourceType)
+  }
+
+  private _recordNetworkRequest(
+    details: Electron.OnCompletedListenerDetails | Electron.OnErrorOccurredListenerDetails,
+    failure: string | null,
+  ): void {
+    if (!this._isObservedRequest(details.webContentsId, details.resourceType)) return
+    const startedAt = details.id === undefined ? Date.now() : (this.requestStartedAt.get(details.id) ?? Date.now())
+    if (details.id !== undefined) this.requestStartedAt.delete(details.id)
+    this._appendNetwork({
+      method: details.method,
+      url: details.url,
+      resourceType: details.resourceType,
+      status: 'statusCode' in details ? details.statusCode : null,
+      failure,
+      timestamp: Date.now(),
+      durationMs: Math.max(0, Date.now() - startedAt),
+    })
+  }
+
+  private _appendConsole(entry: BrowserConsoleEntry): void {
+    if (this.consoleEntries.length === CONSOLE_BUFFER_LIMIT) {
+      this.consoleEntries.shift()
+      this.consoleTruncated = true
+    }
+    this.consoleEntries.push(entry)
+  }
+
+  private _appendNetwork(entry: BrowserNetworkEntry): void {
+    if (this.networkEntries.length === NETWORK_BUFFER_LIMIT) {
+      this.networkEntries.shift()
+      this.networkTruncated = true
+    }
+    this.networkEntries.push(entry)
+  }
+
+  private _clearObservability(): void {
+    this.consoleEntries = []
+    this.networkEntries = []
+    this.requestStartedAt.clear()
+    this.consoleTruncated = false
+    this.networkTruncated = false
   }
 
   show(): void {
@@ -546,9 +664,44 @@ export class BrowserViewManager extends EventEmitter {
     }
   }
 
+  async getConsoleMessages(): Promise<BrowserBufferResult<BrowserConsoleEntry>> {
+    this._requireWebContents()
+    return { entries: [...this.consoleEntries], truncated: this.consoleTruncated }
+  }
+
+  async getNetworkRequests(): Promise<BrowserBufferResult<BrowserNetworkEntry>> {
+    this._requireWebContents()
+    return { entries: [...this.networkEntries], truncated: this.networkTruncated }
+  }
+
+  async getCookies(): Promise<BrowserCookie[]> {
+    const cookies = await this._requireWebContents().session.cookies.get({})
+    return cookies.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain ?? '',
+      path: cookie.path ?? '',
+      hostOnly: cookie.hostOnly ?? false,
+      httpOnly: cookie.httpOnly ?? false,
+      secure: cookie.secure ?? false,
+      session: cookie.session ?? false,
+      ...(cookie.expirationDate !== undefined ? { expirationDate: cookie.expirationDate } : {}),
+      sameSite: cookie.sameSite,
+    }))
+  }
+
+  async deleteCookie(url: string, name: string): Promise<boolean> {
+    const cookies = this._requireWebContents().session.cookies
+    const matches = await cookies.get({ url, name })
+    if (matches.length === 0) return false
+    await cookies.remove(url, name)
+    return true
+  }
+
   destroy(): void {
     this.win?.destroy()
     this.win = null
+    this._clearObservability()
   }
 }
 

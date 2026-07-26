@@ -97,4 +97,33 @@ describe('BrowserMcpServer — argument validation + closed-window guard', () =>
       expect(result.text).toBe('https://example.com/page')
     })
   })
+
+  it('returns observability buffers and sensitive cookie values only through their tool results', async () => {
+    let cookies = [{ name: 'session', value: 'sensitive-value', domain: 'app.test', path: '/', hostOnly: true, httpOnly: true, secure: true, session: false, sameSite: 'lax' }]
+    const browser: Partial<BrowserViewManager> = {
+      getConsoleMessages: async () => ({ entries: [{ level: 3, message: 'boom', sourceUrl: 'https://app.test/a.js', line: 4, timestamp: 1 }], truncated: false }),
+      getNetworkRequests: async () => ({ entries: [{ method: 'GET', url: 'https://api.test', resourceType: 'fetch', status: 500, failure: null, timestamp: 2, durationMs: 9 }], truncated: true }),
+      getCookies: async () => cookies,
+      deleteCookie: async (url, name) => {
+        const removed = url === 'https://app.test/' && name === 'session' && cookies.length > 0
+        if (removed) cookies = []
+        return removed
+      },
+    }
+    await withServer(browser, async (client) => {
+      await expect(callTool(client, 'browser_get_console', undefined)).resolves.toMatchObject({ isError: false, text: expect.stringContaining('boom') })
+      await expect(callTool(client, 'browser_get_network', undefined)).resolves.toMatchObject({ isError: false, text: expect.stringContaining('"truncated": true') })
+      await expect(callTool(client, 'browser_get_cookies', undefined)).resolves.toMatchObject({ isError: false, text: expect.stringContaining('sensitive-value') })
+      await expect(callTool(client, 'browser_delete_cookie', { url: 'https://app.test/', name: 'session' })).resolves.toEqual({ isError: false, text: '{"removed":true}' })
+      await expect(callTool(client, 'browser_get_cookies', undefined)).resolves.toEqual({ isError: false, text: '[]' })
+    })
+  })
+
+  it('validates the explicit cookie identity for deletion', async () => {
+    await withServer({}, async (client) => {
+      const result = await callTool(client, 'browser_delete_cookie', { name: 'session' })
+      expect(result.isError).toBe(true)
+      expect(result.text).toContain('"url" is required')
+    })
+  })
 })

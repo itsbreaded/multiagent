@@ -73,6 +73,34 @@ async function startFixtureServer(): Promise<{ url: string; close: () => Promise
   }
 }
 
+async function startObservabilityFixtureServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    if (request.url === '/ok') {
+      response.writeHead(204).end()
+      return
+    }
+    if (request.url === '/failed') {
+      response.destroy()
+      return
+    }
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    response.end(`<!doctype html><script>
+      console.error('observability console error');
+      Promise.allSettled([fetch('/ok'), fetch('/failed')]).then(() => { window.observabilityDone = true });
+    </script>`)
+  })
+  await new Promise<void>((resolveServer, reject) => {
+    server.listen(0, '127.0.0.1', resolveServer)
+    server.once('error', reject)
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Observability fixture server did not bind a TCP port')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise((resolveServer) => server.close(() => resolveServer())),
+  }
+}
+
 test.describe('browser MCP Electron runtime', () => {
   let app: ElectronApplication
 
@@ -164,6 +192,47 @@ test.describe('browser MCP Electron runtime', () => {
     expect(polls.length).toBeGreaterThanOrEqual(10)
     expect(polls.every((poll) => poll.text === 'Reveal complete' && Number.isFinite(poll.timestamp))).toBe(true)
     expect(polls.filter((poll) => poll.found)).toHaveLength(10)
+  })
+
+  test('returns console and completed/failed network metadata through MCP', async () => {
+    const page = await app.firstWindow()
+    await expect.poll(
+      () => page.evaluate(() => window.ipc.invoke('mcp:get-status'))
+    ).toMatchObject({ running: true })
+    const { port } = await page.evaluate(() => window.ipc.invoke('mcp:get-status')) as { port: number | null }
+    expect(port).not.toBeNull()
+    const fixture = await startObservabilityFixtureServer()
+
+    try {
+      await expect(callBrowserTool(port!, 'browser_navigate', { url: fixture.url })).resolves.toMatchObject({ isError: false })
+      await expect(callBrowserTool(port!, 'browser_evaluate', {
+        js: 'async () => { while (!window.observabilityDone) await new Promise(resolve => setTimeout(resolve, 10)); return true }',
+      })).resolves.toEqual({ isError: false, text: 'true' })
+
+      const consoleEntries = JSON.parse((await callBrowserTool(port!, 'browser_get_console')).text) as {
+        entries: Array<{ level: number; message: string; sourceUrl: string; line: number; timestamp: number }>
+        truncated: boolean
+      }
+      expect(consoleEntries.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ message: 'observability console error', sourceUrl: expect.any(String), line: expect.any(Number), timestamp: expect.any(Number) }),
+      ]))
+      expect(consoleEntries.entries.map((entry) => entry.timestamp)).toEqual([...consoleEntries.entries.map((entry) => entry.timestamp)].sort((a, b) => a - b))
+
+      const networkEntries = JSON.parse((await callBrowserTool(port!, 'browser_get_network')).text) as {
+        entries: Array<{ method: string; url: string; resourceType: string; status: number | null; failure: string | null; timestamp: number; durationMs: number }>
+      }
+      const completed = networkEntries.entries.find((entry) => entry.url.endsWith('/ok'))
+      const failed = networkEntries.entries.find((entry) => entry.url.endsWith('/failed'))
+      expect(completed).toMatchObject({ method: 'GET', resourceType: expect.stringMatching(/^(fetch|xhr)$/), status: 204, failure: null })
+      expect(failed).toMatchObject({ method: 'GET', resourceType: expect.stringMatching(/^(fetch|xhr)$/), status: null, failure: expect.any(String) })
+      for (const entry of [completed, failed]) {
+        expect(entry).toEqual(expect.objectContaining({ timestamp: expect.any(Number), durationMs: expect.any(Number) }))
+        expect(Object.keys(entry!)).toEqual(['method', 'url', 'resourceType', 'status', 'failure', 'timestamp', 'durationMs'])
+      }
+
+    } finally {
+      await fixture.close()
+    }
   })
 
   test('documents Electron 42 native dialogs as nonblocking and absent from CDP events', async () => {
