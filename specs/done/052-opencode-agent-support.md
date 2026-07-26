@@ -1,6 +1,7 @@
 # 052 — OpenCode Agent Support (Parity with Claude Code & Codex)
 
-> **Status:** in-progress
+> **Status:** done
+> **Completed:** 2026-07-26
 
 ## Problem
 

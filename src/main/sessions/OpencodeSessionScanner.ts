@@ -26,6 +26,7 @@ import type { ScannedSession } from './TranscriptScanner'
 import type { FileResult } from './deepSearch'
 import { deriveProjectName, truncate } from './transcriptParse'
 import { snippetAround, SNIPPET_MAX_LEN } from './deepSearch'
+import { toLikeSubstringPattern } from './ftsQuery'
 
 /** Resolve the OpenCode data dir: honors OPENCODE_CONFIG_DIR is NOT the data dir -- the
  * data dir is ~/.local/share/opencode on all platforms (verified via `opencode db path`).
@@ -161,8 +162,13 @@ export class OpencodeSessionScanner {
     if (!this.open()) return null
     if (!this.db) return null
     try {
+      // Point lookup by id with NO parent_id / time_archived filter. This fetches a
+      // specific session for validate / deep-search hydration, not a browser list, so a
+      // saved pane pointing at a sub-agent child session (parent_id set) or an archived
+      // one still resolves and resumes. scanAll() keeps the top-level / non-archived
+      // filter for the Session Browser list, where that curation belongs.
       const r = this.db.prepare(
-        `SELECT id, directory, title, time_created, time_updated FROM session WHERE id = ? AND parent_id IS NULL AND time_archived IS NULL`
+        `SELECT id, directory, title, time_created, time_updated FROM session WHERE id = ?`
       ).get(sessionId) as Row | undefined
       if (!r) return null
       const detail = this.sessionDetail(r.id)
@@ -277,7 +283,9 @@ export class OpencodeSessionScanner {
       // sizes (hundreds of parts per session) this is fine; a LIKE pre-filter on the raw
       // data column narrows it before the JS matcher runs, so we don't pay for JSON.parse
       // on non-matching rows. The LIKE is case-insensitive by default in SQLite for ASCII.
-      const like = `%${query.replace(/[%_]/g, (c) => '\\' + c)}%`
+      // Escaping (incl. the `\` escape char itself) is shared with the SessionIndex LIKE
+      // fallback via `toLikeSubstringPattern` so the two paths can't drift.
+      const like = toLikeSubstringPattern(query)
       const partRows = this.db.prepare(
         `SELECT p.session_id AS sid, p.time_created AS t, p.data AS data, m.data AS mdata
          FROM part p LEFT JOIN message m ON p.message_id = m.id

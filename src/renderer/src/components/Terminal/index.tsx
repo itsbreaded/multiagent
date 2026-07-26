@@ -243,13 +243,15 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     // Re-attach the key handler on every mount so the closure captures fresh
     // refs. attachCustomKeyEventHandler replaces the previous handler.
     xterm.attachCustomKeyEventHandler((e) => {
-      // Step 1 — Shift+Enter: translate to Alt+Enter for agent CLIs. Both Codex
-      // and Claude Code treat Alt+Enter as insert-newline without submitting.
+      // Step 1 — Shift+Enter: translate to Alt+Enter for agent CLIs. Codex,
+      // Claude Code, and OpenCode all treat Alt+Enter as insert-newline without
+      // submitting. OpenCode's default `input_newline` keybind explicitly lists
+      // `alt+return` (tui.json), so the same \x1b\r sequence works for all three.
       // MUST run before the terminal-binding lookup below: a terminal binding on
       // Shift+Enter is intentionally shadowed here for agent panes (documented
       // limitation, not a bug to fix without re-verifying Codex/Claude behavior).
       if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Enter') {
-        if (pane.agentKind !== 'codex' && pane.agentKind !== 'claude') return true
+        if (pane.agentKind !== 'codex' && pane.agentKind !== 'claude' && pane.agentKind !== 'opencode') return true
         if (e.type === 'keydown') {
           const ptyId = ptyIdRef.current
           if (ptyId) window.ipc.send('pty:write', ptyId, ALT_ENTER_SEQUENCE)

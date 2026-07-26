@@ -70,9 +70,7 @@ export function SpawnChoiceMenu({
           visibility: pos.visible ? 'visible' : 'hidden',
         }}
       >
-        <MenuSection label={currentDirLabel} onSelect={onSpawn} />
-        <div style={menuStyles.separator} />
-        <MenuSection label="Choose directory" onSelect={onBrowse} />
+        <MenuSection label={currentDirLabel} onSelect={onSpawn} onBrowse={onBrowse} />
       </div>
     </>
   )
@@ -81,9 +79,11 @@ export function SpawnChoiceMenu({
 function MenuSection({
   label,
   onSelect,
+  onBrowse,
 }: {
   label: string
   onSelect: (choice: SpawnChoice, direction: SplitDirection) => void
+  onBrowse: (choice: SpawnChoice, direction: SplitDirection) => void
 }): JSX.Element {
   return (
     <>
@@ -93,6 +93,7 @@ function MenuSection({
           key={`${label}:${spawnChoiceKey(choice)}`}
           choice={choice}
           onSelect={onSelect}
+          onBrowse={onBrowse}
         />
       ))}
     </>
@@ -102,9 +103,11 @@ function MenuSection({
 function SpawnChoiceRow({
   choice,
   onSelect,
+  onBrowse,
 }: {
   choice: SpawnChoice
   onSelect: (choice: SpawnChoice, direction: SplitDirection) => void
+  onBrowse: (choice: SpawnChoice, direction: SplitDirection) => void
 }): JSX.Element {
   return (
     <div
@@ -122,16 +125,18 @@ function SpawnChoiceRow({
       </span>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
         <DirectionButton
-          title="Split vertical"
+          title="Split vertical (right-click to choose directory)"
           icon={splitRightIcon}
           alt="Split vertical"
           onClick={() => onSelect(choice, 'vertical')}
+          onContextMenu={() => onBrowse(choice, 'vertical')}
         />
         <DirectionButton
-          title="Split horizontal"
+          title="Split horizontal (right-click to choose directory)"
           icon={splitDownIcon}
           alt="Split horizontal"
           onClick={() => onSelect(choice, 'horizontal')}
+          onContextMenu={() => onBrowse(choice, 'horizontal')}
         />
       </span>
     </div>
@@ -143,11 +148,13 @@ function DirectionButton({
   icon,
   alt,
   onClick,
+  onContextMenu,
 }: {
   title: string
   icon: string
   alt: string
   onClick: () => void
+  onContextMenu: () => void
 }): JSX.Element {
   return (
     <button
@@ -160,6 +167,11 @@ function DirectionButton({
         // the new leaf.
         event.stopPropagation()
         onClick()
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onContextMenu()
       }}
       style={{
         width: 24,

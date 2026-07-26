@@ -57,7 +57,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     removeListener: (channel, listener) => ipcMain.removeListener(channel, listener),
     senderWindowId: (event) => BrowserWindow.fromWebContents((event as Electron.IpcMainEvent).sender)?.id,
   })
-  const index = new SessionIndex()
+  const index = SessionIndex.create()
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
   const opencodeScanner = new OpencodeSessionScanner()
@@ -439,9 +439,18 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     if ((agentKind !== 'claude' && agentKind !== 'codex' && agentKind !== 'opencode') || typeof sessionId !== 'string') {
       return { found: false, cwdMatch: false, transcriptPath: null, transcriptCwd: null }
     }
-    const scanner = agentKind === 'codex' ? codexScanner : agentKind === 'opencode' ? opencodeScanner : claudeScanner
-    const sessions = await scanner.scanAll()
-    const match = sessions.find((s) => s.agentKind === agentKind && s.sessionId === sessionId)
+    // OpenCode sessions live in SQLite addressed by id; look the exact row up via scanFile
+    // so a saved pane pointing at a sub-agent child session (parent_id set) still validates
+    // and resumes. Claude/Codex are file-path-backed (their scanFile takes a path, not an
+    // id), so they scan + match by sessionId as before.
+    let match: ScannedSession | null
+    if (agentKind === 'opencode') {
+      match = await opencodeScanner.scanFile(sessionId)
+    } else {
+      const scanner = agentKind === 'codex' ? codexScanner : claudeScanner
+      const sessions = await scanner.scanAll()
+      match = sessions.find((s) => s.agentKind === agentKind && s.sessionId === sessionId) ?? null
+    }
     if (!match) return { found: false, cwdMatch: false, transcriptPath: null, transcriptCwd: null }
     const normalizedSaved = normalizePath(cwd)
     const normalizedTranscript = normalizePath(match.cwd)
@@ -635,6 +644,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       ptyOutputRouter.dispose()
       statusScraper.dispose()
       index.close()
+      opencodeScanner.dispose()
       spawner.dispose()
       agentSweeper.dispose()
       reportServer.stop()

@@ -101,7 +101,7 @@ describe('PaneHeader - presentation and actions', () => {
     )
 
     await user.click(screen.getByRole('button', { name: 'Split pane' }))
-    await user.click(screen.getAllByTitle('Split horizontal')[0])
+    await user.click(screen.getAllByTitle(/Split horizontal/)[0])
 
     const tab = usePanesStore.getState().tabs[0]
     expect(tab.focusedPaneId).not.toBe(pane.id)

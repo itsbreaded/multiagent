@@ -1,7 +1,8 @@
 # 032 — Agent status badges via managed lifecycle hooks
 
-> **Status:** shipped (code lives in `src/shared/agentStatus.ts`, `src/renderer/src/store/panesIpc.ts`,
-> the managed hooks in `src/main/integration/`, and the `pane:agent-event` channel). Originally
+> **Status:** done. **Completed:** 2026-07-26 (verified and archived via /verify-spec). (Code lives
+> in `src/shared/agentStatus.ts`, `src/renderer/src/store/panesIpc.ts`,
+> the managed hooks in `src/main/integration/`, and the `pane:agent-event` channel.) Originally
 > pending / design; kept here as the design record. **Amended by spec 050** — the "no scraping"
 > hard line in handoff contract #1 below now reads "no scraping except the scoped
 > `agentStatusScraping` complement in spec 050." This spec is a direct extension of the

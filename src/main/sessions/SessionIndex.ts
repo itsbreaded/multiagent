@@ -18,6 +18,24 @@ function defaultDbPath(): string {
   return path.join(app.getPath('userData'), 'session-index.db')
 }
 
+/**
+ * Move a corrupt DB (plus its WAL/SHM sidecars) aside to `<path>.corrupt-<iso>`
+ * so recovery can create a fresh file in its place. Non-destructive: the
+ * original bytes are preserved for inspection. Falls back to delete if the
+ * rename fails (e.g. lingering lock), so the recreate isn't blocked.
+ */
+function backupCorruptDb(dbPath: string): void {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (!fs.existsSync(f)) continue
+    try {
+      fs.renameSync(f, `${f}.corrupt-${stamp}`)
+    } catch {
+      try { fs.unlinkSync(f) } catch { /* give up; recreate may still succeed */ }
+    }
+  }
+}
+
 /** Summary columns searched by the LIKE fallback (must match the FTS5 index). */
 const SUMMARY_LIKE_COLUMNS = ['projectName', 'displayName', 'firstMessage', 'lastMessage'] as const
 
@@ -71,29 +89,60 @@ interface DbRow {
 
 export class SessionIndex {
   private db: Database.Database
+  private closed = false
   private upsertStmt: Database.Statement
   private overrideStmt: Database.Statement
   private mtimesStmt: Database.Statement
 
   constructor(dbPath: string = defaultDbPath()) {
     this.db = new Database(dbPath)
-    this.db.pragma('journal_mode = WAL')
-    this.migrate()
-    this.overrideStmt = this.db.prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
-    this.mtimesStmt = this.db.prepare(`SELECT agentKind, sessionId, mtimeMs FROM sessions`)
-    this.upsertStmt = this.db.prepare(`
-      INSERT INTO sessions (
-        agentKind, sessionId, cwd, projectName, displayName, gitBranch, firstMessage, lastMessage,
-        firstActivity, lastActivity, messageCount, filePath, mtimeMs, status
-      ) VALUES (
-        @agentKind, @sessionId, @cwd, @projectName, @displayName, @gitBranch, @firstMessage, @lastMessage,
-        @firstActivity, @lastActivity, @messageCount, @filePath, @mtimeMs, 'resumable'
-      ) ON CONFLICT(agentKind, sessionId) DO UPDATE SET
-        cwd=excluded.cwd, projectName=excluded.projectName, displayName=excluded.displayName,
-        gitBranch=excluded.gitBranch, firstMessage=excluded.firstMessage, lastMessage=excluded.lastMessage,
-        firstActivity=excluded.firstActivity, lastActivity=excluded.lastActivity, messageCount=excluded.messageCount,
-        filePath=excluded.filePath, mtimeMs=excluded.mtimeMs
-    `)
+    try {
+      this.db.pragma('journal_mode = WAL')
+      this.db.pragma('busy_timeout = 5000')
+      this.migrate()
+      this.overrideStmt = this.db.prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
+      this.mtimesStmt = this.db.prepare(`SELECT agentKind, sessionId, mtimeMs FROM sessions`)
+      this.upsertStmt = this.db.prepare(`
+        INSERT INTO sessions (
+          agentKind, sessionId, cwd, projectName, displayName, gitBranch, firstMessage, lastMessage,
+          firstActivity, lastActivity, messageCount, filePath, mtimeMs, status
+        ) VALUES (
+          @agentKind, @sessionId, @cwd, @projectName, @displayName, @gitBranch, @firstMessage, @lastMessage,
+          @firstActivity, @lastActivity, @messageCount, @filePath, @mtimeMs, 'resumable'
+        ) ON CONFLICT(agentKind, sessionId) DO UPDATE SET
+          cwd=excluded.cwd, projectName=excluded.projectName, displayName=excluded.displayName,
+          gitBranch=excluded.gitBranch, firstMessage=excluded.firstMessage, lastMessage=excluded.lastMessage,
+          firstActivity=excluded.firstActivity, lastActivity=excluded.lastActivity, messageCount=excluded.messageCount,
+          filePath=excluded.filePath, mtimeMs=excluded.mtimeMs
+      `)
+    } catch (err) {
+      // Close the partially-opened handle (Windows locks an open DB file, which
+      // would block recovery's rename) and mark closed so a later close() is a
+      // no-op, then rethrow for create() to back up + retry.
+      try { this.db.close() } catch { /* ignore */ }
+      this.closed = true
+      throw err
+    }
+  }
+
+  /**
+   * Production entry point. Equivalent to `new SessionIndex(dbPath)` for a
+   * healthy/missing DB, but if the file exists yet fails to open or migrate
+   * (corruption), the offending file (+ -wal/-shm) is backed up to
+   * `<file>.corrupt-<iso>` — non-destructive, preserved for inspection — and a
+   * fresh DB is created so a corrupt cache never hard-crashes startup. The
+   * transcripts on disk stay the source of truth; only the cached index (and
+   * session_cwd_overrides, which are minor/reconstructible) is rebuilt. A
+   * second failure rethrows (a genuine environment error, not corruption).
+   */
+  static create(dbPath: string = defaultDbPath()): SessionIndex {
+    try {
+      return new SessionIndex(dbPath)
+    } catch (err) {
+      console.error(`[SessionIndex] Failed to open ${dbPath}; backing up and recreating:`, err)
+      backupCorruptDb(dbPath)
+      return new SessionIndex(dbPath)
+    }
   }
 
   private migrate(): void {
@@ -201,6 +250,9 @@ export class SessionIndex {
         INSERT INTO sessions_fts(rowid, agentKind, sessionId, projectName, displayName, firstMessage, lastMessage)
         VALUES (new.rowid, new.agentKind, new.sessionId, new.projectName, new.displayName, new.firstMessage, new.lastMessage);
       END;
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd);
+      CREATE INDEX IF NOT EXISTS idx_sessions_lastActivity ON sessions(lastActivity);
 
     `)
     if (version < 1) {
@@ -395,7 +447,13 @@ export class SessionIndex {
   }
 
   close(): void {
-    this.db.close()
+    if (this.closed) return
+    this.closed = true
+    try {
+      this.db.close()
+    } catch {
+      // Already closed or close failed — ignore; the handle is effectively gone.
+    }
   }
 }
 
