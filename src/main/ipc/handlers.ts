@@ -19,6 +19,7 @@ import { ManagedHookController } from '../integration/managedHookController'
 import { installOpencodePlugin } from '../integration/opencodePluginInstall'
 import { openExternalUrl } from '../external'
 import { getRecentDirs, addRecentDir } from '../recentDirs'
+import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
@@ -424,6 +425,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   registrar.handle('dirs:recent-get', () => getRecentDirs())
   registrar.handle('dirs:recent-add', (_e, dir: string) => addRecentDir(dir))
+  registrar.handle('dirs:validate', (_e, dir: string) => validateDirectoryInput(dir))
 
   registrar.handle('dialog:pick-directory', async (e, title?: string, defaultPath?: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow

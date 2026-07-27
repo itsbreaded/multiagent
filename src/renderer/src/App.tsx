@@ -296,6 +296,7 @@ export default function App(): JSX.Element {
           initial={tabs.find((t) => t.id === dirPickerTabId)?.defaultCwd ?? ''}
           confirmLabel="Change"
           skipLabel="Cancel"
+          validateDirectory
           onConfirm={(dir) => { setTabDefaultCwd(dirPickerTabId, dir); closeDirPicker() }}
           onSkip={closeDirPicker}
         />

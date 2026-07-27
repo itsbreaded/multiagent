@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeTabsForLayout, rewriteLayoutCwds } from './layoutStore'
+import { normalizeTabsForLayout, rewriteLayoutCwds, sanitizeTabsForLayout } from './layoutStore'
 
 describe('layoutStore pure helpers', () => {
   it('normalizes restored tabs as attached and passes non-arrays through', () => {
@@ -7,6 +7,20 @@ describe('layoutStore pure helpers', () => {
     expect(normalizeTabsForLayout([{ id: 'a', detached: true }, 'invalid'])).toEqual([
       { id: 'a', detached: false },
       'invalid',
+    ])
+  })
+
+  it('does not persist unchecked tab default directories', () => {
+    const out = sanitizeTabsForLayout([
+      { id: 'valid', defaultCwd: 'C:\\valid' },
+      { id: 'invalid', defaultCwd: 'C:\\missing' },
+    ], (input) => input === 'C:\\valid'
+      ? { ok: true, directory: 'C:\\validated' }
+      : { ok: false, error: 'The selected directory does not exist' }) as Array<Record<string, unknown>>
+
+    expect(out).toEqual([
+      { id: 'valid', defaultCwd: 'C:\\validated', detached: false },
+      { id: 'invalid', detached: false },
     ])
   })
 

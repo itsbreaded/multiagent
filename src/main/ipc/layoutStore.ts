@@ -4,6 +4,7 @@ import type { CwdRepairMapping } from '../../shared/types'
 import { replaceCwdPrefix } from '../../shared/cwdRepair'
 import { writeJsonAtomic } from '../atomicJson'
 import type { IpcRegistrar } from './ipcRegistrar'
+import { validateDirectoryInput, type DirectoryValidationResult } from '../directoryValidation'
 
 interface LayoutWindowManager {
   getPrimaryWindow(): BrowserWindow | null
@@ -24,7 +25,7 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
     registrar.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarPanelSizes: unknown) => {
       try {
         writeJsonAtomic(layoutPath, {
-          tabs: normalizeTabsForLayout(tabs), sidebarWidth, sidebarOpen, activeTabId,
+          tabs: sanitizeTabsForLayout(tabs), sidebarWidth, sidebarOpen, activeTabId,
           sidebarSectionOpen, sidebarPanelSizes,
         })
       } catch (err) {
@@ -106,7 +107,7 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
     }
     try {
       writeJsonAtomic(layoutPath, {
-        tabs: normalizeTabsForLayout(mergedTabs),
+        tabs: sanitizeTabsForLayout(mergedTabs),
         sidebarWidth: primaryState.sidebarWidth, sidebarOpen: primaryState.sidebarOpen,
         activeTabId: primaryState.activeTabId, sidebarSectionOpen: primaryState.sidebarSectionOpen,
         sidebarPanelSizes: primaryState.sidebarPanelSizes,
@@ -124,6 +125,27 @@ export function normalizeTabsForLayout(tabs: unknown): unknown {
   return tabs.map((tab) => tab && typeof tab === 'object'
     ? { ...normalizeTabForLayout(tab as Record<string, unknown>), detached: false }
     : tab)
+}
+
+/**
+ * Keep layout persistence authoritative for tab project directories. A renderer
+ * may hold transient state, but it cannot save an unchecked default directory.
+ */
+export function sanitizeTabsForLayout(
+  tabs: unknown,
+  validateDirectory: (input: unknown) => DirectoryValidationResult = validateDirectoryInput,
+): unknown {
+  const normalized = normalizeTabsForLayout(tabs)
+  if (!Array.isArray(normalized)) return normalized
+  return normalized.map((tab) => {
+    if (!tab || typeof tab !== 'object') return tab
+    const record = tab as Record<string, unknown>
+    if (typeof record.defaultCwd !== 'string') return record
+    const result = validateDirectory(record.defaultCwd)
+    if (result.ok) return { ...record, defaultCwd: result.directory }
+    const { defaultCwd: _uncheckedDefaultCwd, ...withoutUncheckedDefaultCwd } = record
+    return withoutUncheckedDefaultCwd
+  })
 }
 
 /** Per-tab normalization: strip transient pane state before writing layout.json. */

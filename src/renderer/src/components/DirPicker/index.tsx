@@ -8,6 +8,7 @@ interface DirPickerProps {
   skipLabel?: string
   error?: string | null
   nameField?: boolean
+  validateDirectory?: boolean
   onConfirm: (dir: string, name?: string) => void
   onSkip: () => void
 }
@@ -20,6 +21,7 @@ export function DirPicker({
   skipLabel = 'Skip',
   error = null,
   nameField = false,
+  validateDirectory = false,
   onConfirm,
   onSkip,
 }: DirPickerProps): JSX.Element {
@@ -31,6 +33,8 @@ export function DirPicker({
   // null = opened via focus/chevron → show all recents unfiltered
   // string = user typed → filter by this query
   const [filterQuery, setFilterQuery] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [isConfirming, setIsConfirming] = useState(false)
 
   const nameRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -103,6 +107,7 @@ export function DirPicker({
       const picked = await window.ipc.invoke('dialog:pick-directory', title, value || initial)
       if (picked) {
         setValue(picked)
+        setValidationError(null)
         closeDropdown()
       }
     } catch {
@@ -110,9 +115,37 @@ export function DirPicker({
     }
   }
 
-  function handleConfirm(): void {
+  async function handleConfirm(): Promise<void> {
+    if (isConfirming) return
     const trimmedDir = value.trim()
     const trimmedName = name.trim() || undefined
+    if (validateDirectory) {
+      if (!window.ipc) {
+        setValidationError('Unable to validate the selected directory')
+        return
+      }
+      setIsConfirming(true)
+      setValidationError(null)
+      try {
+        const result = await window.ipc.invoke('dirs:validate', value)
+        if (!result.ok) {
+          setValidationError(result.error)
+          return
+        }
+        setValue(result.directory)
+        try {
+          await window.ipc.invoke('dirs:recent-add', result.directory)
+        } catch {
+          // A recents failure must not block a valid directory change.
+        }
+        onConfirm(result.directory, trimmedName)
+      } catch {
+        setValidationError('Unable to validate the selected directory')
+      } finally {
+        setIsConfirming(false)
+      }
+      return
+    }
     if (trimmedDir && window.ipc) {
       void window.ipc.invoke('dirs:recent-add', trimmedDir)
     }
@@ -153,6 +186,7 @@ export function DirPicker({
   }
 
   const showDropdown = dropdownOpen && recentDirs.length > 0
+  const canConfirm = !isConfirming && (validateDirectory || nameField || !!value.trim())
 
   return (
     <div
@@ -237,7 +271,7 @@ export function DirPicker({
               <input
                 ref={inputRef}
                 value={value}
-                onChange={(e) => { setValue(e.target.value); setFilterQuery(e.target.value); if (recentDirs.length > 0) openDropdown() }}
+                onChange={(e) => { setValue(e.target.value); setValidationError(null); setFilterQuery(e.target.value); if (recentDirs.length > 0) openDropdown() }}
                 onFocus={() => {
                   if (borderRef.current) borderRef.current.style.borderColor = '#4ade80'
                   setFilterQuery(null)
@@ -372,9 +406,9 @@ export function DirPicker({
           </button>
         </div>
 
-        {error && (
+        {(validationError ?? error) && (
           <div style={{ padding: '0 18px 12px', color: '#f87171', fontSize: 12 }}>
-            {error}
+            {validationError ?? error}
           </div>
         )}
 
@@ -404,21 +438,21 @@ export function DirPicker({
             {skipLabel}
           </button>
           <button
-            onClick={handleConfirm}
-            disabled={!nameField && !value.trim()}
+            onClick={() => { void handleConfirm() }}
+            disabled={!canConfirm}
             style={{
               padding: '6px 16px',
               background: 'none',
-              border: `1px solid ${nameField || value.trim() ? '#4ade80' : '#2a2b2e'}`,
+              border: `1px solid ${canConfirm ? '#4ade80' : '#2a2b2e'}`,
               borderRadius: 5,
-              color: nameField || value.trim() ? '#4ade80' : '#3a3b3e',
+              color: canConfirm ? '#4ade80' : '#3a3b3e',
               fontSize: 12,
-              cursor: nameField || value.trim() ? 'pointer' : 'default',
+              cursor: canConfirm ? 'pointer' : 'default',
               fontWeight: 600,
               transition: 'border-color 0.1s, color 0.1s',
             }}
           >
-            {confirmLabel}
+            {isConfirming ? `${confirmLabel}...` : confirmLabel}
           </button>
         </div>
       </div>

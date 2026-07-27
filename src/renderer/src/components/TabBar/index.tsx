@@ -1105,6 +1105,7 @@ export function TabBar(): JSX.Element {
             initial={dirPickerTab?.defaultCwd ?? ''}
             confirmLabel="Change"
             skipLabel="Cancel"
+            validateDirectory
             onConfirm={(dir) => { setTabDefaultCwd(dirPickerState, dir); setDirPickerState(null) }}
             onSkip={() => setDirPickerState(null)}
           />

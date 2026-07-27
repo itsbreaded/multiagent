@@ -63,6 +63,13 @@ independent questions in one available question mechanism; if none exists,
 ask concise numbered questions and wait. Do not ask for facts that the repo
 can answer.
 
+The decision to extend a behavior from the workflow named in the request to
+other workflows sharing the same UI, component, or mechanism is a material
+scope and visible-behavior choice. When both the named-only and shared-callers
+scope are plausible, ask the user before marking the spec ready. Do not
+auto-resolve it because the shared implementation is small, reversible, or
+more consistent; explain those tradeoffs in the question instead.
+
 ## Edit and finish
 
 - Make surgical edits; retain the spec's voice and WHAT/WHY altitude.
@@ -80,6 +87,8 @@ can answer.
 ## Guardrails
 
 - One concern per spec. Recommend a split rather than quietly expanding it.
+- Do not silently broaden or narrow a user's named workflow to adjacent shared
+  callers. Obtain explicit scope confirmation when either boundary is plausible.
 - Verify code and dependencies before recording assumptions as facts.
 - Do not introduce files, functions, libraries, or implementation sequencing
   into the spec; that belongs in the plan.

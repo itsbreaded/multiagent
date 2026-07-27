@@ -40,6 +40,14 @@ hard-to-reverse choice. For routine details, use the least-surprising,
 reversible default and record only consequential choices under `Resolved
 Decisions`.
 
+Treat the scope boundary between a named workflow and other workflows that
+share its UI or mechanism as a product decision, not a routine technical
+detail. If the repository reveals nearby callers and it is plausible to apply
+the proposed behavior either only to the named workflow or to all such
+callers, ask the user which scope they intend. Do this even when the broader
+change is small, reversible, or would improve consistency; those facts inform
+the question but do not authorize choosing the scope.
+
 ## Create the draft
 
 After enough context exists to describe the problem and intended outcome:
@@ -88,4 +96,6 @@ and direct the handoff to `/brainstorm-spec @specs/pending/<slug>.md`.
 - Do not invent user needs or claim feasibility without investigation.
 - Do not resolve a true product decision autonomously when alternatives are
   materially different or irreversible.
+- Do not silently broaden or narrow a user's named workflow to adjacent shared
+  callers. Present the scoped and shared alternatives when both are plausible.
 - Do not mark the draft `ready`; `brainstorm-spec` owns that gate.

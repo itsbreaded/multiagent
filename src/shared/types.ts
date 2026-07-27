@@ -458,6 +458,7 @@ export interface IPCChannels {
   // --- Recent directories ---
   'dirs:recent-get': () => string[]
   'dirs:recent-add': (dir: string) => void
+  'dirs:validate': (dir: string) => { ok: true; directory: string } | { ok: false; error: string }
 
   // --- Layout persistence ---
   'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
@@ -632,6 +633,7 @@ export type InvokeChannels = ChannelSubset<
   | 'dialog:pick-directory'
   | 'dirs:recent-get'
   | 'dirs:recent-add'
+  | 'dirs:validate'
   | 'mcp:get-status'
   | 'mcp:get-settings'
   | 'mcp:save-settings'

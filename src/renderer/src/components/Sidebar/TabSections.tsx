@@ -382,6 +382,7 @@ export function TabSections(): JSX.Element {
           initial={dirPickerTab?.defaultCwd ?? ''}
           confirmLabel="Change"
           skipLabel="Cancel"
+          validateDirectory
           onConfirm={(dir) => { setTabDefaultCwd(dirPickerTabId, dir); setDirPickerTabId(null) }}
           onSkip={() => setDirPickerTabId(null)}
         />
