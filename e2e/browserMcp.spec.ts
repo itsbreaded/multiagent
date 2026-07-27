@@ -101,6 +101,31 @@ async function startObservabilityFixtureServer(): Promise<{ url: string; close: 
   }
 }
 
+async function closeApp(target: ElectronApplication): Promise<void> {
+  // A JavaScript prompt/confirm can leave a native macOS sheet alive after its
+  // BrowserWindow is destroyed. On macOS the app also keeps running after the
+  // last window closes, so Playwright's graceful close can then wait forever.
+  // Keep teardown bounded and terminate the launched Electron process if its
+  // own shutdown cleanup does not finish promptly.
+  let proc: ReturnType<ElectronApplication['process']> | undefined
+  try {
+    proc = target.process()
+  } catch {
+    return
+  }
+  const hardKill = new Promise<void>((resolveKill) => {
+    const timer = setTimeout(() => {
+      try { proc!.kill('SIGKILL') } catch { /* application already exited */ }
+      resolveKill()
+    }, 5_000)
+    timer.unref?.()
+  })
+  await Promise.race([
+    target.close().catch(() => {}),
+    hardKill,
+  ])
+}
+
 test.describe('browser MCP Electron runtime', () => {
   let app: ElectronApplication
 
@@ -121,7 +146,7 @@ test.describe('browser MCP Electron runtime', () => {
   })
 
   test.afterEach(async () => {
-    await app.close().catch(() => {})
+    await closeApp(app)
   })
 
   test('executeJavaScript supports expressions, statements, synchronous functions, and async functions', async () => {
