@@ -1,0 +1,4 @@
+interface:
+  display_name: "Brainstorm Spec"
+  short_description: "Prepare a draft spec for implementation"
+  default_prompt: "Use $brainstorm-spec to make this draft spec ready: $ARGUMENTS"

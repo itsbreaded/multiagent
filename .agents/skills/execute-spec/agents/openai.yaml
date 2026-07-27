@@ -1,0 +1,4 @@
+interface:
+  display_name: "Execute Spec"
+  short_description: "Implement a ready spec with a durable plan"
+  default_prompt: "Use $execute-spec to implement this ready spec: $ARGUMENTS"

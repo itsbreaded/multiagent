@@ -1,0 +1,4 @@
+interface:
+  display_name: "Link Claude Skills"
+  short_description: "Share project skills between Codex and Claude"
+  default_prompt: "Use $link-claude-skills to link the project skill directories."
