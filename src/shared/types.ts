@@ -26,6 +26,7 @@ export interface McpServerEntry {
 
 export interface McpSettings {
   builtinBrowserEnabled: boolean
+  builtinUiAutomationEnabled: boolean
   customServers: McpServerEntry[]
 }
 
@@ -140,6 +141,7 @@ export interface McpStatus {
   port: number | null
   running: boolean
   tools: string[]
+  uiAutomation: { enabled: boolean; running: boolean; port: number | null; tools: string[]; error?: string }
 }
 
 export type AgentKind = 'claude' | 'codex' | 'opencode'

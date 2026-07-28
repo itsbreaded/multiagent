@@ -76,7 +76,7 @@ async function startFixtureServer(): Promise<{ url: string; close: () => Promise
 async function startObservabilityFixtureServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer((request, response) => {
     if (request.url === '/ok') {
-      response.writeHead(204).end()
+      response.writeHead(204, { 'access-control-allow-origin': '*' }).end()
       return
     }
     if (request.url === '/failed') {
@@ -138,6 +138,7 @@ test.describe('browser MCP Electron runtime', () => {
         ...process.env,
         MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
         MULTIAGENT_E2E_BROWSER_MCP_TRACE: '1',
+        MULTIAGENT_UI_AUTOMATION_PORT: '48127',
       },
     })
     // Let the main window finish loading before teardown can close the session index.
@@ -257,6 +258,62 @@ test.describe('browser MCP Electron runtime', () => {
 
     } finally {
       await fixture.close()
+    }
+  })
+
+  test('controls the host application and an explicitly attached local instance through multiagent-ui', async () => {
+    const page = await app.firstWindow()
+    const status = await page.evaluate(() => window.ipc.invoke('mcp:get-status')) as { uiAutomation: { running: boolean; port: number | null } }
+    expect(status.uiAutomation).toMatchObject({ running: true, port: 48127 })
+    const hostWindows = await callBrowserTool(48127, 'ui_windows')
+    expect(hostWindows.isError).toBe(false)
+    const host = JSON.parse(hostWindows.text) as Array<{ id: number; title: string }>
+    expect(host.length).toBeGreaterThan(0)
+    await expect(callBrowserTool(48127, 'ui_content', { window_id: host[0].id })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_click', { window_id: host[0].id, selector: 'button[title="New tab (Ctrl+T)"]' })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_type', { window_id: host[0].id, selector: 'input', text: 'Automation test' })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_evaluate', { window_id: host[0].id, js: 'document.querySelector(\'input\')?.value' })).resolves.toEqual({ isError: false, text: '"Automation test"' })
+    await expect(callBrowserTool(48127, 'ui_evaluate', { window_id: host[0].id, js: 'undefined' })).resolves.toEqual({ isError: false, text: 'undefined' })
+    await expect(callBrowserTool(48127, 'ui_evaluate', { window_id: host[0].id, js: `(() => { const source=document.createElement('div'); source.id='ui-drag-source'; source.draggable=true; const target=document.createElement('div'); target.id='ui-drag-target'; target.addEventListener('drop', () => { window.__uiDropped = true }); const waited=document.createElement('div'); waited.id='ui-wait-target'; document.body.append(source, target, waited); console.log('ui automation diagnostic'); return true })()` })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_scroll', { window_id: host[0].id, y: 10 })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_keyboard', { window_id: host[0].id, key: 'Escape' })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_drag', { window_id: host[0].id, source: '#ui-drag-source', target: '#ui-drag-target' })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_wait_for', { window_id: host[0].id, selector: '#ui-wait-target' })).resolves.toMatchObject({ isError: false })
+    const diagnostics = await startObservabilityFixtureServer()
+    try {
+      await expect(callBrowserTool(48127, 'ui_evaluate', {
+        window_id: host[0].id,
+        js: `async () => { console.error('ui automation diagnostic'); await Promise.allSettled([fetch(${JSON.stringify(`${diagnostics.url}/ok`)}), fetch(${JSON.stringify(`${diagnostics.url}/failed`)})]); return true }`,
+      })).resolves.toEqual({ isError: false, text: 'true' })
+      const consoleEntries = JSON.parse((await callBrowserTool(48127, 'ui_console', { window_id: host[0].id })).text) as Array<{ message: string }>
+      expect(consoleEntries).toEqual(expect.arrayContaining([expect.objectContaining({ message: 'ui automation diagnostic' })]))
+      const networkEntries = JSON.parse((await callBrowserTool(48127, 'ui_network', { window_id: host[0].id })).text) as {
+        entries: Array<{ url: string; status: number | null; failure: string | null }>
+      }
+      expect(networkEntries.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ url: `${diagnostics.url}/ok`, status: 204, failure: null }),
+        expect.objectContaining({ url: `${diagnostics.url}/failed`, status: null, failure: expect.any(String) }),
+      ]))
+    } finally {
+      await diagnostics.close()
+    }
+
+    const second = await electron.launch({
+      executablePath: electronPath,
+      args: ['.'],
+      cwd: repoRoot,
+      env: { ...process.env, MULTIAGENT_ALLOW_MULTI_INSTANCE: '1', MULTIAGENT_UI_AUTOMATION_PORT: '48128' },
+    })
+    try {
+      await (await second.firstWindow()).waitForLoadState('load')
+      const attached = await callBrowserTool(48127, 'ui_attach_target', { endpoint: 'http://127.0.0.1:48128/mcp' })
+      expect(attached.isError).toBe(false)
+      const targetId = (JSON.parse(attached.text) as { target_id: string }).target_id
+      const remote = await callBrowserTool(48127, 'ui_windows', { target_id: targetId })
+      expect(remote.isError).toBe(false)
+      expect(JSON.parse(remote.text)).toEqual(expect.arrayContaining([expect.objectContaining({ id: expect.any(Number) })]))
+    } finally {
+      await closeApp(second)
     }
   })
 

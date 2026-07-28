@@ -119,6 +119,31 @@ MultiAgent starts a local MCP server for its embedded browser and injects that c
 
 Injection is scoped to the launched process. MultiAgent does not rewrite your global or project-level Claude/Codex configuration files, and existing MCP servers remain available.
 
+## Live application automation MCP
+
+Settings → MCP can enable `multiagent-ui`, a separate loopback-only MCP server
+that lets an agent inspect and operate visible MultiAgent windows. It can click,
+type, scroll, send keys, drag, wait for UI state, take screenshots, and inspect
+renderer console and network diagnostics. Enable it only when you intend to
+grant that broad control to a local agent.
+
+The server is injected process-scoped into newly launched supported agent
+sessions; it does not modify global or project MCP configuration. A local client
+can connect directly at `http://127.0.0.1:<port>/mcp`, shown in MCP Settings.
+For an explicitly launched development or packaged instance, set
+`MULTIAGENT_UI_AUTOMATION_PORT` to a free port. This temporarily opts in that
+process and makes the endpoint deterministic, for example:
+
+```powershell
+$env:MULTIAGENT_UI_AUTOMATION_PORT='48129'
+npm run dev
+```
+
+The port must be an available integer from 1 to 65535. An invalid or occupied
+requested port leaves automation unavailable and reports the startup error; the
+application never substitutes another port. The service listens only on
+`127.0.0.1` and uses no remote discovery or network exposure.
+
 ## Development
 
 ```powershell

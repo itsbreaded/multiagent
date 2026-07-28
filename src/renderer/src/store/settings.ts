@@ -35,6 +35,7 @@ export const MAX_CONTRAST_RATIO = 21
 
 const DEFAULT_MCP_SETTINGS: McpSettings = {
   builtinBrowserEnabled: true,
+  builtinUiAutomationEnabled: false,
   customServers: [],
 }
 
@@ -216,6 +217,7 @@ function loadSettings(): Persisted {
       terminalKeyBindingsVersion: TERMINAL_KEY_BINDINGS_VERSION,
       mcpSettings: {
         builtinBrowserEnabled: (parsed.mcpSettings as McpSettings | undefined)?.builtinBrowserEnabled !== false,
+        builtinUiAutomationEnabled: (parsed.mcpSettings as McpSettings | undefined)?.builtinUiAutomationEnabled === true,
         customServers: Array.isArray((parsed.mcpSettings as McpSettings | undefined)?.customServers)
           ? (parsed.mcpSettings as McpSettings).customServers
           : [],

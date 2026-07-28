@@ -6,6 +6,7 @@ import type { McpSettings } from '../../shared/types'
 let claudeMcpConfigPath: string | null = null
 let codexMcpUrl: string | null = null
 let opencodeMcpUrl: string | null = null
+let uiMcpUrl: string | null = null
 let activeMcpSettings: McpSettings | undefined = undefined
 
 export function currentClaudeMcpConfigPath(): string | null {
@@ -23,24 +24,30 @@ export function currentOpencodeMcpUrl(): string | null {
 export function currentMcpSettings(): McpSettings | undefined {
   return activeMcpSettings
 }
+export function currentUiMcpUrl(): string | null {
+  if (!activeMcpSettings?.builtinUiAutomationEnabled && process.env['MULTIAGENT_UI_AUTOMATION_PORT'] === undefined) return null
+  return uiMcpUrl
+}
 
 export class McpInjector {
-  inject(sseUrl: string, streamableHttpUrl: string, settings?: McpSettings): void {
+  inject(sseUrl: string, streamableHttpUrl: string, settings?: McpSettings, uiUrl?: string | null): void {
     void sseUrl
     activeMcpSettings = settings
     const port = portFromUrl(streamableHttpUrl)
-    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings)
+    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings, uiUrl)
     codexMcpUrl = buildCodexMcpUrl(port)
     opencodeMcpUrl = buildCodexMcpUrl(port)
+    uiMcpUrl = uiUrl ?? null
   }
 
-  updateSettings(sseUrl: string, streamableHttpUrl: string, settings: McpSettings): void {
+  updateSettings(sseUrl: string, streamableHttpUrl: string, settings: McpSettings, uiUrl?: string | null): void {
     void sseUrl
     activeMcpSettings = settings
     const port = portFromUrl(streamableHttpUrl)
-    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings)
+    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings, uiUrl)
     codexMcpUrl = buildCodexMcpUrl(port)
     opencodeMcpUrl = buildCodexMcpUrl(port)
+    uiMcpUrl = uiUrl ?? null
   }
 
   cleanup(): void {
@@ -48,10 +55,11 @@ export class McpInjector {
     codexMcpUrl = null
     opencodeMcpUrl = null
     activeMcpSettings = undefined
+    uiMcpUrl = null
   }
 }
 
-function buildMcpConfig(port: string, settings?: McpSettings): Record<string, unknown> {
+function buildMcpConfig(port: string, settings?: McpSettings, uiUrl?: string | null): Record<string, unknown> {
   const mcpServers: Record<string, unknown> = {}
 
   if (!settings || settings.builtinBrowserEnabled !== false) {
@@ -59,6 +67,9 @@ function buildMcpConfig(port: string, settings?: McpSettings): Record<string, un
       type: 'http',
       url: `http://127.0.0.1:${port}/mcp`,
     }
+  }
+  if (uiUrl && (settings?.builtinUiAutomationEnabled || process.env['MULTIAGENT_UI_AUTOMATION_PORT'] !== undefined)) {
+    mcpServers['multiagent-ui'] = { type: 'http', url: uiUrl }
   }
 
   if (settings?.customServers) {
@@ -83,10 +94,10 @@ function buildMcpConfig(port: string, settings?: McpSettings): Record<string, un
   return { mcpServers }
 }
 
-function writeClaudeMcpConfig(port: string, settings?: McpSettings): string {
+function writeClaudeMcpConfig(port: string, settings?: McpSettings, uiUrl?: string | null): string {
   cleanupClaudeMcpConfig()
   const configPath = join(tmpdir(), `multiagent-claude-mcp-${process.pid}.json`)
-  const config = buildMcpConfig(port, settings)
+  const config = buildMcpConfig(port, settings, uiUrl)
   writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
   return configPath
 }
