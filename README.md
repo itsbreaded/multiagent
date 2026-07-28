@@ -7,7 +7,7 @@ MultiAgent began as a passion project by a single developer building the ideal a
 > [!WARNING]
 > MultiAgent is alpha software. Expect breaking changes and rough edges. It runs on Windows 10/11, macOS (Apple Silicon), and Linux. macOS builds are **unsigned** for now (see [Installing on macOS](#installing-on-macos)); Linux AppImage/deb are unsigned.
 
-![MultiAgent workspace showing agent and shell panes](docs/screenshots/main-screen.png)
+![MultiAgent workspace showing agent and shell panes](docs/screenshots/main-screen.png?v=09fc213)
 
 ## Why MultiAgent?
 
@@ -32,7 +32,7 @@ Agent CLIs work well independently, but real projects often need several session
 
 | Summary search | Deep transcript search |
 | --- | --- |
-| ![Session Browser summary search](docs/screenshots/session-browser-summary.png) | ![Session Browser deep transcript search](docs/screenshots/session-browser-deep.png) |
+| ![Session Browser summary search](docs/screenshots/session-browser-summary.png?v=09fc213) | ![Session Browser deep transcript search](docs/screenshots/session-browser-deep.png?v=09fc213) |
 
 ## Requirements
 
@@ -47,7 +47,7 @@ Agent CLIs work well independently, but real projects often need several session
 
 You only need the CLI for the agents you intend to use. At startup, unavailable CLIs are disabled and hidden from new-session choices; install the CLI and restart MultiAgent, then enable it in **Settings → Providers**. Shell panes work independently.
 
-![Provider Settings with Claude Code, Codex, and OpenCode presets](docs/screenshots/providers-availability.png)
+![Provider Settings with Claude Code, Codex, and OpenCode presets](docs/screenshots/providers-availability.png?v=09fc213)
 
 ## Getting started
 
@@ -103,7 +103,7 @@ Then open it normally (or right-click → Open the first time). A future release
 
 Use `Ctrl+Shift+P` to start an available agent, manage panes and tabs, open settings, or jump to Session Browser.
 
-![Command Palette showing available Claude Code, Codex, OpenCode, and Session Browser actions](docs/screenshots/command-palette.png)
+![Command Palette showing available Claude Code, Codex, OpenCode, and Session Browser actions](docs/screenshots/command-palette.png?v=09fc213)
 
 ### Default shortcuts
 
@@ -121,7 +121,7 @@ Use `Ctrl+Shift+P` to start an available agent, manage panes and tabs, open sett
 
 App shortcuts can be changed under **Settings → Hotkeys**. Terminal-specific bindings and text macros live under **Settings → Terminal**.
 
-![MCP Settings showing the separate browser and local application-automation servers](docs/screenshots/mcp-automation.png)
+![MCP Settings showing the separate browser and local application-automation servers](docs/screenshots/mcp-automation.png?v=09fc213)
 
 ## Browser MCP: external web content
 
