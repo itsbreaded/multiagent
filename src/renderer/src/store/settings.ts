@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
-import type { AgentProviderSettings, McpSettings } from '../../../shared/types'
+import type { AgentProviderSettings, McpSettings, ProviderAvailability } from '../../../shared/types'
 import { sanitizeAgentProviderSettings } from '../../../shared/agentProviderSettings'
 import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
@@ -38,21 +38,25 @@ const DEFAULT_MCP_SETTINGS: McpSettings = {
   customServers: [],
 }
 
+// spec 055: providers are enabled (offered for new sessions) by default; the user
+// hides one by unchecking its card. Kept as a local seed (parallel to the shared
+// default in shared/agentProviderSettings.ts) so the renderer can construct a
+// fresh AgentProviderSettings without importing the shared module into this hot path.
 function defaultAgentProviderSettings(): AgentProviderSettings {
   return {
     claude: {
-      enabled: false, preset: 'native',
+      enabled: true, preset: 'native',
       baseUrl: '', authToken: '', model: '',
       opusModel: '', sonnetModel: '', haikuModel: '', subagentModel: '', effortLevel: '',
       extraEnvVars: [],
     },
     codex: {
-      enabled: false, preset: 'native',
+      enabled: true, preset: 'native',
       providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '',
       wireApi: 'responses', extraEnvVars: [],
     },
     opencode: {
-      enabled: false, preset: 'native',
+      enabled: true, preset: 'native',
       providerId: '', model: '', baseUrl: '', apiKey: '', npmAdapter: '',
       extraEnvVars: [],
     },
@@ -114,6 +118,12 @@ interface SettingsState {
   agentProviders: AgentProviderSettings
   setAgentProviders: (settings: AgentProviderSettings) => void
   hydrateAgentProviders: (settings: AgentProviderSettings) => void
+  // spec 055: per-kind CLI availability resolved on the app's PATH at startup. Main is the
+  // authority (it force-disables undetected providers). Default all-true so a slow IPC
+  // hydrate never hides every provider on first paint; the real map arrives from main at
+  // startup. NOT persisted — it is runtime-only, re-fetched each launch.
+  providerAvailability: ProviderAvailability
+  hydrateProviderAvailability: (availability: ProviderAvailability) => void
 }
 
 type Persisted = Pick<SettingsState,
@@ -448,5 +458,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hydrateAgentProviders: (agentProviders) => {
     set({ agentProviders })
     saveSettings(get())
+  },
+
+  providerAvailability: { claude: true, codex: true, opencode: true },
+
+  hydrateProviderAvailability: (availability) => {
+    set({ providerAvailability: availability })
   },
 }))

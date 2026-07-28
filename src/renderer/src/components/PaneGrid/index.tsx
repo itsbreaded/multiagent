@@ -1,12 +1,14 @@
 import React, { useState } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
-import type { AgentKind, PaneNode, PaneLeaf, PaneSplit } from '../../../../shared/types'
+import type { AgentKind, PaneNode, PaneLeaf, PaneSplit, SplitDirection, Tab } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
+import { useSettingsStore } from '../../store/settings'
 import { PaneContainer } from './PaneContainer'
 import { PaneSplitDropTarget } from './PaneSplitDropTarget'
 import { DirPicker } from '../DirPicker'
 import { agentLabel } from '../../utils/agents'
+import { offeredAgentKinds } from '../../utils/providerOffering'
 import { ShellIcon } from '../AgentIcon'
 
 function renderNode(node: PaneNode, updateRatio: (splitId: string, ratio: number) => void, layoutPath = 'root'): React.ReactNode {
@@ -57,8 +59,6 @@ export function PaneGrid(): JSX.Element {
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
 
   const [isSashDragging, setIsSashDragging] = useState(false)
-  const [dirPickerFor, setDirPickerFor] = useState<AgentKind | 'shell' | null>(null)
-  const [emptyDropActive, setEmptyDropActive] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const activeTabHydrated = activeTabId ? hydratedTabIds[activeTabId] === true : false
@@ -90,170 +90,14 @@ export function PaneGrid(): JSX.Element {
       )}
 
       {(!activeTab || !activeTab.rootNode) && (
-        <div
-          onDragOver={(e) => {
-            if (!draggedPaneId || !activeTab) return
-            e.preventDefault()
-            e.stopPropagation()
-            setEmptyDropActive(true)
-          }}
-          onDragLeave={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node)) setEmptyDropActive(false)
-          }}
-          onDrop={(e) => {
-            if (!draggedPaneId || !activeTab) return
-            e.preventDefault()
-            e.stopPropagation()
-            movePaneToTab(draggedPaneId, activeTab.id)
-            setEmptyDropActive(false)
-          }}
-          style={{
-            position: 'absolute',
-            inset: 0,
-            backgroundColor: emptyDropActive ? '#111815' : '#0e1011',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            overflow: 'hidden',
-            outline: emptyDropActive ? '2px solid #4ade80' : 'none',
-            outlineOffset: -2,
-          }}
-        >
-          <div style={{ textAlign: 'center', userSelect: 'none' }}>
-            <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.2 }}>[]</div>
-            <div style={{ fontSize: 14, color: '#4a4b4e', marginBottom: 16 }}>No sessions open</div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 8, width: 300 }}>
-              <button
-                onClick={() => newSession(cwdForNew, 'vertical', 'claude')}
-                style={{
-                  flex: 1,
-                  padding: '7px 14px',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #2a2b2e',
-                  borderRadius: 6,
-                  color: '#6b7280',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                Claude Code
-              </button>
-              <button
-                onClick={() => newSession(cwdForNew, 'vertical', 'codex')}
-                style={{
-                  flex: 1,
-                  padding: '7px 14px',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #2a2b2e',
-                  borderRadius: 6,
-                  color: '#6b7280',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                Codex CLI
-              </button>
-              <button
-                onClick={() => setDirPickerFor('claude')}
-                style={{
-                  flex: 1,
-                  padding: '7px 14px',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #2a2b2e',
-                  borderRadius: 6,
-                  color: '#6b7280',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                Claude in...
-              </button>
-              <button
-                onClick={() => setDirPickerFor('codex')}
-                style={{
-                  flex: 1,
-                  padding: '7px 14px',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #2a2b2e',
-                  borderRadius: 6,
-                  color: '#6b7280',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                Codex in...
-              </button>
-            </div>
-
-            {/* Open Shell row */}
-            <div style={{ display: 'flex', gap: 4, width: 300 }}>
-              <button
-                onClick={() => addShellPane(cwdForNew)}
-                style={{
-                  flex: 1,
-                  padding: '8px 20px',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #2a2b2e',
-                  borderRadius: 6,
-                  color: '#6b7280',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  textAlign: 'left',
-                }}
-              >
-                <ShellIcon size={16} />
-                Open Shell
-              </button>
-              <button
-                onClick={() => setDirPickerFor('shell')}
-                title="Start shell in a different directory"
-                style={{
-                  padding: '8px 10px',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #2a2b2e',
-                  borderRadius: 6,
-                  color: '#4a4b4e',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
-              >
-                <ShellIcon size={16} />
-              </button>
-            </div>
-
-            {/* Optional hint when tab has a default dir */}
-            {activeTab?.defaultCwd && (
-              <div style={{ marginTop: 10, fontSize: 11, color: '#3a3b3e' }}>
-                default: {activeTab.defaultCwd}
-              </div>
-            )}
-          </div>
-
-          {dirPickerFor && (
-            <DirPicker
-              title={dirPickerFor === 'shell' ? 'Start shell in...' : `Start ${agentLabel(dirPickerFor)} session in...`}
-              initial={cwdForNew}
-              confirmLabel="Start"
-              skipLabel="Cancel"
-              onConfirm={(dir) => {
-                if (dirPickerFor !== 'shell') newSession(dir, 'vertical', dirPickerFor)
-                else addShellPane(dir)
-                setDirPickerFor(null)
-              }}
-              onSkip={() => setDirPickerFor(null)}
-            />
-          )}
-        </div>
+        <EmptyWorkspaceQuickStart
+          activeTab={activeTab}
+          cwdForNew={cwdForNew}
+          draggedPaneId={draggedPaneId}
+          movePaneToTab={movePaneToTab}
+          newSession={newSession}
+          addShellPane={addShellPane}
+        />
       )}
 
       {/* Zoomed pane — overlays the active tab's normal grid when a pane is zoomed */}
@@ -310,6 +154,175 @@ export function PaneGrid(): JSX.Element {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// spec 055: extracted so its `agentProviders`/`providerAvailability` subscriptions
+// (needed only to compute the offered quick-start buttons) don't force PaneGrid's
+// render — and every mounted Terminal/xterm instance under it — to re-run whenever
+// those settings hydrate at startup. Only mounted while there is no active pane tree.
+function EmptyWorkspaceQuickStart({
+  activeTab,
+  cwdForNew,
+  draggedPaneId,
+  movePaneToTab,
+  newSession,
+  addShellPane,
+}: {
+  activeTab: Tab | undefined
+  cwdForNew: string
+  draggedPaneId: string | null
+  movePaneToTab: (paneId: string, tabId: string) => void
+  newSession: (cwd: string, direction: SplitDirection, kind?: AgentKind) => Promise<void>
+  addShellPane: (cwd: string) => Promise<void>
+}): JSX.Element {
+  // The empty-workspace quick-start offers exactly the providers that are both
+  // enabled and detected (this normalizes the prior Claude+Codex-only list so
+  // OpenCode appears when available, and hides any disabled/unavailable provider).
+  const agentProviders = useSettingsStore((s) => s.agentProviders)
+  const providerAvailability = useSettingsStore((s) => s.providerAvailability)
+  const offeredKinds = offeredAgentKinds(agentProviders, providerAvailability)
+
+  const [dirPickerFor, setDirPickerFor] = useState<AgentKind | 'shell' | null>(null)
+  const [emptyDropActive, setEmptyDropActive] = useState(false)
+
+  return (
+    <div
+      onDragOver={(e) => {
+        if (!draggedPaneId || !activeTab) return
+        e.preventDefault()
+        e.stopPropagation()
+        setEmptyDropActive(true)
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setEmptyDropActive(false)
+      }}
+      onDrop={(e) => {
+        if (!draggedPaneId || !activeTab) return
+        e.preventDefault()
+        e.stopPropagation()
+        movePaneToTab(draggedPaneId, activeTab.id)
+        setEmptyDropActive(false)
+      }}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        backgroundColor: emptyDropActive ? '#111815' : '#0e1011',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        outline: emptyDropActive ? '2px solid #4ade80' : 'none',
+        outlineOffset: -2,
+      }}
+    >
+      <div style={{ textAlign: 'center', userSelect: 'none' }}>
+        <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.2 }}>[]</div>
+        <div style={{ fontSize: 14, color: '#4a4b4e', marginBottom: 16 }}>No sessions open</div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 8, width: 300 }}>
+          {offeredKinds.flatMap((kind) => [
+            <button
+              key={`${kind}:start`}
+              onClick={() => newSession(cwdForNew, 'vertical', kind)}
+              style={{
+                flex: 1,
+                padding: '7px 14px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#6b7280',
+                fontSize: 12,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              {agentLabel(kind)}
+            </button>,
+            <button
+              key={`${kind}:in`}
+              onClick={() => setDirPickerFor(kind)}
+              style={{
+                flex: 1,
+                padding: '7px 14px',
+                backgroundColor: 'transparent',
+                border: '1px solid #2a2b2e',
+                borderRadius: 6,
+                color: '#6b7280',
+                fontSize: 12,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              {agentLabel(kind)} in...
+            </button>,
+          ])}
+        </div>
+
+        {/* Open Shell row */}
+        <div style={{ display: 'flex', gap: 4, width: 300 }}>
+          <button
+            onClick={() => addShellPane(cwdForNew)}
+            style={{
+              flex: 1,
+              padding: '8px 20px',
+              backgroundColor: 'transparent',
+              border: '1px solid #2a2b2e',
+              borderRadius: 6,
+              color: '#6b7280',
+              fontSize: 13,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              textAlign: 'left',
+            }}
+          >
+            <ShellIcon size={16} />
+            Open Shell
+          </button>
+          <button
+            onClick={() => setDirPickerFor('shell')}
+            title="Start shell in a different directory"
+            style={{
+              padding: '8px 10px',
+              backgroundColor: 'transparent',
+              border: '1px solid #2a2b2e',
+              borderRadius: 6,
+              color: '#4a4b4e',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
+          >
+            <ShellIcon size={16} />
+          </button>
+        </div>
+
+        {/* Optional hint when tab has a default dir */}
+        {activeTab?.defaultCwd && (
+          <div style={{ marginTop: 10, fontSize: 11, color: '#3a3b3e' }}>
+            default: {activeTab.defaultCwd}
+          </div>
+        )}
+      </div>
+
+      {dirPickerFor && (
+        <DirPicker
+          title={dirPickerFor === 'shell' ? 'Start shell in...' : `Start ${agentLabel(dirPickerFor)} session in...`}
+          initial={cwdForNew}
+          confirmLabel="Start"
+          skipLabel="Cancel"
+          onConfirm={(dir) => {
+            if (dirPickerFor !== 'shell') newSession(dir, 'vertical', dirPickerFor)
+            else addShellPane(dir)
+            setDirPickerFor(null)
+          }}
+          onSkip={() => setDirPickerFor(null)}
+        />
+      )}
     </div>
   )
 }

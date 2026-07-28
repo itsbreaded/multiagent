@@ -334,10 +334,14 @@ function CollapsibleSection({
 function ProviderCard({
   title,
   disabled,
+  warning,
   children,
 }: {
   title: string
   disabled: boolean
+  // spec 055: inline red availability warning shown beside the card title when the
+  // provider's CLI was not detected on PATH. Not a modal/pop-up (Req 7).
+  warning?: string
   children: React.ReactNode
 }): JSX.Element {
   return (
@@ -349,8 +353,14 @@ function ProviderCard({
         padding: '8px 12px', borderBottom: '1px solid #2a2b2e',
         background: '#1a1b1e',
         color: disabled ? '#4a4b4e' : '#d4d4d4', fontSize: 12, fontWeight: 600,
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
       }}>
-        {title}
+        <span>{title}</span>
+        {warning && (
+          <span style={{ color: '#ef4444', fontWeight: 400, fontSize: 11 }} title={warning}>
+            {warning}
+          </span>
+        )}
       </div>
       <div style={{ padding: '10px 12px', opacity: disabled ? 0.6 : 1 }}>
         {children}
@@ -628,6 +638,10 @@ export function AgentProvidersSection(): JSX.Element {
   const agentProviders = useSettingsStore((s) => s.agentProviders)
   const setAgentProviders = useSettingsStore((s) => s.setAgentProviders)
   const hydrateAgentProviders = useSettingsStore((s) => s.hydrateAgentProviders)
+  // spec 055: per-kind CLI availability resolved on PATH at startup. Drives the inline
+  // red "CLI not found on PATH" warning and blocks the Enabled checkbox when a kind's
+  // CLI is absent, so the user understands the state without attempting a launch.
+  const providerAvailability = useSettingsStore((s) => s.providerAvailability)
 
   useEffect(() => {
     window.ipc.invoke('settings:get-agent-providers').then((settings) => {
@@ -720,8 +734,10 @@ export function AgentProvidersSection(): JSX.Element {
     const current = useSettingsStore.getState().agentProviders
     const customs = (current.claudeCustomProviders ?? []).filter((c) => c.id !== view.id)
     if (current.claude.preset === view.id) {
-      // Deleting the active provider → fall back to native (disabled).
-      const native = newClaudeConfig('native', false)
+      // Deleting the active custom provider → fall back to native, which stays
+      // offered (spec 055: native is enabled by default; deleting a variant should
+      // not hide the provider from new-session choices).
+      const native = newClaudeConfig('native', true)
       setClaudeDraft(native)
       setAgentProviders({
         ...current,
@@ -799,7 +815,8 @@ export function AgentProvidersSection(): JSX.Element {
     const current = useSettingsStore.getState().agentProviders
     const customs = (current.codexCustomProviders ?? []).filter((c) => c.id !== view.id)
     if (current.codex.preset === view.id) {
-      const native = newCodexConfig('native', false)
+      // spec 055: fall back to offered native (see deleteClaudeCustom).
+      const native = newCodexConfig('native', true)
       setCodexDraft(native)
       setAgentProviders({
         ...current,
@@ -872,7 +889,8 @@ export function AgentProvidersSection(): JSX.Element {
     const current = useSettingsStore.getState().agentProviders
     const customs = (current.opencodeCustomProviders ?? []).filter((c) => c.id !== view.id)
     if (current.opencode.preset === view.id) {
-      const native = newOpencodeConfig('native', false)
+      // spec 055: fall back to offered native (see deleteClaudeCustom).
+      const native = newOpencodeConfig('native', true)
       setOpencodeDraft(native)
       setAgentProviders({
         ...current,
@@ -888,6 +906,11 @@ export function AgentProvidersSection(): JSX.Element {
   const claudeDisabled = !claudeDraft.enabled
   const codexDisabled = !codexDraft.enabled
   const opencodeDisabled = !opencodeDraft.enabled
+  // spec 055: CLI availability drives the inline warning + the Enabled-checkbox lock.
+  const claudeAvailable = providerAvailability.claude
+  const codexAvailable = providerAvailability.codex
+  const opencodeAvailable = providerAvailability.opencode
+  const AVAILABILITY_WARNING = 'CLI not found on PATH — install it to enable this provider.'
   // Reset is available only for real built-ins that render routing fields. Native
   // ships no visible fields; custom providers have no shipped defaults; a stale
   // unsanitized preset value is neither and is ignored until hydration fixes it.
@@ -912,13 +935,16 @@ export function AgentProvidersSection(): JSX.Element {
       <div style={{ padding: '0 2px' }}>
 
         {/* Claude Code card */}
-        <ProviderCard title="Claude Code" disabled={claudeDisabled}>
+        <ProviderCard title="Claude Code" disabled={claudeDisabled} warning={claudeAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: claudeAvailable ? 'pointer' : 'not-allowed' }}>
               <input
                 type="checkbox"
                 checked={claudeDraft.enabled}
+                disabled={!claudeAvailable}
                 onChange={(e) => {
+                  // spec 055: never let an undetected provider be enabled from the UI.
+                  if (!claudeAvailable) return
                   const next = { ...claudeDraft, enabled: e.target.checked }
                   setClaudeDraft(next)
                   flushClaude(next)
@@ -1022,13 +1048,15 @@ export function AgentProvidersSection(): JSX.Element {
         </ProviderCard>
 
         {/* Codex card */}
-        <ProviderCard title="Codex" disabled={codexDisabled}>
+        <ProviderCard title="Codex" disabled={codexDisabled} warning={codexAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: codexAvailable ? 'pointer' : 'not-allowed' }}>
               <input
                 type="checkbox"
                 checked={codexDraft.enabled}
+                disabled={!codexAvailable}
                 onChange={(e) => {
+                  if (!codexAvailable) return
                   const next = { ...codexDraft, enabled: e.target.checked }
                   setCodexDraft(next)
                   flushCodex(next)
@@ -1150,13 +1178,15 @@ export function AgentProvidersSection(): JSX.Element {
         </ProviderCard>
 
         {/* OpenCode card (spec 052) */}
-        <ProviderCard title="OpenCode" disabled={opencodeDisabled}>
+        <ProviderCard title="OpenCode" disabled={opencodeDisabled} warning={opencodeAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: opencodeAvailable ? 'pointer' : 'not-allowed' }}>
               <input
                 type="checkbox"
                 checked={opencodeDraft.enabled}
+                disabled={!opencodeAvailable}
                 onChange={(e) => {
+                  if (!opencodeAvailable) return
                   const next = { ...opencodeDraft, enabled: e.target.checked }
                   setOpencodeDraft(next)
                   flushOpencode(next)

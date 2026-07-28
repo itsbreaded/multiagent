@@ -31,6 +31,9 @@ export function CommandPalette(): JSX.Element {
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
   const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
+  // spec 055: gate new-session commands on detected-and-enabled providers.
+  const agentProviders = useSettingsStore((s) => s.agentProviders)
+  const providerAvailability = useSettingsStore((s) => s.providerAvailability)
 
   const [query, setQuery] = useState('')
   const [selectedIdx, setSelectedIdx] = useState(0)
@@ -72,6 +75,7 @@ export function CommandPalette(): JSX.Element {
     setPendingRenameTabId,
     openDirPickerForTab,
     hotkeyOverrides,
+    isProviderOffered: (kind) => agentProviders[kind].enabled && providerAvailability[kind],
   }
 
   const normalizedQuery = query.trim().toLowerCase()

@@ -30,6 +30,10 @@ export interface CommandContext {
   setPendingRenameTabId: (id: string | null) => void
   openDirPickerForTab: (tabId: string) => void
   hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>>
+  // spec 055: true when the given provider kind is both enabled (per the user's
+  // Settings card) AND detected on PATH at startup. New-session commands gate on
+  // this so the palette never offers a provider that cannot launch.
+  isProviderOffered: (kind: AgentKind) => boolean
 }
 
 export interface Command {
@@ -111,6 +115,8 @@ const COMMANDS: Command[] = [
     title: 'New Claude Session',
     category: 'Panes',
     agentKind: 'claude',
+    // spec 055: hide from the palette when Claude is disabled or its CLI is not on PATH.
+    enabled: (ctx) => ctx.isProviderOffered('claude'),
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'claude'); ctx.closeOverlays() },
   },
   {
@@ -118,6 +124,7 @@ const COMMANDS: Command[] = [
     title: 'New Codex Session',
     category: 'Panes',
     agentKind: 'codex',
+    enabled: (ctx) => ctx.isProviderOffered('codex'),
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'codex'); ctx.closeOverlays() },
   },
   {
@@ -125,6 +132,7 @@ const COMMANDS: Command[] = [
     title: 'New OpenCode Session',
     category: 'Panes',
     agentKind: 'opencode',
+    enabled: (ctx) => ctx.isProviderOffered('opencode'),
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'opencode'); ctx.closeOverlays() },
   },
   {

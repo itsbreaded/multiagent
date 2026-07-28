@@ -144,6 +144,10 @@ export interface McpStatus {
 
 export type AgentKind = 'claude' | 'codex' | 'opencode'
 
+// spec 055: per-kind CLI availability resolved on the app's PATH at startup. Main
+// is the authority; the renderer reads it via `settings:provider-availability`.
+export type ProviderAvailability = Record<AgentKind, boolean>
+
 // Agent status badge (spec 032). Honest set -- no "thinking" (collapses into working).
 // `error` is Claude-only for v1 (Claude StopFailure; Codex has no error hook).
 export type AgentStatus = 'idle' | 'working' | 'waiting' | 'error' | 'unknown'
@@ -480,6 +484,12 @@ export interface IPCChannels {
   // --- Agent provider configuration ---
   'settings:get-agent-providers': () => AgentProviderSettings
   'settings:save-agent-providers': (settings: AgentProviderSettings) => void
+  // spec 055: which provider CLIs were detected on the app's PATH at startup. Main is
+  // the authority (it force-disables undetected providers and persists that). The
+  // renderer combines this with each provider's `enabled` flag to decide which
+  // providers new-session entry points may offer, and to show the inline "CLI not
+  // found on PATH" warning in Settings. One-way: detection only ever disables.
+  'settings:provider-availability': () => ProviderAvailability
 
   // --- CLI session linking (spec 047 phase 3) ---
   // Opt-in managed Claude SessionStart hook that reports session ids for CLI-launched
@@ -640,6 +650,7 @@ export type InvokeChannels = ChannelSubset<
   | 'mcp:probe-stdio'
   | 'settings:get-agent-providers'
   | 'settings:save-agent-providers'
+  | 'settings:provider-availability'
   | 'settings:get-cli-session-linking'
   | 'settings:set-cli-session-linking'
   | 'settings:get-terminal-status-scraping'

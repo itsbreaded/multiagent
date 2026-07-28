@@ -20,7 +20,11 @@ const LEGACY_CUSTOM_ID = 'custom:legacy'
 
 export function defaultClaudeConfig(): ClaudeProviderConfig {
   return {
-    enabled: false,
+    // spec 055: providers are enabled (offered for new sessions) by default; the
+    // user hides one by unchecking its card. Native preset injects no routing env,
+    // so enabled+native just means "offer native Claude" — no behavior change vs
+    // the old disabled default for native users, except the provider is now offered.
+    enabled: true,
     preset: 'native',
     baseUrl: '',
     authToken: '',
@@ -36,7 +40,7 @@ export function defaultClaudeConfig(): ClaudeProviderConfig {
 
 export function defaultCodexConfig(): CodexProviderConfig {
   return {
-    enabled: false,
+    enabled: true, // spec 055: offered by default; uncheck to hide.
     preset: 'native',
     providerName: '',
     model: '',
@@ -50,7 +54,7 @@ export function defaultCodexConfig(): CodexProviderConfig {
 
 export function defaultOpencodeConfig(): OpencodeProviderConfig {
   return {
-    enabled: false,
+    enabled: true, // spec 055: offered by default; uncheck to hide.
     preset: 'native',
     providerId: '',
     model: '',

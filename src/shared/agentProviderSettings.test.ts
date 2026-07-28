@@ -47,7 +47,9 @@ describe('sanitizeAgentProviderSettings', () => {
     expect(result.codex.extraEnvVars).toEqual([])
     expect(result.codex.preset).toBe('native')
     expect(result.codex.wireApi).toBe('responses')
-    expect(result.codex.enabled).toBe(false)
+    // spec 055: providers are enabled (offered) by default; a wrong-typed enabled
+    // falls back to that default (true), not false.
+    expect(result.codex.enabled).toBe(true)
   })
 
   it('keeps only valid extraEnvVars entries', () => {
@@ -159,7 +161,8 @@ describe('sanitizeAgentProviderSettings', () => {
       // no matching custom provider in the array
     })
     expect(result.claude.preset).toBe('native')
-    expect(result.claude.enabled).toBe(false)
+    // spec 055: native is offered by default, so a dangling reset lands on enabled native.
+    expect(result.claude.enabled).toBe(true)
     expect(result.claude.baseUrl).toBe('')
   })
 
@@ -271,9 +274,9 @@ describe('sanitizeAgentProviderSettings', () => {
 })
 
 describe('sanitizeAgentProviderSettings — opencode (spec 052)', () => {
-  it('seeds a disabled native opencode config by default', () => {
+  it('seeds an enabled native opencode config by default (spec 055)', () => {
     const result = sanitizeAgentProviderSettings({})
-    expect(result.opencode.enabled).toBe(false)
+    expect(result.opencode.enabled).toBe(true)
     expect(result.opencode.preset).toBe('native')
     expect(result.opencode.providerId).toBe('')
     expect(result.opencode.model).toBe('')
@@ -334,7 +337,8 @@ describe('sanitizeAgentProviderSettings — opencode (spec 052)', () => {
       opencode: { enabled: true, preset: 'custom:ghost', providerId: 'g', extraEnvVars: [] },
     })
     expect(result.opencode.preset).toBe('native')
-    expect(result.opencode.enabled).toBe(false)
+    // spec 055: native is offered by default, so a dangling reset lands on enabled native.
+    expect(result.opencode.enabled).toBe(true)
     expect(result.opencode.providerId).toBe('')
   })
 

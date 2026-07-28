@@ -1,15 +1,21 @@
-import React, { useLayoutEffect, useRef, useState } from 'react'
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentKind, PaneType, SplitDirection } from '../../../shared/types'
 import { menuStyles, ui } from '../styles/theme'
 import { AgentIcon, ShellIcon } from './AgentIcon'
 import splitRightIcon from '../assets/splitright.png'
 import splitDownIcon from '../assets/splitdown.png'
+import { useSettingsStore } from '../store/settings'
+import { offeredAgentKinds } from '../utils/providerOffering'
 
 export type SpawnChoice = {
   paneType: PaneType
   agentKind?: AgentKind
 }
 
+// The full supported set. The menu does NOT render this directly — it derives the
+// offered choices from the store (enabled AND detected, spec 055) so an
+// unavailable or disabled provider never appears as a spawn choice. Kept for
+// external reference (e.g. label/key helpers) and as the stable order source.
 export const SPAWN_CHOICES: SpawnChoice[] = [
   { paneType: 'agent', agentKind: 'claude' },
   { paneType: 'agent', agentKind: 'codex' },
@@ -41,6 +47,21 @@ export function SpawnChoiceMenu({
     visible: false,
   })
 
+  // spec 055: offer only providers that are both enabled and detected, in stable
+  // order, plus the always-available Shell row. An undetected or disabled provider
+  // never appears as a spawn choice here (pane-header split menu + sidebar spawn).
+  const agentProviders = useSettingsStore((s) => s.agentProviders)
+  const providerAvailability = useSettingsStore((s) => s.providerAvailability)
+  const offeredChoices = useMemo<SpawnChoice[]>(
+    () => [
+      ...offeredAgentKinds(agentProviders, providerAvailability).map<SpawnChoice>(
+        (kind) => ({ paneType: 'agent', agentKind: kind }),
+      ),
+      { paneType: 'shell' },
+    ],
+    [agentProviders, providerAvailability],
+  )
+
   useLayoutEffect(() => {
     const el = menuRef.current
     if (!el) return
@@ -70,7 +91,7 @@ export function SpawnChoiceMenu({
           visibility: pos.visible ? 'visible' : 'hidden',
         }}
       >
-        <MenuSection label={currentDirLabel} onSelect={onSpawn} onBrowse={onBrowse} />
+        <MenuSection label={currentDirLabel} choices={offeredChoices} onSelect={onSpawn} onBrowse={onBrowse} />
       </div>
     </>
   )
@@ -78,17 +99,19 @@ export function SpawnChoiceMenu({
 
 function MenuSection({
   label,
+  choices,
   onSelect,
   onBrowse,
 }: {
   label: string
+  choices: SpawnChoice[]
   onSelect: (choice: SpawnChoice, direction: SplitDirection) => void
   onBrowse: (choice: SpawnChoice, direction: SplitDirection) => void
 }): JSX.Element {
   return (
     <>
       <div style={menuStyles.label}>{label}</div>
-      {SPAWN_CHOICES.map((choice) => (
+      {choices.map((choice) => (
         <SpawnChoiceRow
           key={`${label}:${spawnChoiceKey(choice)}`}
           choice={choice}

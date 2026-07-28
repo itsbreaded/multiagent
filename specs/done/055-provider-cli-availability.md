@@ -1,17 +1,21 @@
 # Spec: Provider CLI availability for new sessions
 
-Status: draft
+Status: done
 Created: 2026-07-27
-Completed:
+Completed: 2026-07-27
 
 ## Problem
 
-MultiAgent always offers Claude Code, Codex, and OpenCode when a user starts a
-new agent session, even if the corresponding CLI executable is not installed
-or is unavailable on the application's PATH. Choosing such an option creates
-a session that cannot launch. The existing per-provider `Enabled` checkbox is
-saved and currently controls the provider configuration card, but it does not
-control whether that provider can be selected to start a new session.
+MultiAgent offers its supported coding-agent CLIs (Claude Code, Codex,
+OpenCode) when a user starts a new agent session, even if the corresponding
+CLI executable is not installed or is unavailable on the application's PATH.
+Choosing such an option creates a session that cannot launch. The existing
+per-provider `Enabled` checkbox is saved and controls the provider
+configuration card (and the routing env injected into that provider's panes),
+but it does not control whether that provider can be selected to start a new
+session. Today's entry points are also inconsistent about which providers they
+surface: the spawn/split menu and the command palette list all three, while
+the empty-workspace quick-start lists only Claude Code and Codex.
 
 ## Goal
 
@@ -48,8 +52,11 @@ and start new agent panes from the application's session-start controls.
    new-agent entry point: the command palette; shared spawn/split menus in
    the pane header and project sidebar; the empty-workspace quick-start and
    directory-picker actions; and any future UI or programmatic session-start
-   path. No entry point may create a new agent session for a provider that is
-   disabled or unavailable.
+   path. Every new-agent entry point MUST derive the providers it offers from
+   one shared detected-and-enabled set, rather than a per-entry-point hardcoded
+   list, so no provider is silently offered where it cannot launch or silently
+   omitted where it can. No entry point may create a new agent session for a
+   provider that is disabled or unavailable.
 7. Settings MUST show an inline red availability warning beside the name of
    every provider whose CLI was not detected. The warning MUST make clear that
    the CLI was not found on PATH and that the provider cannot be enabled until
@@ -90,6 +97,10 @@ and start new agent panes from the application's session-start controls.
   new session through the command palette, a shared spawn menu, or the
   empty-workspace quick-start/directory-picker actions, **Then** the provider
   is offered and can be selected as it is today.
+- **Given** OpenCode is detected at startup and enabled, **When** the user
+  opens the empty-workspace quick-start, **Then** OpenCode is offered
+  alongside Claude Code and Codex, and any provider that is disabled or
+  unavailable is not offered there.
 - **Given** an entry point is added later that can create an agent session,
   **When** it is used with an unavailable or disabled provider, **Then** it
   cannot create that session.
@@ -104,17 +115,34 @@ None outstanding.
 ## Resolved Decisions
 
 - Availability is evaluated at application startup, using the PATH visible to
-  sessions launched by MultiAgent.
+  sessions launched by MultiAgent (the app's inherited PATH, per the existing
+  no-PATH-rewrite guardrail — sessions and the detection check see the same
+  PATH).
 - Detection is one-way: it may turn `Enabled` off, but never turns it on.
-- The provider's existing `Enabled` flag is the single user-facing control for
-  whether a provider is offered to create new sessions.
-- The enabled-and-detected rule applies to all current and future new-session
-  entry points, including the command palette.
+- The provider's existing `Enabled` flag (introduced in `agent-provider-config`)
+  gains a second role: it also gates whether the provider is offered for new
+  sessions. Unchecking it no longer merely scrubs that provider's routing env —
+  it also hides the provider from every new-session entry point until it is
+  re-checked. This deliberately overloads one control rather than adding a
+  separate visibility toggle the user would have to reconcile.
+- All new-agent entry points — command palette, spawn/split menus, sidebar
+  spawn, empty-workspace quick-start, and directory-picker — share one
+  detected-and-enabled provider set. The empty-workspace quick-start is
+  normalized to offer OpenCode when available (it currently lists only Claude
+  Code and Codex), rather than keeping a per-entry-point hardcoded list.
 - Availability feedback is inline red text beside the provider name, not a
   pop-up. Proposed wording: "CLI not found on PATH — install it to enable this
   provider."
+- The set of providers covered is the three supported agent kinds in
+  `opencode-agent-support` / `agent-provider-config`: Claude Code, Codex, and
+  OpenCode.
 
 ## Out-of-Scope Notes
 
 - A future enhancement could provide a manual re-check action without changing
   the one-way automatic-enable rule.
+- Detection sees only the PATH the app inherited at launch. A user who adds a
+  CLI to PATH only in their interactive shell profile (e.g. launching
+  MultiAgent from a desktop shortcut with a leaner PATH) will see that
+  provider reported unavailable until the app is restarted from an environment
+  that has the binary on PATH. We do not re-read shell profiles or poll.

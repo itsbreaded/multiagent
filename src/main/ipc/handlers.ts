@@ -11,6 +11,7 @@ import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { OpencodeSessionScanner } from '../sessions/OpencodeSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner, setAgentProviderSettings, setOpencodePluginPath } from '../sessions/SessionSpawner'
+import { detectProviderAvailability, applyAvailabilityToSettings } from '../sessions/cliAvailability'
 import { PtyManager } from '../pty/PtyManager'
 import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
 import { TerminalStatusScraper } from '../pty/terminalStatusScraper'
@@ -23,7 +24,7 @@ import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, SessionSearchRequest } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, ProviderAvailability, SessionSearchRequest } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -335,6 +336,17 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   registrar.handle('session:new', async (e, agentKind, cwd: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
+    // spec 055: wait for startup CLI detection to resolve (it runs fire-and-forget so it
+    // never blocks startup — see providerAvailabilityReady below), then refuse to spawn a
+    // new session for a provider whose CLI was not detected. An unavailable CLI cannot
+    // launch anyway, and the renderer hides it from every new-session entry point; this
+    // backend guard is the authoritative enforcement so a future/programmatic caller
+    // cannot bypass it (Req 6). Resume is intentionally NOT guarded — existing/restored
+    // panes are left intact (Req 9).
+    await providerAvailabilityReady
+    if (!providerAvailability[agentKind]) {
+      throw new Error(`Provider CLI not available on PATH: ${agentKind}`)
+    }
     // Ensure the report server port is assigned (hooks linking on) before spawning, so an
     // app-Codex pane gets MULTIAGENT_HOOK_PORT and links at start (spec 047 p4 race fix).
     await linkingApplyPromise
@@ -530,8 +542,50 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
   }
 
-  // Load and apply on startup
-  setAgentProviderSettings(loadAgentProviderSettings())
+  // spec 055: resolve each provider CLI on the app's PATH at startup. The PATH sessions
+  // inherit is `process.env.PATH` (the no-PATH-rewrite guardrail keeps it unchanged), so
+  // "detected" means "a new pane for this kind would actually launch". Detection is
+  // one-way: it may turn a provider's saved `Enabled` off, but never on (Req 2/3).
+  //
+  // Fire-and-forget, never inline-awaited here: PATH can hold dozens of directories, and
+  // even async I/O across all of them takes a beat to settle. Awaiting it inline would
+  // delay every handler/timer registered after this point during startup. `session:new`
+  // (the only path that must not race ahead of it) awaits `providerAvailabilityReady`
+  // instead; `settings:provider-availability` and `settings:get-agent-providers` read the
+  // live `providerAvailability`/`agentProviderSettings` in memory, which start as
+  // all-true/as-loaded and update in place once detection resolves.
+  // E2E mode bypasses PATH detection: the test harness spawns a deterministic fake agent
+  // via MULTIAGENT_E2E_AGENT_COMMAND (see SessionSpawner.agentLaunchCommand), so every
+  // kind is launchable regardless of whether the real CLI is on the runner's PATH.
+  let providerAvailability: ProviderAvailability = { claude: true, codex: true, opencode: true }
+  let agentProviderSettings = loadAgentProviderSettings()
+  setAgentProviderSettings(agentProviderSettings)
+
+  const providerAvailabilityReady: Promise<void> = process.env['MULTIAGENT_E2E_USER_DATA_DIR']
+    ? Promise.resolve()
+    : detectProviderAvailability({
+        path: process.env.PATH,
+        platform: process.platform,
+        patheext: process.env.PATHEXT,
+      }).then((detected) => {
+        providerAvailability = detected
+        // Force-disable any provider whose CLI was not detected, and persist the change
+        // so the saved `Enabled` setting reflects availability (Req 2). Existing running
+        // or restored panes are untouched — this only affects starting new sessions
+        // (Req 9); resume is left alone and will fail naturally if the binary is gone.
+        const disabled = applyAvailabilityToSettings(agentProviderSettings, providerAvailability)
+        if (disabled !== agentProviderSettings) {
+          agentProviderSettings = disabled
+          setAgentProviderSettings(agentProviderSettings)
+          try {
+            writeJsonAtomic(AGENT_PROVIDER_FILE, agentProviderSettings, 2)
+          } catch (err) {
+            console.error('[MultiAgent] provider-availability persist failed:', err)
+          }
+        }
+      }, (err) => {
+        console.error('[MultiAgent] provider CLI detection failed:', err)
+      })
 
   // spec 052: install the managed OpenCode plugin to <userData>/opencode-plugin and point
   // SessionSpawner at its file path (injected into the `plugin` array of the per-pane
@@ -540,13 +594,36 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // MULTIAGENT_ENV is set).
   setOpencodePluginPath(installOpencodePlugin(app.getPath('userData')))
 
-  registrar.handle('settings:get-agent-providers', () => loadAgentProviderSettings())
+  // spec 055: served from the in-memory copy (kept current by the availability-driven
+  // force-disable above), not a fresh disk read — so a renderer fetch racing detection
+  // never observes a settings snapshot from before that force-disable applied.
+  registrar.handle('settings:get-agent-providers', () => agentProviderSettings)
+
+  // spec 055: expose the current availability map so the renderer can hide undetected
+  // providers from every new-session entry point and show the inline Settings warning.
+  // Starts all-true (detection hasn't resolved yet) and updates once resolved; the
+  // renderer re-fetches at startup so it observes the final value shortly after. We do
+  // not poll or re-check after that (Non-Goal); a restart re-evaluates.
+  registrar.handle('settings:provider-availability', () => providerAvailability)
 
   registrar.handle('settings:save-agent-providers', (_e, settings: AgentProviderSettings) => {
     // Sanitize before persisting/applying so a buggy or hostile renderer payload
     // cannot poison the file or crash agent spawns.
-    const sanitized = sanitizeAgentProviderSettings(settings)
-    writeJsonAtomic(AGENT_PROVIDER_FILE, sanitized, 2)
+    let sanitized = sanitizeAgentProviderSettings(settings)
+    // Re-apply availability so a renderer save can never (re)enable a provider whose
+    // CLI is not on PATH (Req 8 backend enforcement — the Settings checkbox is also
+    // disabled, but this is the authoritative guard).
+    const reDisabled = applyAvailabilityToSettings(sanitized, providerAvailability)
+    if (reDisabled !== sanitized) {
+      sanitized = reDisabled
+      try {
+        writeJsonAtomic(AGENT_PROVIDER_FILE, sanitized, 2)
+      } catch (err) {
+        console.error('[MultiAgent] provider-availability persist failed:', err)
+      }
+    } else {
+      writeJsonAtomic(AGENT_PROVIDER_FILE, sanitized, 2)
+    }
     setAgentProviderSettings(sanitized)
   })
 

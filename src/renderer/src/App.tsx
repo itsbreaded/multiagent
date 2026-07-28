@@ -15,7 +15,7 @@ import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { absorbDroppedTab, transferDroppedPane, PANE_DRAG_MIME, TAB_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
-import type { Tab } from '../../shared/types'
+import type { Tab, AgentProviderSettings, ProviderAvailability } from '../../shared/types'
 
 function useGlobalKeyboard() {
   const addTab = usePanesStore((s) => s.addTab)
@@ -118,6 +118,35 @@ export default function App(): JSX.Element {
       if (r) mergeGpuFeatureStatus(r.softwareOnly)
     }).catch(() => {})
   }, [])
+
+  // spec 055: hydrate provider CLI availability and the authoritative agent-provider
+  // settings from main at startup. The store seeds `agentProviders` from the localStorage
+  // mirror, which may be stale after main force-disabled an undetected provider at
+  // startup; fetching the authoritative copy keeps the enabled/availability pair
+  // consistent so new-session entry points gate correctly from the first paint.
+  //
+  // Both hydrate calls skip the store write when the fetched value is deep-equal to what's
+  // already there (the overwhelmingly common case — most launches detect no change and no
+  // provider gets force-disabled). `agentProviders` is read by the always-mounted
+  // CommandPalette; an unconditional set() there forces it to re-render even when nothing
+  // changed, which can perturb a keystroke the palette is mid-handling (e.g. Enter on a
+  // just-typed command) during the startup window these effects fire in.
+  const hydrateProviderAvailability = useSettingsStore((s) => s.hydrateProviderAvailability)
+  const hydrateAgentProviders = useSettingsStore((s) => s.hydrateAgentProviders)
+  useEffect(() => {
+    window.ipc.invoke('settings:provider-availability').then((availability) => {
+      const current = useSettingsStore.getState().providerAvailability
+      if (JSON.stringify(current) !== JSON.stringify(availability)) {
+        hydrateProviderAvailability(availability as ProviderAvailability)
+      }
+    }).catch(() => {})
+    window.ipc.invoke('settings:get-agent-providers').then((settings) => {
+      const current = useSettingsStore.getState().agentProviders
+      if (JSON.stringify(current) !== JSON.stringify(settings)) {
+        hydrateAgentProviders(settings as AgentProviderSettings)
+      }
+    }).catch(() => {})
+  }, [hydrateProviderAvailability, hydrateAgentProviders])
 
   // Fetch this window's ID from main so the tab bar can use it for drag-out.
   const setWindowId = usePanesStore((s) => s.setWindowId)
