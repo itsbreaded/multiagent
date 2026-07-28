@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import { randomUUID } from 'crypto'
 import type { PtyManager } from '../pty/PtyManager'
 import type { AgentKind, AgentProviderSettings } from '../../shared/types'
-import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentOpencodeMcpUrl, currentMcpSettings } from '../mcp/McpInjector'
+import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentOpencodeMcpUrl, currentMcpSettings, currentUiMcpUrl } from '../mcp/McpInjector'
 import { defaultShell } from '../pty/shell'
 
 let _agentProviderSettings: AgentProviderSettings | null = null
@@ -266,6 +266,8 @@ export function agentEnv(agentKind: AgentKind, claudeSessionId?: string): Record
     if (mcpUrl && (!mcpSettings || mcpSettings.builtinBrowserEnabled !== false)) {
       mcp['multiagent-browser'] = { type: 'remote', url: mcpUrl, enabled: true }
     }
+    const uiUrl = currentUiMcpUrl()
+    if (uiUrl) mcp['multiagent-ui'] = { type: 'remote', url: uiUrl, enabled: true }
     if (mcpSettings) {
       for (const server of mcpSettings.customServers) {
         if (!server.enabled || !server.name.trim()) continue
@@ -343,6 +345,10 @@ function codexCliArgs(): string {
       '-c',
       psSingleQuoted('mcp_servers.multiagent-browser.enabled=true')
     )
+  }
+  const uiUrl = currentUiMcpUrl()
+  if (uiUrl) {
+    args.push('-c', psSingleQuoted(`mcp_servers.multiagent-ui.url=${tomlLit(uiUrl)}`), '-c', psSingleQuoted('mcp_servers.multiagent-ui.enabled=true'))
   }
 
   // Custom servers

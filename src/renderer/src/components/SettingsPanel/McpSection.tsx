@@ -88,6 +88,9 @@ export function McpSection(): JSX.Element {
   function toggleBuiltin(enabled: boolean): void {
     save({ ...mcpSettings, builtinBrowserEnabled: enabled })
   }
+  function toggleUiAutomation(enabled: boolean): void {
+    save({ ...mcpSettings, builtinUiAutomationEnabled: enabled })
+  }
 
   function openAdd(): void {
     setFormData(EMPTY_FORM)
@@ -264,6 +267,26 @@ export function McpSection(): JSX.Element {
               label={mcpSettings.builtinBrowserEnabled ? 'Enabled' : 'Disabled'}
             />
           </div>
+        </div>
+      </ServerCard>
+
+      <ServerCard>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <StatusDot running={!statusLoading && !statusError && (status?.uiAutomation.running ?? false)} />
+              <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>multiagent-ui</span>
+              <TypeBadge type="http" />
+              <span style={{ color: ui.color.textDim, fontSize: 10, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>built-in</span>
+            </div>
+            <div style={{ color: ui.color.textMuted, fontSize: 11, lineHeight: 1.5 }}>
+              {status?.uiAutomation.error ? status.uiAutomation.error : status?.uiAutomation.running ? `http://127.0.0.1:${status.uiAutomation.port}/mcp · available to new sessions and local clients` : 'Disabled'}
+            </div>
+            <div style={{ color: ui.color.textDim, fontSize: 11, lineHeight: 1.45, marginTop: 5 }}>
+              Lets connected agents inspect and control visible MultiAgent windows, activate ordinary controls, and enter text. Enable only when you intend to grant that access.
+            </div>
+          </div>
+          <Toggle checked={mcpSettings.builtinUiAutomationEnabled} onChange={toggleUiAutomation} label={mcpSettings.builtinUiAutomationEnabled ? 'Enabled' : 'Disabled'} />
         </div>
       </ServerCard>
 
