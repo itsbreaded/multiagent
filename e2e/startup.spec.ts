@@ -114,15 +114,21 @@ test.describe('cold-start layout restore', () => {
   let projectCwd: string
   let repairedProjectCwd: string
 
-  async function launchTestApp(): Promise<void> {
+  async function launchTestApp(expectedInitialTab = 'Alpha', extraEnv: Record<string, string> = {}): Promise<void> {
     app = await electron.launch({
       executablePath: electronPath,
       args: ['.'],
       cwd: repoRoot,
-      env: launchEnv(userDataDir, homeDir),
+      env: { ...launchEnv(userDataDir, homeDir), ...extraEnv },
     })
     page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
+    // App layout restoration is asynchronous. Do not let a test create a pane
+    // before the saved layout applies, otherwise that late hydration can replace
+    // the newly-created pane and conceal the behavior being tested.
+    if (expectedInitialTab) {
+      await expect(page.getByText(expectedInitialTab, { exact: true }).first()).toBeVisible()
+    }
   }
 
   test.beforeEach(async () => {
@@ -231,6 +237,152 @@ test.describe('cold-start layout restore', () => {
     await input.fill('500,000')
     await input.blur()
     await expect(input).toHaveValue('500000')
+  })
+
+  test('persists a provider selection made in Settings through a normal restart', async () => {
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await claudeCard.getByText('DeepSeek', { exact: true }).click()
+    // Two edits in the same interaction must serialize; the later choice wins.
+    await claudeCard.getByText('Alibaba', { exact: true }).click()
+    await claudeCard.getByRole('checkbox', { name: 'Enabled' }).uncheck()
+
+    const providerFile = join(userDataDir, 'agent-provider-settings.json')
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(providerFile, 'utf8')) as { claude?: { preset?: string; enabled?: boolean } }
+      return `${saved.claude?.preset}:${saved.claude?.enabled}`
+    }).toBe('alibaba:false')
+
+    await closeApp(app)
+    await launchTestApp()
+    const snapshot = await page.evaluate(() => window.ipc.invoke('settings:get-agent-providers')) as {
+      revision: number
+      settings: { claude: { preset: string; enabled: boolean } }
+    }
+    expect(snapshot.revision).toBeGreaterThanOrEqual(0)
+    expect(snapshot.settings.claude.preset).toBe('alibaba')
+    expect(snapshot.settings.claude.enabled).toBe(false)
+  })
+
+  test('shows an enabled built-in provider selection in the reopened Settings UI', async () => {
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await claudeCard.getByText('DeepSeek', { exact: true }).click()
+    await expect(claudeCard.getByRole('checkbox', { name: 'Enabled' })).toBeChecked()
+
+    await closeApp(app)
+    await launchTestApp()
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const restoredCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await expect(restoredCard.getByText('DeepSeek', { exact: true })).toBeVisible()
+    await expect(restoredCard.getByRole('checkbox', { name: 'Enabled' })).toBeChecked()
+  })
+
+  test('restores a custom provider and its routing draft through the real Settings UI', async () => {
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await claudeCard.getByText('+ Add custom', { exact: true }).click()
+    const customName = claudeCard.getByPlaceholder('provider name')
+    await customName.fill('Fixture provider')
+    await customName.press('Enter')
+    const baseUrl = claudeCard.getByPlaceholder('https://api.example.com/anthropic')
+    await baseUrl.fill('https://fixture.invalid/anthropic')
+    await baseUrl.blur()
+    await claudeCard.getByPlaceholder('sk-...').fill('fixture-token')
+    await claudeCard.getByPlaceholder('sk-...').blur()
+    const extraEnv = claudeCard.getByRole('button', { name: 'Extra env vars' })
+    await extraEnv.scrollIntoViewIfNeeded()
+    await extraEnv.click()
+    await claudeCard.getByText('+ Add var', { exact: true }).click()
+    await claudeCard.getByPlaceholder('KEY').fill('FIXTURE_ROUTE')
+    await claudeCard.getByPlaceholder('value').fill('enabled')
+    await claudeCard.getByText('Save', { exact: true }).click()
+    await claudeCard.getByRole('checkbox', { name: 'Enabled' }).uncheck()
+
+    await closeApp(app)
+    await launchTestApp()
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const restoredCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await expect(restoredCard.getByText('Fixture provider', { exact: true })).toBeVisible()
+    await expect(restoredCard.getByPlaceholder('https://api.example.com/anthropic')).toHaveValue('https://fixture.invalid/anthropic')
+    expect(await restoredCard.getByPlaceholder('sk-...').inputValue()).not.toBe('')
+    await expect(restoredCard.getByPlaceholder('sk-...')).toHaveAttribute('type', 'password')
+    await expect(restoredCard.getByRole('checkbox', { name: 'Enabled' })).not.toBeChecked()
+    const restoredExtraEnv = restoredCard.getByRole('button', { name: 'Extra env vars' })
+    await restoredExtraEnv.scrollIntoViewIfNeeded()
+    await restoredExtraEnv.click()
+    await expect(restoredCard.getByText('FIXTURE_ROUTE', { exact: true })).toBeVisible()
+  })
+
+  test('rolls back a failed main-process provider save and retries it from Settings', async () => {
+    await closeApp(app)
+    await launchTestApp('Alpha', { MULTIAGENT_E2E_FAIL_PROVIDER_SETTINGS_SAVE_ONCE: '1' })
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await claudeCard.getByText('DeepSeek', { exact: true }).click()
+    await expect(page.getByText('Provider settings could not be saved. Retry to keep this change.', { exact: true })).toBeVisible()
+    await expect(claudeCard.getByText('Native', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Retry' }).click()
+
+    const providerFile = join(userDataDir, 'agent-provider-settings.json')
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(providerFile, 'utf8')) as { claude?: { preset?: string } }
+      return saved.claude?.preset
+    }).toBe('deepseek')
+  })
+
+  test('keeps saved preferences when a provider CLI is unavailable and blocks launches', async () => {
+    await closeApp(app)
+    const providerFile = join(userDataDir, 'agent-provider-settings.json')
+    await writeFile(providerFile, JSON.stringify({
+      claude: { enabled: true, preset: 'deepseek', baseUrl: 'https://fixture.invalid', authToken: '', model: 'fixture-model', extraEnvVars: [] },
+      codex: { enabled: true, preset: 'native', providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '', wireApi: 'responses', extraEnvVars: [] },
+      opencode: { enabled: true, preset: 'native', providerId: '', model: '', baseUrl: '', apiKey: '', npmAdapter: '', extraEnvVars: [] },
+    }), 'utf8')
+    await launchTestApp('Alpha', { MULTIAGENT_E2E_PROVIDER_AVAILABILITY: '{"claude":false,"codex":true,"opencode":true}' })
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await expect(claudeCard.getByRole('checkbox', { name: 'Enabled' })).toBeChecked()
+    await expect(claudeCard.getByText('CLI not found on PATH — install it to enable this provider.', { exact: true })).toBeVisible()
+    await expect(page.evaluate(() => window.ipc.invoke('session:new', 'claude', window.homeDir))).rejects.toThrow('Provider CLI not available on PATH')
+    const saved = JSON.parse(await readFile(providerFile, 'utf8')) as { claude: { enabled: boolean; preset: string } }
+    expect(saved.claude).toEqual(expect.objectContaining({ enabled: true, preset: 'deepseek' }))
+  })
+
+  test('broadcasts confirmed provider changes to a detached window', async () => {
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+    const change = detached.evaluate(() => new Promise<{ settings: { claude: { preset: string } } }>((resolve) => {
+      const unsubscribe = window.ipc.on('settings:agent-providers-changed', (snapshot: unknown) => {
+        unsubscribe()
+        resolve(snapshot as { settings: { claude: { preset: string } } })
+      })
+    }))
+
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await claudeCard.getByText('DeepSeek', { exact: true }).click()
+
+    await expect(change).resolves.toMatchObject({ settings: { claude: { preset: 'deepseek' } } })
+    await expect.poll(() => detached.evaluate(() => {
+      const saved = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as { agentProviders?: { claude?: { preset?: string } } }
+      return saved.agentProviders?.claude?.preset
+    })).toBe('deepseek')
+
+    await claudeCard.getByRole('checkbox', { name: 'Enabled' }).uncheck()
+    await expect.poll(() => detached.evaluate(() => {
+      const saved = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as { agentProviders?: { claude?: { enabled?: boolean } } }
+      return saved.agentProviders?.claude?.enabled
+    })).toBe(false)
+    await expect(detached.getByText('Claude', { exact: true })).toHaveCount(0)
   })
 
   test('broadcasts an external session deletion to a detached window', async () => {
@@ -571,7 +723,7 @@ test.describe('cold-start layout restore', () => {
       sidebarSectionOpen: {},
       sidebarPanelSizes: {},
     }), 'utf8')
-    await launchTestApp()
+    await launchTestApp('')
 
     const trackedPaneId = 'restored-agent'
     let trackedPtyId = ''

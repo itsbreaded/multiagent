@@ -108,19 +108,20 @@ describe('detectProviderAvailability (spec 055)', () => {
   })
 })
 
-describe('applyAvailabilityToSettings (spec 055 Req 2/3)', () => {
+describe('applyAvailabilityToSettings (durable saved preferences)', () => {
   function allEnabled(): AgentProviderSettings {
     const s = defaultAgentProviderSettings() // enabled: true by default now
     return s
   }
 
-  it('force-disables enabled providers that were not detected', () => {
+  it('does not rewrite enabled preferences when providers are not detected', () => {
     const s = allEnabled()
     const avail: ProviderAvailability = { claude: false, codex: true, opencode: false }
     const next = applyAvailabilityToSettings(s, avail)
-    expect(next.claude.enabled).toBe(false)
+    expect(next.claude.enabled).toBe(true)
     expect(next.codex.enabled).toBe(true)
-    expect(next.opencode.enabled).toBe(false)
+    expect(next.opencode.enabled).toBe(true)
+    expect(next).toBe(s)
   })
 
   it('returns the same reference when nothing changed (no needless persist)', () => {
@@ -138,13 +139,13 @@ describe('applyAvailabilityToSettings (spec 055 Req 2/3)', () => {
     expect(next).toBe(s) // no change → same reference
   })
 
-  it('disables only the undetected kinds, leaving other config fields intact', () => {
+  it('leaves unavailable-provider config and credentials intact', () => {
     const s = allEnabled()
     s.codex.preset = 'deepseek'
     s.codex.apiKey = 'sk-secret'
     const avail: ProviderAvailability = { claude: true, codex: false, opencode: true }
     const next = applyAvailabilityToSettings(s, avail)
-    expect(next.codex.enabled).toBe(false)
+    expect(next.codex.enabled).toBe(true)
     expect(next.codex.preset).toBe('deepseek') // preserved
     expect(next.codex.apiKey).toBe('sk-secret') // preserved (no credential wipe)
   })

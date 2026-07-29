@@ -637,27 +637,13 @@ type CustomProviderView = CustomEntryView
 export function AgentProvidersSection(): JSX.Element {
   const agentProviders = useSettingsStore((s) => s.agentProviders)
   const setAgentProviders = useSettingsStore((s) => s.setAgentProviders)
-  const hydrateAgentProviders = useSettingsStore((s) => s.hydrateAgentProviders)
+  const providerSettingsHydrated = useSettingsStore((s) => s.providerSettingsHydrated)
+  const providerSettingsSaveState = useSettingsStore((s) => s.providerSettingsSaveState)
+  const providerSettingsSaveError = useSettingsStore((s) => s.providerSettingsSaveError)
+  const retryAgentProvidersSave = useSettingsStore((s) => s.retryAgentProvidersSave)
   // Per-kind CLI availability resolved on PATH at startup. It drives the inline red
   // warning, while the Enabled checkbox remains the user's persisted preference.
   const providerAvailability = useSettingsStore((s) => s.providerAvailability)
-
-  useEffect(() => {
-    // Do not let this mount-time request win a race against a change the user
-    // makes immediately after opening the Providers section. Its response is a
-    // point-in-time snapshot, while the store may already contain the newer
-    // setting that was sent to main for persistence.
-    const requestedAgentProviders = JSON.stringify(useSettingsStore.getState().agentProviders)
-    window.ipc.invoke('settings:get-agent-providers').then((settings) => {
-      const current = useSettingsStore.getState().agentProviders
-      if (
-        JSON.stringify(current) === requestedAgentProviders &&
-        JSON.stringify(current) !== JSON.stringify(settings)
-      ) {
-        hydrateAgentProviders(settings as AgentProviderSettings)
-      }
-    }).catch(() => {})
-  }, [hydrateAgentProviders])
 
   // Local draft state so text fields don't trigger IPC on every keystroke
   const [claudeDraft, setClaudeDraft] = useState<ClaudeProviderConfig>(() => agentProviders.claude)
@@ -937,11 +923,24 @@ export function AgentProvidersSection(): JSX.Element {
   const codexCustoms: CustomEntryView[] = (agentProviders.codexCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
   const opencodeCustoms: CustomEntryView[] = (agentProviders.opencodeCustomProviders ?? []).map((c) => ({ id: c.id, name: c.name }))
 
+  if (!providerSettingsHydrated) {
+    return <div style={{ padding: '14px', fontSize: 12, color: '#9aa0a6' }}>Loading provider settings…</div>
+  }
+
   return (
     <div>
       <div style={{ padding: '6px 14px 10px', fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         Agent Providers
       </div>
+      {providerSettingsSaveState === 'saving' && (
+        <div style={{ padding: '0 14px 8px', fontSize: 11, color: '#9aa0a6' }}>Saving provider settingsâ€¦</div>
+      )}
+      {providerSettingsSaveError && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px 8px', fontSize: 11, color: ui.color.danger }}>
+          <span>{providerSettingsSaveError}</span>
+          <button onClick={retryAgentProvidersSave} style={secondaryBtn}>Retry</button>
+        </div>
+      )}
       <div style={{ padding: '0 2px' }}>
 
         {/* Claude Code card */}

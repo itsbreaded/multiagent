@@ -137,6 +137,16 @@ export interface AgentProviderSettings {
   opencodeCustomProviders?: OpencodeCustomProvider[]
 }
 
+/** A main-authoritative provider-settings state, versioned for stale-write detection. */
+export interface AgentProviderSettingsSnapshot {
+  revision: number
+  settings: AgentProviderSettings
+}
+
+export type SaveAgentProviderSettingsResult =
+  | { ok: true; snapshot: AgentProviderSettingsSnapshot }
+  | { ok: false; snapshot: AgentProviderSettingsSnapshot }
+
 export interface McpStatus {
   port: number | null
   running: boolean
@@ -484,13 +494,11 @@ export interface IPCChannels {
   'mcp:probe-stdio': (command: string, args: string[], env?: Record<string, string>) => { tools: string[] }
 
   // --- Agent provider configuration ---
-  'settings:get-agent-providers': () => AgentProviderSettings
-  'settings:save-agent-providers': (settings: AgentProviderSettings) => void
-  // spec 055: which provider CLIs were detected on the app's PATH at startup. Main is
-  // the authority (it force-disables undetected providers and persists that). The
-  // renderer combines this with each provider's `enabled` flag to decide which
-  // providers new-session entry points may offer, and to show the inline "CLI not
-  // found on PATH" warning in Settings. One-way: detection only ever disables.
+  'settings:get-agent-providers': () => AgentProviderSettingsSnapshot
+  'settings:save-agent-providers': (settings: AgentProviderSettings, expectedRevision: number) => SaveAgentProviderSettingsResult
+  'settings:agent-providers-changed': (snapshot: AgentProviderSettingsSnapshot) => void
+  // Runtime launch availability resolved on the app's PATH at startup. It never
+  // rewrites saved enabled preferences; new-session entry points combine both.
   'settings:provider-availability': () => ProviderAvailability
 
   // --- CLI session linking (spec 047 phase 3) ---
@@ -684,6 +692,7 @@ export type InvokeChannels = ChannelSubset<
 
 export type EventChannels = ChannelSubset<
   | 'sessions:updated'
+  | 'settings:agent-providers-changed'
   | 'git:branch-updated'
   | 'layout:cwd-repaired'
   | 'pty:data'

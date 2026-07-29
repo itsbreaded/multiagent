@@ -40,6 +40,14 @@ export interface DetectEnv {
 
 export type ProviderAvailability = Record<AgentKind, boolean>
 
+/** Runtime availability must never rewrite the durable provider preference. */
+export function applyAvailabilityToSettings(
+  settings: AgentProviderSettings,
+  _availability: ProviderAvailability,
+): AgentProviderSettings {
+  return settings
+}
+
 /**
  * spec 055 Req 2/3: force-disable any provider whose CLI was not detected. This is
  * the one-way detection rule — it may turn a provider's saved `Enabled` off, but
@@ -47,19 +55,6 @@ export type ProviderAvailability = Record<AgentKind, boolean>
  * caller can skip a persist), otherwise a new object with the undetected kinds
  * disabled. Pure; tested without Electron.
  */
-export function applyAvailabilityToSettings(
-  settings: AgentProviderSettings,
-  availability: ProviderAvailability,
-): AgentProviderSettings {
-  let next = settings
-  for (const kind of AGENT_KINDS) {
-    if (!availability[kind] && next[kind].enabled) {
-      next = { ...next, [kind]: { ...next[kind], enabled: false } }
-    }
-  }
-  return next
-}
-
 /** A minimal stat result — only the fields `binaryExists` consults. Injectable for tests. */
 export interface StatLike {
   isFile(): boolean
