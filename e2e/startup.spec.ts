@@ -248,21 +248,15 @@ test.describe('cold-start layout restore', () => {
     await claudeCard.getByText('Alibaba', { exact: true }).click()
     await claudeCard.getByRole('checkbox', { name: 'Enabled' }).uncheck()
 
-    const providerFile = join(userDataDir, 'agent-provider-settings.json')
-    await expect.poll(async () => {
-      const saved = JSON.parse(await readFile(providerFile, 'utf8')) as { claude?: { preset?: string; enabled?: boolean } }
-      return `${saved.claude?.preset}:${saved.claude?.enabled}`
-    }).toBe('alibaba:false')
+    await expect(page.getByText(/Provider settings could not be saved|Retry to keep this change/)).toHaveCount(0)
 
     await closeApp(app)
     await launchTestApp()
-    const snapshot = await page.evaluate(() => window.ipc.invoke('settings:get-agent-providers')) as {
-      revision: number
-      settings: { claude: { preset: string; enabled: boolean } }
-    }
-    expect(snapshot.revision).toBeGreaterThanOrEqual(0)
-    expect(snapshot.settings.claude.preset).toBe('alibaba')
-    expect(snapshot.settings.claude.enabled).toBe(false)
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const restoredCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await expect(restoredCard.getByText('Alibaba', { exact: true })).toBeVisible()
+    await expect(restoredCard.getByRole('checkbox', { name: 'Enabled' })).not.toBeChecked()
   })
 
   test('shows an enabled built-in provider selection in the reopened Settings UI', async () => {
@@ -319,32 +313,15 @@ test.describe('cold-start layout restore', () => {
     await expect(restoredCard.getByText('FIXTURE_ROUTE', { exact: true })).toBeVisible()
   })
 
-  test('rolls back a failed main-process provider save and retries it from Settings', async () => {
-    await closeApp(app)
-    await launchTestApp('Alpha', { MULTIAGENT_E2E_FAIL_PROVIDER_SETTINGS_SAVE_ONCE: '1' })
-    await page.getByTitle('Settings').click()
-    await page.getByText('Providers', { exact: true }).click()
-    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
-    await claudeCard.getByText('DeepSeek', { exact: true }).click()
-    await expect(page.getByText('Provider settings could not be saved. Retry to keep this change.', { exact: true })).toBeVisible()
-    await expect(claudeCard.getByText('Native', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Retry' }).click()
-
-    const providerFile = join(userDataDir, 'agent-provider-settings.json')
-    await expect.poll(async () => {
-      const saved = JSON.parse(await readFile(providerFile, 'utf8')) as { claude?: { preset?: string } }
-      return saved.claude?.preset
-    }).toBe('deepseek')
-  })
-
   test('keeps saved preferences when a provider CLI is unavailable and blocks launches', async () => {
     await closeApp(app)
-    const providerFile = join(userDataDir, 'agent-provider-settings.json')
-    await writeFile(providerFile, JSON.stringify({
-      claude: { enabled: true, preset: 'deepseek', baseUrl: 'https://fixture.invalid', authToken: '', model: 'fixture-model', extraEnvVars: [] },
-      codex: { enabled: true, preset: 'native', providerName: '', model: '', baseUrl: '', envKey: '', apiKey: '', wireApi: 'responses', extraEnvVars: [] },
-      opencode: { enabled: true, preset: 'native', providerId: '', model: '', baseUrl: '', apiKey: '', npmAdapter: '', extraEnvVars: [] },
-    }), 'utf8')
+    await launchTestApp()
+    await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).click()
+    const configuredCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
+    await configuredCard.getByText('DeepSeek', { exact: true }).click()
+    await expect(configuredCard.getByRole('checkbox', { name: 'Enabled' })).toBeChecked()
+    await closeApp(app)
     await launchTestApp('Alpha', { MULTIAGENT_E2E_PROVIDER_AVAILABILITY: '{"claude":false,"codex":true,"opencode":true}' })
     await page.getByTitle('Settings').click()
     await page.getByText('Providers', { exact: true }).click()
@@ -352,37 +329,6 @@ test.describe('cold-start layout restore', () => {
     await expect(claudeCard.getByRole('checkbox', { name: 'Enabled' })).toBeChecked()
     await expect(claudeCard.getByText('CLI not found on PATH — install it to enable this provider.', { exact: true })).toBeVisible()
     await expect(page.evaluate(() => window.ipc.invoke('session:new', 'claude', window.homeDir))).rejects.toThrow('Provider CLI not available on PATH')
-    const saved = JSON.parse(await readFile(providerFile, 'utf8')) as { claude: { enabled: boolean; preset: string } }
-    expect(saved.claude).toEqual(expect.objectContaining({ enabled: true, preset: 'deepseek' }))
-  })
-
-  test('broadcasts confirmed provider changes to a detached window', async () => {
-    const detached = await tearOffTab(app, page, 'Alpha')
-    await detached.waitForLoadState('domcontentloaded')
-    const change = detached.evaluate(() => new Promise<{ settings: { claude: { preset: string } } }>((resolve) => {
-      const unsubscribe = window.ipc.on('settings:agent-providers-changed', (snapshot: unknown) => {
-        unsubscribe()
-        resolve(snapshot as { settings: { claude: { preset: string } } })
-      })
-    }))
-
-    await page.getByTitle('Settings').click()
-    await page.getByText('Providers', { exact: true }).click()
-    const claudeCard = page.getByText('Claude Code', { exact: true }).locator('..').locator('..')
-    await claudeCard.getByText('DeepSeek', { exact: true }).click()
-
-    await expect(change).resolves.toMatchObject({ settings: { claude: { preset: 'deepseek' } } })
-    await expect.poll(() => detached.evaluate(() => {
-      const saved = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as { agentProviders?: { claude?: { preset?: string } } }
-      return saved.agentProviders?.claude?.preset
-    })).toBe('deepseek')
-
-    await claudeCard.getByRole('checkbox', { name: 'Enabled' }).uncheck()
-    await expect.poll(() => detached.evaluate(() => {
-      const saved = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as { agentProviders?: { claude?: { enabled?: boolean } } }
-      return saved.agentProviders?.claude?.enabled
-    })).toBe(false)
-    await expect(detached.getByText('Claude', { exact: true })).toHaveCount(0)
   })
 
   test('broadcasts an external session deletion to a detached window', async () => {

@@ -15,7 +15,7 @@ import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { absorbDroppedTab, transferDroppedPane, PANE_DRAG_MIME, TAB_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
-import type { Tab, AgentProviderSettingsSnapshot, ProviderAvailability } from '../../shared/types'
+import type { Tab, ProviderAvailability } from '../../shared/types'
 
 function useGlobalKeyboard() {
   const addTab = usePanesStore((s) => s.addTab)
@@ -119,11 +119,8 @@ export default function App(): JSX.Element {
     }).catch(() => {})
   }, [])
 
-  // spec 055: hydrate provider CLI availability and the authoritative agent-provider
-  // settings from main at startup. The store seeds `agentProviders` from the localStorage
-  // mirror, which may be stale after main force-disabled an undetected provider at
-  // startup; fetching the authoritative copy keeps the enabled/availability pair
-  // consistent so new-session entry points gate correctly from the first paint.
+  // Provider preferences restore synchronously with ordinary renderer Settings.
+  // Mirror that complete configuration into main before the availability check.
   //
   // Both hydrate calls skip the store write when the fetched value is deep-equal to what's
   // already there (the overwhelmingly common case — most launches detect no change and no
@@ -132,20 +129,13 @@ export default function App(): JSX.Element {
   // changed, which can perturb a keystroke the palette is mid-handling (e.g. Enter on a
   // just-typed command) during the startup window these effects fire in.
   const hydrateProviderAvailability = useSettingsStore((s) => s.hydrateProviderAvailability)
-  const hydrateAgentProviders = useSettingsStore((s) => s.hydrateAgentProviders)
-  const providerSettingsHydrated = useSettingsStore((s) => s.providerSettingsHydrated)
   const providerAvailabilityHydrated = useSettingsStore((s) => s.providerAvailabilityHydrated)
   useEffect(() => {
-    window.ipc.invoke('settings:provider-availability').then((availability) => {
-      hydrateProviderAvailability(availability as ProviderAvailability)
-    }).catch(() => {})
-    window.ipc.invoke('settings:get-agent-providers').then((settings) => {
-      hydrateAgentProviders(settings as AgentProviderSettingsSnapshot)
-    }).catch(() => {})
-    return window.ipc.on('settings:agent-providers-changed', (snapshot) => {
-      hydrateAgentProviders(snapshot as AgentProviderSettingsSnapshot)
-    })
-  }, [hydrateProviderAvailability, hydrateAgentProviders])
+    void window.ipc.invoke('settings:set-agent-providers', useSettingsStore.getState().agentProviders)
+      .then(() => window.ipc.invoke('settings:provider-availability'))
+      .then((availability) => { hydrateProviderAvailability(availability as ProviderAvailability) })
+      .catch(() => {})
+  }, [hydrateProviderAvailability])
 
   // Fetch this window's ID from main so the tab bar can use it for drag-out.
   const setWindowId = usePanesStore((s) => s.setWindowId)
@@ -241,10 +231,8 @@ export default function App(): JSX.Element {
 
   const isWrapLayout = tabOverflowMode === 'wrap' && !isDetachedWindow
 
-  // Do not render a session-start entry point from the localStorage mirror. The
-  // authoritative provider snapshot and current-run availability must both arrive
-  // before a user can make a provider choice.
-  if (!providerSettingsHydrated || !providerAvailabilityHydrated) {
+  // Wait only for the runtime availability check; preferences already restored.
+  if (!providerAvailabilityHydrated) {
     return <div style={{ height: '100vh', background: '#0e1011' }} />
   }
 

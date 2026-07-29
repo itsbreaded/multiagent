@@ -24,7 +24,7 @@ import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, AgentProviderSettingsSnapshot, CwdRepairMapping, McpSettings, ProviderAvailability, SessionSearchRequest } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, ProviderAvailability, SessionSearchRequest } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -531,17 +531,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   // --- Agent provider settings ---
-  const AGENT_PROVIDER_FILE = path.join(app.getPath('userData'), 'agent-provider-settings.json')
-
-  function loadAgentProviderSettings(): AgentProviderSettings {
-    try {
-      const raw = fs.readFileSync(AGENT_PROVIDER_FILE, 'utf-8')
-      return sanitizeAgentProviderSettings(JSON.parse(raw))
-    } catch {
-      return defaultAgentProviderSettings()
-    }
-  }
-
   // spec 055: resolve each provider CLI on the app's PATH at startup. The PATH sessions
   // inherit is `process.env.PATH` (the no-PATH-rewrite guardrail keeps it unchanged), so
   // "detected" means "a new pane for this kind would actually launch". Availability
@@ -551,8 +540,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // even async I/O across all of them takes a beat to settle. Awaiting it inline would
   // delay every handler/timer registered after this point during startup. `session:new`
   // (the only path that must not race ahead of it) awaits `providerAvailabilityReady`
-  // instead; `settings:provider-availability` and `settings:get-agent-providers` read the
-  // live `providerAvailability` in memory, which starts all-true and updates in place
+  // instead; `settings:provider-availability` reads the live `providerAvailability` in
+  // memory, which starts all-true and updates in place
   // once detection resolves.
   // E2E mode bypasses PATH detection: the test harness spawns a deterministic fake agent
   // via MULTIAGENT_E2E_AGENT_COMMAND (see SessionSpawner.agentLaunchCommand), so every
@@ -568,18 +557,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return undefined
   })()
   let providerAvailability: ProviderAvailability = e2eAvailability ?? { claude: true, codex: true, opencode: true }
-  let agentProviderSettings = loadAgentProviderSettings()
-  let agentProviderSettingsRevision = 0
-  // E2E-only fault injection for the durable-save recovery contract. This is
-  // deliberately process-local and consumed once, so production behavior and
-  // persisted data are unaffected.
-  let failNextProviderSettingsSave = process.env['MULTIAGENT_E2E_FAIL_PROVIDER_SETTINGS_SAVE_ONCE'] === '1'
+  // Provider preferences are normal renderer Settings. Main only holds this
+  // sanitized runtime mirror for panes launched during this application run.
+  let agentProviderSettings = defaultAgentProviderSettings()
   setAgentProviderSettings(agentProviderSettings)
-
-  const agentProviderSnapshot = (): AgentProviderSettingsSnapshot => ({
-    revision: agentProviderSettingsRevision,
-    settings: agentProviderSettings,
-  })
 
   const providerAvailabilityReady: Promise<void> = process.env['MULTIAGENT_E2E_USER_DATA_DIR']
     ? Promise.resolve()
@@ -600,10 +581,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // MULTIAGENT_ENV is set).
   setOpencodePluginPath(installOpencodePlugin(app.getPath('userData')))
 
-  // Serve the main-process authority, rather than re-reading disk for each request.
-  // The revision lets renderers reject stale startup and cross-window snapshots.
-  registrar.handle('settings:get-agent-providers', () => agentProviderSnapshot())
-
   // spec 055: expose the current availability map so the renderer can hide undetected
   // providers from every new-session entry point and show the inline Settings warning.
   // Starts all-true (detection hasn't resolved yet) and updates once resolved; the
@@ -614,29 +591,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return providerAvailability
   })
 
-  registrar.handle('settings:save-agent-providers', (e, settings: AgentProviderSettings, expectedRevision: number) => {
-    if (failNextProviderSettingsSave) {
-      failNextProviderSettingsSave = false
-      throw new Error('E2E provider settings persistence failure')
-    }
-    if (expectedRevision !== agentProviderSettingsRevision) {
-      return { ok: false, snapshot: agentProviderSnapshot() } as const
-    }
-    // Sanitize before persisting/applying so a buggy or hostile renderer payload
-    // cannot poison the file or crash agent spawns.
-    const sanitized = sanitizeAgentProviderSettings(settings)
-    writeJsonAtomic(AGENT_PROVIDER_FILE, sanitized, 2)
-    agentProviderSettings = sanitized
-    agentProviderSettingsRevision += 1
+  registrar.handle('settings:set-agent-providers', (_e, settings: AgentProviderSettings) => {
+    // Renderer persistence is the durable source. Sanitize the runtime mirror
+    // so malformed local data can never affect a launched pane.
+    agentProviderSettings = sanitizeAgentProviderSettings(settings)
     setAgentProviderSettings(agentProviderSettings)
-    const snapshot = agentProviderSnapshot()
-    const senderWindow = BrowserWindow.fromWebContents(e.sender)
-    if (senderWindow) {
-      windowManager.broadcastExcept(senderWindow.id, 'settings:agent-providers-changed', snapshot)
-    } else {
-      windowManager.broadcastAll('settings:agent-providers-changed', snapshot)
-    }
-    return { ok: true, snapshot } as const
   })
 
   // --- CLI session linking (spec 047 phase 3) ---

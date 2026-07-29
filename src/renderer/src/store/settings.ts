@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
-import type { AgentProviderSettings, AgentProviderSettingsSnapshot, McpSettings, ProviderAvailability } from '../../../shared/types'
+import type { AgentProviderSettings, McpSettings, ProviderAvailability } from '../../../shared/types'
 import { sanitizeAgentProviderSettings } from '../../../shared/agentProviderSettings'
 import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
@@ -117,94 +117,13 @@ interface SettingsState {
   setMcpSettings: (settings: McpSettings) => void
   hydrateMcpSettings: (settings: McpSettings) => void
   agentProviders: AgentProviderSettings
-  confirmedAgentProviders: AgentProviderSettings
   setAgentProviders: (settings: AgentProviderSettings) => void
-  hydrateAgentProviders: (snapshot: AgentProviderSettingsSnapshot) => void
-  providerSettingsHydrated: boolean
-  providerSettingsRevision: number
-  providerSettingsSaveState: 'idle' | 'saving' | 'error'
-  providerSettingsSaveError: string | null
-  failedAgentProviders: AgentProviderSettings | null
-  retryAgentProvidersSave: () => void
   // Per-kind CLI availability resolved on the app's PATH at startup. Default all-true so a slow IPC
   // hydrate never hides every provider on first paint; the real map arrives from main at
   // startup. NOT persisted — it is runtime-only, re-fetched each launch.
   providerAvailability: ProviderAvailability
   providerAvailabilityHydrated: boolean
   hydrateProviderAvailability: (availability: ProviderAvailability) => void
-}
-
-interface PendingProviderSave {
-  id: number
-  settings: AgentProviderSettings
-  expectedRevision: number
-}
-
-let providerSaveSequence = 0
-let providerSaveInFlight = false
-const pendingProviderSaves: PendingProviderSave[] = []
-
-function persistProviderState(get: () => SettingsState): void {
-  saveSettings(get())
-}
-
-function pumpProviderSaves(set: (partial: Partial<SettingsState>) => void, get: () => SettingsState): void {
-  if (providerSaveInFlight) return
-  const pending = pendingProviderSaves.shift()
-  if (!pending) return
-  providerSaveInFlight = true
-  void window.ipc.invoke('settings:save-agent-providers', pending.settings, pending.expectedRevision)
-    .then((result) => {
-      const snapshot = result.snapshot
-      if (result.ok) {
-        // Later local edits include this successful edit, so they can safely
-        // advance to its newly-issued revision. External changes never do this.
-        for (const queued of pendingProviderSaves) {
-          if (queued.expectedRevision === pending.expectedRevision) queued.expectedRevision = snapshot.revision
-        }
-        if (pending.id === providerSaveSequence) {
-          set({
-            agentProviders: snapshot.settings,
-            confirmedAgentProviders: snapshot.settings,
-            providerSettingsRevision: snapshot.revision,
-            providerSettingsSaveState: pendingProviderSaves.length ? 'saving' : 'idle',
-            providerSettingsSaveError: null,
-          })
-          persistProviderState(get)
-        } else {
-          set({ confirmedAgentProviders: snapshot.settings, providerSettingsRevision: snapshot.revision })
-        }
-      } else {
-        // Keep the latest user edit available for Retry, even though its queued
-        // request was based on a revision that is no longer authoritative.
-        const latestDesired = pendingProviderSaves.at(-1)?.settings ?? pending.settings
-        pendingProviderSaves.length = 0
-        set({
-          agentProviders: snapshot.settings,
-          confirmedAgentProviders: snapshot.settings,
-          providerSettingsRevision: snapshot.revision,
-          providerSettingsSaveState: 'error',
-          providerSettingsSaveError: 'Provider settings changed in another window. Retry to apply your change.',
-          failedAgentProviders: latestDesired,
-        })
-        persistProviderState(get)
-      }
-    })
-    .catch(() => {
-      if (pending.id === providerSaveSequence) {
-        set({
-          agentProviders: get().confirmedAgentProviders,
-          providerSettingsSaveState: 'error',
-          providerSettingsSaveError: 'Provider settings could not be saved. Retry to keep this change.',
-          failedAgentProviders: pending.settings,
-        })
-        persistProviderState(get)
-      }
-    })
-    .finally(() => {
-      providerSaveInFlight = false
-      pumpProviderSaves(set, get)
-    })
 }
 
 type Persisted = Pick<SettingsState,
@@ -340,7 +259,6 @@ const initialSettings = loadSettings()
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   ...initialSettings,
-  confirmedAgentProviders: initialSettings.agentProviders,
 
   setAutoUpdateEnabled: (value) => {
     set({ autoUpdateEnabled: value })
@@ -533,46 +451,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setAgentProviders: (agentProviders) => {
-    const save = {
-      id: ++providerSaveSequence,
-      settings: agentProviders,
-      expectedRevision: get().providerSettingsRevision,
-    }
-    pendingProviderSaves.push(save)
-    set({ agentProviders, providerSettingsSaveState: 'saving', providerSettingsSaveError: null, failedAgentProviders: null })
+    set({ agentProviders })
     saveSettings(get())
-    pumpProviderSaves(set, get)
-  },
-
-  hydrateAgentProviders: (snapshot) => {
-    const current = get()
-    if (snapshot.revision < current.providerSettingsRevision) return
-    if (current.providerSettingsSaveState === 'saving') {
-      set({ confirmedAgentProviders: snapshot.settings, providerSettingsRevision: snapshot.revision, providerSettingsHydrated: true })
-      return
-    }
-    set({
-      agentProviders: snapshot.settings,
-      confirmedAgentProviders: snapshot.settings,
-      providerSettingsRevision: snapshot.revision,
-      providerSettingsHydrated: true,
-      providerSettingsSaveState: 'idle',
-      providerSettingsSaveError: null,
-      failedAgentProviders: null,
+    // Main keeps only an in-memory launch mirror. Settings persistence itself
+    // is synchronous localStorage, just like every ordinary preference.
+    void window.ipc.invoke('settings:set-agent-providers', agentProviders).catch((err) => {
+      console.error('[Settings] Failed to sync provider settings to main:', err)
     })
-    saveSettings(get())
-  },
-
-  providerSettingsHydrated: false,
-  providerSettingsRevision: 0,
-  providerSettingsSaveState: 'idle',
-  providerSettingsSaveError: null,
-  failedAgentProviders: null,
-
-  retryAgentProvidersSave: () => {
-    if (get().providerSettingsSaveState !== 'error') return
-    const failed = get().failedAgentProviders
-    if (failed) get().setAgentProviders(failed)
   },
 
   providerAvailability: { claude: true, codex: true, opencode: true },

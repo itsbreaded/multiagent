@@ -137,16 +137,6 @@ export interface AgentProviderSettings {
   opencodeCustomProviders?: OpencodeCustomProvider[]
 }
 
-/** A main-authoritative provider-settings state, versioned for stale-write detection. */
-export interface AgentProviderSettingsSnapshot {
-  revision: number
-  settings: AgentProviderSettings
-}
-
-export type SaveAgentProviderSettingsResult =
-  | { ok: true; snapshot: AgentProviderSettingsSnapshot }
-  | { ok: false; snapshot: AgentProviderSettingsSnapshot }
-
 export interface McpStatus {
   port: number | null
   running: boolean
@@ -494,9 +484,9 @@ export interface IPCChannels {
   'mcp:probe-stdio': (command: string, args: string[], env?: Record<string, string>) => { tools: string[] }
 
   // --- Agent provider configuration ---
-  'settings:get-agent-providers': () => AgentProviderSettingsSnapshot
-  'settings:save-agent-providers': (settings: AgentProviderSettings, expectedRevision: number) => SaveAgentProviderSettingsResult
-  'settings:agent-providers-changed': (snapshot: AgentProviderSettingsSnapshot) => void
+  // Provider preferences are persisted with the renderer's ordinary Settings
+  // state. This silently updates main's runtime copy used for new sessions.
+  'settings:set-agent-providers': (settings: AgentProviderSettings) => void
   // Runtime launch availability resolved on the app's PATH at startup. It never
   // rewrites saved enabled preferences; new-session entry points combine both.
   'settings:provider-availability': () => ProviderAvailability
@@ -658,8 +648,7 @@ export type InvokeChannels = ChannelSubset<
   | 'mcp:get-settings'
   | 'mcp:save-settings'
   | 'mcp:probe-stdio'
-  | 'settings:get-agent-providers'
-  | 'settings:save-agent-providers'
+  | 'settings:set-agent-providers'
   | 'settings:provider-availability'
   | 'settings:get-cli-session-linking'
   | 'settings:set-cli-session-linking'
@@ -692,7 +681,6 @@ export type InvokeChannels = ChannelSubset<
 
 export type EventChannels = ChannelSubset<
   | 'sessions:updated'
-  | 'settings:agent-providers-changed'
   | 'git:branch-updated'
   | 'layout:cwd-repaired'
   | 'pty:data'
