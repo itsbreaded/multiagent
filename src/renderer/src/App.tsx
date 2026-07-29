@@ -134,6 +134,10 @@ export default function App(): JSX.Element {
   const hydrateProviderAvailability = useSettingsStore((s) => s.hydrateProviderAvailability)
   const hydrateAgentProviders = useSettingsStore((s) => s.hydrateAgentProviders)
   useEffect(() => {
+    // A user can open Settings and change a provider before this startup request
+    // returns. Keep the snapshot so an older main-process response cannot replace
+    // that newer choice (and overwrite the local persistence mirror with it).
+    const requestedAgentProviders = JSON.stringify(useSettingsStore.getState().agentProviders)
     window.ipc.invoke('settings:provider-availability').then((availability) => {
       const current = useSettingsStore.getState().providerAvailability
       if (JSON.stringify(current) !== JSON.stringify(availability)) {
@@ -142,7 +146,10 @@ export default function App(): JSX.Element {
     }).catch(() => {})
     window.ipc.invoke('settings:get-agent-providers').then((settings) => {
       const current = useSettingsStore.getState().agentProviders
-      if (JSON.stringify(current) !== JSON.stringify(settings)) {
+      if (
+        JSON.stringify(current) === requestedAgentProviders &&
+        JSON.stringify(current) !== JSON.stringify(settings)
+      ) {
         hydrateAgentProviders(settings as AgentProviderSettings)
       }
     }).catch(() => {})

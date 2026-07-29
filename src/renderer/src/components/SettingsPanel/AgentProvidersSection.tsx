@@ -638,14 +638,24 @@ export function AgentProvidersSection(): JSX.Element {
   const agentProviders = useSettingsStore((s) => s.agentProviders)
   const setAgentProviders = useSettingsStore((s) => s.setAgentProviders)
   const hydrateAgentProviders = useSettingsStore((s) => s.hydrateAgentProviders)
-  // spec 055: per-kind CLI availability resolved on PATH at startup. Drives the inline
-  // red "CLI not found on PATH" warning and blocks the Enabled checkbox when a kind's
-  // CLI is absent, so the user understands the state without attempting a launch.
+  // Per-kind CLI availability resolved on PATH at startup. It drives the inline red
+  // warning, while the Enabled checkbox remains the user's persisted preference.
   const providerAvailability = useSettingsStore((s) => s.providerAvailability)
 
   useEffect(() => {
+    // Do not let this mount-time request win a race against a change the user
+    // makes immediately after opening the Providers section. Its response is a
+    // point-in-time snapshot, while the store may already contain the newer
+    // setting that was sent to main for persistence.
+    const requestedAgentProviders = JSON.stringify(useSettingsStore.getState().agentProviders)
     window.ipc.invoke('settings:get-agent-providers').then((settings) => {
-      hydrateAgentProviders(settings as AgentProviderSettings)
+      const current = useSettingsStore.getState().agentProviders
+      if (
+        JSON.stringify(current) === requestedAgentProviders &&
+        JSON.stringify(current) !== JSON.stringify(settings)
+      ) {
+        hydrateAgentProviders(settings as AgentProviderSettings)
+      }
     }).catch(() => {})
   }, [hydrateAgentProviders])
 
@@ -906,7 +916,7 @@ export function AgentProvidersSection(): JSX.Element {
   const claudeDisabled = !claudeDraft.enabled
   const codexDisabled = !codexDraft.enabled
   const opencodeDisabled = !opencodeDraft.enabled
-  // spec 055: CLI availability drives the inline warning + the Enabled-checkbox lock.
+  // CLI availability drives the inline warning; it does not alter the saved toggle.
   const claudeAvailable = providerAvailability.claude
   const codexAvailable = providerAvailability.codex
   const opencodeAvailable = providerAvailability.opencode
@@ -937,14 +947,11 @@ export function AgentProvidersSection(): JSX.Element {
         {/* Claude Code card */}
         <ProviderCard title="Claude Code" disabled={claudeDisabled} warning={claudeAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: claudeAvailable ? 'pointer' : 'not-allowed' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={claudeDraft.enabled}
-                disabled={!claudeAvailable}
                 onChange={(e) => {
-                  // spec 055: never let an undetected provider be enabled from the UI.
-                  if (!claudeAvailable) return
                   const next = { ...claudeDraft, enabled: e.target.checked }
                   setClaudeDraft(next)
                   flushClaude(next)
@@ -1050,13 +1057,11 @@ export function AgentProvidersSection(): JSX.Element {
         {/* Codex card */}
         <ProviderCard title="Codex" disabled={codexDisabled} warning={codexAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: codexAvailable ? 'pointer' : 'not-allowed' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={codexDraft.enabled}
-                disabled={!codexAvailable}
                 onChange={(e) => {
-                  if (!codexAvailable) return
                   const next = { ...codexDraft, enabled: e.target.checked }
                   setCodexDraft(next)
                   flushCodex(next)
@@ -1180,13 +1185,11 @@ export function AgentProvidersSection(): JSX.Element {
         {/* OpenCode card (spec 052) */}
         <ProviderCard title="OpenCode" disabled={opencodeDisabled} warning={opencodeAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: opencodeAvailable ? 'pointer' : 'not-allowed' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={opencodeDraft.enabled}
-                disabled={!opencodeAvailable}
                 onChange={(e) => {
-                  if (!opencodeAvailable) return
                   const next = { ...opencodeDraft, enabled: e.target.checked }
                   setOpencodeDraft(next)
                   flushOpencode(next)
