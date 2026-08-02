@@ -11,6 +11,7 @@ import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
 import { RescaleGlyphsSetting } from './settings/RescaleGlyphsSetting'
 import { ScrollbackSetting } from './settings/ScrollbackSetting'
 import { TabOverflowSetting } from './settings/TabOverflowSetting'
+import { IdleAgentSuspensionSetting } from './settings/IdleAgentSuspensionSetting'
 
 const MCP_KEYWORDS = ['mcp', 'model context', 'protocol', 'server', 'browser']
 const PROVIDER_KEYWORDS = ['provider', 'agent', 'claude', 'codex', 'api', 'key', 'env', 'environment', 'variable']
@@ -25,6 +26,7 @@ export function SearchResults({
   showContrastSetting,
   showRescaleSetting,
   showScrollbackSetting,
+  showIdleSuspensionSetting,
   anyTerminalSetting,
   visibleHotkeys,
   effectiveHotkeys,
@@ -44,6 +46,7 @@ export function SearchResults({
   showContrastSetting: boolean
   showRescaleSetting: boolean
   showScrollbackSetting: boolean
+  showIdleSuspensionSetting: boolean
   anyTerminalSetting: boolean
   visibleHotkeys: HotkeyId[]
   effectiveHotkeys: ReturnType<typeof buildHotkeys>
@@ -129,6 +132,7 @@ export function SearchResults({
           {showContrastSetting && <ContrastRatioSetting />}
           {showRescaleSetting && <RescaleGlyphsSetting />}
           {showScrollbackSetting && <ScrollbackSetting />}
+          {showIdleSuspensionSetting && <IdleAgentSuspensionSetting />}
         </>
       )}
       {hasMcp && (

@@ -1,6 +1,6 @@
 # PTY & Terminals (mechanism)
 
-The why/how behind the terminal stack. The one-line guardrails live in `CLAUDE.md`;
+The why/how behind the terminal stack. The one-line guardrails live in `AGENTS.md`;
 this is the detail an agent needs when actually touching PTY, shell integration, resize,
 or agent launch.
 
@@ -184,7 +184,7 @@ existing scrollback, so do not silently lower the default as a performance fix.
 
 ## Terminal-error scraping (spec 050 — the scoped hooks-only exception)
 
-Expands the `CLAUDE.md` Terminals & PTY guardrail about `agentStatusScraping`. The hook
+Expands the `AGENTS.md` Terminals & PTY guardrail about `agentStatusScraping`. The hook
 system (spec 032) is the authoritative status source, but it has honest gaps the hooks
 literally cannot close. This is the one scoped exception; it is **on by default**
 (toggleable off via `agentStatusScraping`) so the codex-404-stays-blue bug is fixed out of
@@ -258,7 +258,8 @@ Two independent, main-authoritative settings compose at the reducer:
 
 All four combinations are valid: hooks-only (the spec-032 default); hooks + scrape (the
 expected steady state for users who hit the gap); scrape-only (limited but works for users
-who disable managed hooks); both off (dot renders `unknown`).
+who disable managed hooks); both off (a new/restored pane still begins `idle`, while an
+explicitly unknown lifecycle state renders `unknown`).
 
 ### File map
 

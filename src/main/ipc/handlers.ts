@@ -24,7 +24,7 @@ import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, McpSettings, ProviderAvailability, SessionSearchRequest } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, IdleAgentSuspensionSettings, McpSettings, ProviderAvailability, SessionSearchRequest } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -35,6 +35,7 @@ import { createPtyOutputRouter } from './ptyOutputRouter'
 import { registerTransferHandlers } from './transferHandlers'
 import { createLayoutStore } from './layoutStore'
 import { killPtyIfAllowed, senderMayControlPty as senderMayControlOwnedPty } from './ptyControl'
+import { DEFAULT_IDLE_AGENT_SUSPENSION, normalizeIdleAgentSuspensionSettings } from '../../shared/idleAgentSuspension'
 
 // PTY output is relayed straight to xterm (seq=0 direct write) for both shell and
 // agent panes — no coalescing, no ack, no backpressure. node-pty + xterm handle
@@ -145,6 +146,19 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
   }
 
+  const idleSuspensionPath = path.join(app.getPath('userData'), 'idle-agent-suspension.json')
+  let idleAgentSuspension: IdleAgentSuspensionSettings = { ...DEFAULT_IDLE_AGENT_SUSPENSION }
+  try {
+    idleAgentSuspension = normalizeIdleAgentSuspensionSettings(JSON.parse(fs.readFileSync(idleSuspensionPath, 'utf8')))
+  } catch { /* missing/corrupt -> safe disabled defaults */ }
+  function persistIdleAgentSuspension(settings: IdleAgentSuspensionSettings): void {
+    try {
+      writeJsonAtomic(idleSuspensionPath, settings, 2)
+    } catch (err) {
+      console.error('[MultiAgent] idle-agent-suspension persist failed:', err)
+    }
+  }
+
   // spec 050 phase 4: PtyManager does not track agentKind, so a main-side ptyId -> agentKind
   // map is populated by the session:new / session:resume handlers (the only callers of
   // SessionSpawner.spawnNew/spawnResume). CLI-launched agents in shell panes are promoted
@@ -213,6 +227,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     win.webContents.once('did-finish-load', () => {
       win.webContents.send('sessions:updated', index.getAll())
       win.webContents.send('window:maximized-changed', win.isMaximized())
+      win.webContents.send('settings:idle-agent-suspension-changed', idleAgentSuspension)
+      if (win.isFocused()) {
+        windowManager.broadcastAll('window:became-active', win.id)
+        win.webContents.send('window:focus-state-request')
+      }
     })
     win.on('focus', () => {
       windowManager.broadcastAll('window:became-active', win.id)
@@ -614,6 +633,14 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     persistAgentStatusScraping(agentStatusScrapingEnabled)
     if (!agentStatusScrapingEnabled) statusScraper.clearAll()
     return agentStatusScrapingEnabled
+  })
+
+  registrar.handle('settings:get-idle-agent-suspension', () => ({ ...idleAgentSuspension }))
+  registrar.handle('settings:set-idle-agent-suspension', (_e, settings: IdleAgentSuspensionSettings) => {
+    idleAgentSuspension = normalizeIdleAgentSuspensionSettings(settings)
+    persistIdleAgentSuspension(idleAgentSuspension)
+    windowManager.broadcastAll('settings:idle-agent-suspension-changed', idleAgentSuspension)
+    return { ...idleAgentSuspension }
   })
 
   // --- GPU feature status ---

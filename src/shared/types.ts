@@ -146,6 +146,11 @@ export interface McpStatus {
 
 export type AgentKind = 'claude' | 'codex' | 'opencode'
 
+export interface IdleAgentSuspensionSettings {
+  enabled: boolean
+  timeoutMinutes: number
+}
+
 // spec 055: per-kind CLI availability resolved on the app's PATH at startup. Main
 // is the authority; the renderer reads it via `settings:provider-availability`.
 export type ProviderAvailability = Record<AgentKind, boolean>
@@ -273,8 +278,16 @@ export interface PaneLeaf {
   promotedFromShell?: boolean
   // In-memory only (spec 032): the live agent status badge state, driven by lifecycle
   // hook events the agent emits. NOT serialized -- stripped in normalizeNodeForLayout
-  // alongside promotedFromShell. Undefined until the first hook event (renders unknown).
+  // alongside promotedFromShell. New/restored sessions are seeded idle; explicit unknown
+  // remains available for a genuinely unknown lifecycle state.
   agentStatus?: AgentStatusState
+  // Persisted intent marker for automatic idle suspension. Unlike agentStatus,
+  // this survives layout save/restart so startup can distinguish intentional
+  // suspension from an unexpected process exit.
+  agentSuspension?: {
+    reason: 'idle-policy'
+    at: number
+  }
 }
 
 export type SplitDirection = 'horizontal' | 'vertical'
@@ -504,6 +517,11 @@ export interface IPCChannels {
   // two are fully independent and all four on/off combinations are valid.
   'settings:get-terminal-status-scraping': () => boolean
   'settings:set-terminal-status-scraping': (enabled: boolean) => boolean
+  // Automatic idle agent-session suspension policy. Main persists and broadcasts
+  // the normalized value so detached renderers reevaluate their owned tabs live.
+  'settings:get-idle-agent-suspension': () => IdleAgentSuspensionSettings
+  'settings:set-idle-agent-suspension': (settings: IdleAgentSuspensionSettings) => IdleAgentSuspensionSettings
+  'settings:idle-agent-suspension-changed': (settings: IdleAgentSuspensionSettings) => void
 
   // --- GPU / renderer diagnostics ---
   // Renderer asks main for Chromium's GPU feature status. Used to corroborate
@@ -654,6 +672,8 @@ export type InvokeChannels = ChannelSubset<
   | 'settings:set-cli-session-linking'
   | 'settings:get-terminal-status-scraping'
   | 'settings:set-terminal-status-scraping'
+  | 'settings:get-idle-agent-suspension'
+  | 'settings:set-idle-agent-suspension'
   | 'gpu:feature-status'
   | 'updater:check'
   | 'updater:get-version'
@@ -712,6 +732,7 @@ export type EventChannels = ChannelSubset<
   | 'pane:focus-changed'
   // Broadcast by main whenever a BrowserWindow gains OS focus
   | 'window:became-active'
+  | 'settings:idle-agent-suspension-changed'
   | 'focus:target-changed'
   // Shutdown layout collection: main requests state snapshots for a final authoritative save
   | 'layout:request-state'

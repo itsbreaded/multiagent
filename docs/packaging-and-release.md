@@ -1,7 +1,7 @@
 # Packaging & Release (mechanism)
 
 The why/how behind `npm run dist`, native module rebuilds, per-OS artifacts, auto-update, and
-the release publish flow. The one-line guardrails live in `CLAUDE.md`.
+the release publish flow. The one-line guardrails live in `AGENTS.md`.
 
 ---
 

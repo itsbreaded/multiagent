@@ -206,6 +206,48 @@ test.describe('cold-start layout restore', () => {
     expect(saved.activeTabId).toBe('tab-alpha')
   })
 
+  test('shows an inactive unhydrated agent as disconnected until its tab is activated', async () => {
+    await closeApp(app)
+    const layoutPath = join(userDataDir, 'layout.json')
+    const betaPaneId = 'beta-agent-pane'
+    await writeFile(layoutPath, JSON.stringify({
+      tabs: [
+        { id: 'tab-alpha', focusedPaneId: '', customLabel: 'Alpha' },
+        {
+          id: 'tab-beta',
+          focusedPaneId: betaPaneId,
+          customLabel: 'Beta',
+          rootNode: {
+            type: 'leaf',
+            id: betaPaneId,
+            paneType: 'agent',
+            agentKind: 'claude',
+            cwd: projectCwd,
+            sessionId: 'fts-session',
+          },
+        },
+      ],
+      sidebarWidth: 220,
+      sidebarOpen: true,
+      activeTabId: 'tab-alpha',
+      sidebarSectionOpen: { 'tab:tab-beta': true },
+      sidebarPanelSizes: {},
+    }), 'utf8')
+
+    await launchTestApp()
+    await expect(page.getByTitle('Disconnected')).toBeVisible()
+    const beforeActivation = JSON.parse(await readFile(layoutPath, 'utf8')) as { activeTabId: string }
+    expect(beforeActivation.activeTabId).toBe('tab-alpha')
+
+    await page.getByText('Beta', { exact: true }).last().click()
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as {
+        tabs: Array<{ id: string; rootNode?: { ptyId?: string } }>
+      }
+      return saved.tabs.find((tab) => tab.id === 'tab-beta')?.rootNode?.ptyId ?? ''
+    }).not.toBe('')
+  })
+
   test('loads the Electron-ABI SQLite index and executes a real FTS5 MATCH query', async () => {
     await page.evaluate(() => window.ipc.invoke('sessions:refresh'))
     const matches = await page.evaluate(() => window.ipc.invoke('sessions:search', 'quasarneedle')) as Array<{
@@ -631,6 +673,53 @@ test.describe('cold-start layout restore', () => {
     ) as { cwd: string; pid: number | null } | null
     expect(ready).toMatchObject({ cwd: homeDir })
     expect(typeof ready?.pid).toBe('number')
+  })
+
+  test('suspends and automatically resumes an idle Claude session in a returned tab', async () => {
+    test.setTimeout(120_000)
+    await page.getByTitle('Settings').click()
+    await page.getByText('Terminal', { exact: true }).click()
+    const policyRow = page.getByText('Automatically suspend idle agent sessions', { exact: true }).locator('..').locator('..')
+    await policyRow.getByRole('checkbox').check()
+    const timeout = policyRow.getByRole('textbox', { name: /timeout/i })
+    await timeout.fill('1')
+    await timeout.blur()
+    await expect(timeout).toHaveValue('1')
+    await page.keyboard.press('Escape')
+    await expect(page.getByText('Automatically suspend idle agent sessions', { exact: true })).toHaveCount(0)
+
+    await page.getByTitle(/Command palette/).click()
+    const commandSearch = page.getByPlaceholder('Search commands…')
+    await commandSearch.fill('New Claude Session')
+    await page.keyboard.press('Enter')
+
+    const layoutPath = join(userDataDir, 'layout.json')
+    let originalPtyId = ''
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: Array<{ customLabel?: string; rootNode?: { paneType?: string; ptyId?: string } }> }
+      const alpha = saved.tabs.find((tab) => tab.customLabel === 'Alpha')
+      if (alpha?.rootNode?.paneType !== 'agent') return ''
+      originalPtyId = alpha.rootNode.ptyId ?? ''
+      return originalPtyId
+    }).not.toBe('')
+
+    await page.getByRole('button', { name: 'Beta', exact: true }).click()
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: Array<{ customLabel?: string; rootNode?: { ptyId?: string; agentSuspension?: { reason?: string } } }> }
+      const alpha = saved.tabs.find((tab) => tab.customLabel === 'Alpha')
+      return alpha?.rootNode?.agentSuspension?.reason ?? (alpha?.rootNode?.ptyId ? 'live' : '')
+    }, { timeout: 75_000 }).toBe('idle-policy')
+
+    await page.getByRole('button', { name: 'Alpha', exact: true }).click()
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: Array<{ customLabel?: string; rootNode?: { ptyId?: string; agentSuspension?: unknown } }> }
+      const alpha = saved.tabs.find((tab) => tab.customLabel === 'Alpha')
+      return { ptyId: alpha?.rootNode?.ptyId ?? '', suspended: !!alpha?.rootNode?.agentSuspension }
+    }, { timeout: 30_000 }).toMatchObject({ suspended: false })
+    const resumed = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: Array<{ customLabel?: string; rootNode?: { ptyId?: string } }> }
+    const resumedPtyId = resumed.tabs.find((tab) => tab.customLabel === 'Alpha')?.rootNode?.ptyId
+    expect(resumedPtyId).toBeTruthy()
+    expect(resumedPtyId).not.toBe(originalPtyId)
   })
 
   test('preserves a nested right-column agent across repeated horizontal splits', async () => {

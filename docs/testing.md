@@ -1,10 +1,10 @@
 # Testing (mechanism)
 
 The why/how behind the Vitest harness and the regression guards. The one-line guardrails live
-in `CLAUDE.md`.
+in `AGENTS.md`.
 
 The app has a Vitest 4 test harness (added in spec 030). Tests are the regression net for the
-invariants documented in `CLAUDE.md` — a future change that reintroduces a PATH rewrite, drops
+invariants documented in `AGENTS.md` — a future change that reintroduces a PATH rewrite, drops
 a guard, or breaks the startup-resume flow should fail a test before it ships.
 
 ## Commands

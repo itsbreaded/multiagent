@@ -44,7 +44,8 @@ Identify concrete issues and classify each as `technical`, `product`, or
 - scope that belongs in a separate feature.
 
 If no material issue remains, set `Status: ready` and report that it was
-already ready-grade.
+already ready-grade. The next handoff is `/plan-spec`, not implementation:
+the plan must be authored and independently reviewed before `execute-spec`.
 
 ## Decide autonomously by default
 
@@ -82,7 +83,8 @@ more consistent; explain those tradeoffs in the question instead.
 - If a choice remains blocked on the user, leave the status below `ready` and
   state the exact decision needed.
 - Otherwise set `Status: ready`, leave `Completed:` blank, and report the
-  resolved defaults, remaining dependencies, and handoff scope.
+  resolved defaults, remaining dependencies, and handoff scope. Direct the
+  next step to `/plan-spec @<path>`.
 
 ## Guardrails
 

@@ -2,10 +2,16 @@
 
 Detailed guide for authoring specs in this repo. Read this when you are
 drafting or reviewing a spec; you do not need it for routine tasks. The
-core workflow (spec → plan → implement → verify → ship), folder
-conventions, lifecycle, and Definition of Done live in `CLAUDE.md`.
+workflow is `draft-spec → brainstorm-spec → plan-spec → review-plan →
+execute-spec → verify-spec`; the plan contract is in
+[`docs/writing-plans.md`](writing-plans.md). Repository-wide rules and the
+docs map live in [`AGENTS.md`](../AGENTS.md).
 
 A copy of `specs/TEMPLATE.md` is the recommended starting point.
+
+Implementation plans are separate adjacent artifacts. Keep this document and
+the spec focused on WHAT/WHY; use [`docs/writing-plans.md`](writing-plans.md)
+for repository-specific HOW, sequencing, task detail, and pre-execution review.
 
 ## Principles
 
@@ -36,5 +42,19 @@ plausible-looking thing. Write them to minimize ambiguity.
   new spec over silently editing this one — so the history of intent stays
   legible.
 - **Keep specs and code honest.** If reality diverges from the spec during
-  implementation, update the spec (or write a follow-up spec) rather than
-  letting the code drift from the documented intent.
+  implementation, stop and route a product or scope change through
+  `brainstorm-spec`; do not silently edit a ready contract or let code drift
+  from the documented intent.
+
+## Definition of done
+
+A feature is not done because code exists or a broad test command is green.
+The adjacent plan must be approved before implementation, implementation
+tasks must record concrete checks, and `verify-spec` must map every
+requirement, scenario, non-goal, decision, and dependency to `PASS`, `FAIL`,
+or `UNVERIFIED` evidence. Only a complete `PASS` matrix with green applicable
+checks may move the whole spec and plan to `specs/done/`.
+
+User-visible, destructive, external-side-effect, security, privacy, or costly
+choices still require explicit user or maintainer authorization. A technical
+plan approval is not a substitute for that product decision.

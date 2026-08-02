@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { useSettingsStore } from '../../../store/settings'
 import { GitBranchBadgesSetting } from './GitBranchBadgesSetting'
@@ -6,6 +6,8 @@ import { TabOverflowSetting } from './TabOverflowSetting'
 import { ContrastRatioSetting } from './ContrastRatioSetting'
 import { ScrollbackSetting } from './ScrollbackSetting'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES } from '../../../store/settings'
+import { IdleAgentSuspensionSetting } from './IdleAgentSuspensionSetting'
+import { DEFAULT_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES } from '../../../../../shared/idleAgentSuspension'
 
 describe('store-connected setting controls', () => {
   it('updates checkbox and choice settings through real store actions', () => {
@@ -38,5 +40,19 @@ describe('store-connected setting controls', () => {
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.blur(input)
     expect(useSettingsStore.getState().terminalScrollbackLines).toBe(DEFAULT_TERMINAL_SCROLLBACK_LINES)
+  })
+
+  it('edits the opt-in idle policy and clamps its whole-minute timeout', () => {
+    const first = render(<IdleAgentSuspensionSetting />)
+    const checkbox = within(first.container).getByRole('checkbox')
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    expect(useSettingsStore.getState().idleAgentSuspension.enabled).toBe(true)
+    const input = within(first.container).getByRole('textbox', { name: /timeout/i })
+    fireEvent.change(input, { target: { value: '9999' } })
+    fireEvent.blur(input)
+    expect(useSettingsStore.getState().idleAgentSuspension.timeoutMinutes).toBe(1440)
+    first.unmount()
+    expect(DEFAULT_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES).toBe(30)
   })
 })

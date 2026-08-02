@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
-import type { AgentProviderSettings, McpSettings, ProviderAvailability } from '../../../shared/types'
+import type { AgentProviderSettings, IdleAgentSuspensionSettings, McpSettings, ProviderAvailability } from '../../../shared/types'
+import {
+  DEFAULT_IDLE_AGENT_SUSPENSION,
+  normalizeIdleAgentSuspensionSettings,
+} from '../../../shared/idleAgentSuspension'
 import { sanitizeAgentProviderSettings } from '../../../shared/agentProviderSettings'
 import type { GpuAccelerationPref } from '../terminal/rendering/resolveBackend'
 import * as xtermRegistry from '../utils/xtermRegistry'
@@ -99,6 +103,9 @@ interface SettingsState {
   agentStatusScraping: boolean
   setAgentStatusScraping: (value: boolean) => void
   hydrateAgentStatusScraping: (value: boolean) => void
+  idleAgentSuspension: IdleAgentSuspensionSettings
+  setIdleAgentSuspension: (settings: IdleAgentSuspensionSettings) => void
+  hydrateIdleAgentSuspension: (settings: unknown) => void
   hotkeyOverrides: Partial<Record<HotkeyId, HotkeyOverride>>
   setHotkeyOverride: (id: HotkeyId, override: HotkeyOverride) => void
   resetHotkeyOverride: (id: HotkeyId) => void
@@ -130,6 +137,7 @@ type Persisted = Pick<SettingsState,
   | 'autoUpdateEnabled'
   | 'cliSessionLinking'
   | 'agentStatusScraping'
+  | 'idleAgentSuspension'
   | 'showGitBranchBadges'
   | 'tabOverflowMode'
   | 'optimizedTerminalRenderer'
@@ -149,6 +157,7 @@ function defaultSettings(): Persisted {
     autoUpdateEnabled: false,
     cliSessionLinking: true,
     agentStatusScraping: true,
+    idleAgentSuspension: { ...DEFAULT_IDLE_AGENT_SUSPENSION },
     showGitBranchBadges: true,
     tabOverflowMode: 'scroll',
     optimizedTerminalRenderer: true,
@@ -202,6 +211,7 @@ function loadSettings(): Persisted {
       // spec 050: default-OFF polarity. `=== true` so an unknown/missing field stays off,
       // never silently on -- this is an opt-in complement, not the default discipline.
       agentStatusScraping: parsed.agentStatusScraping !== false,
+      idleAgentSuspension: normalizeIdleAgentSuspensionSettings(parsed.idleAgentSuspension),
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
       tabOverflowMode: parsed.tabOverflowMode === 'wrap' ? 'wrap' : 'scroll',
       optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
@@ -240,6 +250,7 @@ function saveSettings(state: Persisted): void {
     autoUpdateEnabled: state.autoUpdateEnabled,
     cliSessionLinking: state.cliSessionLinking,
     agentStatusScraping: state.agentStatusScraping,
+    idleAgentSuspension: state.idleAgentSuspension,
     showGitBranchBadges: state.showGitBranchBadges,
     tabOverflowMode: state.tabOverflowMode,
     optimizedTerminalRenderer: state.optimizedTerminalRenderer,
@@ -291,6 +302,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   hydrateAgentStatusScraping: (value) => {
     set({ agentStatusScraping: value })
+    saveSettings(get())
+  },
+
+  setIdleAgentSuspension: (settings) => {
+    const idleAgentSuspension = normalizeIdleAgentSuspensionSettings(settings)
+    set({ idleAgentSuspension })
+    saveSettings(get())
+    void window.ipc.invoke('settings:set-idle-agent-suspension', idleAgentSuspension).catch((err) => {
+      console.error('[Settings] Failed to sync idle agent suspension to main:', err)
+    })
+  },
+
+  hydrateIdleAgentSuspension: (settings) => {
+    const idleAgentSuspension = normalizeIdleAgentSuspensionSettings(settings)
+    set({ idleAgentSuspension })
     saveSettings(get())
   },
 

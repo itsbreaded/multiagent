@@ -6,8 +6,9 @@ description: Independently verify a spec against its requirements and scenarios,
 # verify-spec
 
 Independently decide whether a spec is done. A passing verification is
-archived immediately: `brainstorm-spec -> execute-spec -> verify-spec` ends
-with a complete, mechanically sound, durable record.
+archived immediately:
+`brainstorm-spec -> plan-spec -> review-plan -> execute-spec -> verify-spec`
+ends with a complete, mechanically sound, durable record.
 
 ## Invocation and gate
 
@@ -37,13 +38,19 @@ specs in `specs/pending/`.
    verifier with implementation rationale; give it only the spec and plan.
 4. Treat dependency status as advisory. Confirm each behavior the spec relies
    on in code; fail only if it is unavailable or ambiguous.
+5. Confirm the plan contains a truthful implementation summary and, when
+   applicable, a recorded plan-review verdict. An old narrative note or a
+   green broad test command is not a substitute for current evidence.
 
 ## Build and run the verification matrix
 
 For every requirement, acceptance scenario, non-goal, consequential resolved
 decision, and dependency, record one of `PASS`, `FAIL`, or `UNVERIFIED` and
 the concrete evidence: test name, command result, or reproducible manual/code
-path check. Try to falsify each item before accepting it.
+path check. Evidence must match the claim: source inspection can support a
+wiring/invariant claim, but behavior that affects users requires a behavioral
+test or a documented runtime/manual observation. Try to falsify each item
+before accepting it.
 
 An unresolved `Open Questions` entry is a failure. A missing demonstration
 for a requirement or scenario is `UNVERIFIED`, not a pass. Confirm non-goals
@@ -108,6 +115,8 @@ the exact blocking decision or missing behavior.
 
 - Evidence, not opinion: no requirement passes merely because the code looks
   plausible.
+- Do not mark a behavior `PASS` because a plan, review note, or test exists;
+  verify the observed outcome and record the exact evidence.
 - Do not edit requirements, scenarios, non-goals, or decisions to make a spec
   pass. Amend those through `brainstorm-spec`.
 - Archive whole specs only. A partial archive is a failure, not a shortcut.

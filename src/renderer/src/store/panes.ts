@@ -11,6 +11,14 @@ import * as xtermRegistry from '../utils/xtermRegistry'
 import type { SettingsSection } from './settings'
 import { focusArming, SKIP_DISARM_TTL_MS } from './focusArming'
 import { wirePanesIpc } from './panesIpc'
+import {
+  collectPolicySuspendedPanes,
+  hasExactSessionIdentity,
+  IDLE_SUSPENSION_EVALUATION_INTERVAL_MS,
+  isIdleAgentSuspensionEligible,
+  isTabFocused,
+} from './idleAgentSuspension'
+import { useSettingsStore } from './settings'
 
 // Local sidebar focus arming. When OS focus moves into this window FROM another
 // window, the local sidebar highlight is disarmed until we know which pane is
@@ -25,7 +33,35 @@ import { wirePanesIpc } from './panesIpc'
 // clicked while this window was already active, so no became-active follows).
 const hydratingPaneSessions: Record<string, string> = {}
 const hydratingTabs = new Map<string, Promise<void>>()
+const automaticResumeInFlight = new Map<string, Promise<void>>()
+const automaticSuspensionInFlight = new Set<string>()
+const automaticSuspensionFailed = new Set<string>()
+const tabUnfocusedSince = new Map<string, number>()
+let idleCoordinatorCleanup: (() => void) | null = null
 const DEFAULT_AGENT_KIND: AgentKind = 'claude'
+
+function seedInitialAgentStatus(leaf: PaneLeaf): PaneLeaf {
+  if (leaf.paneType !== 'agent' || leaf.agentStatus) return leaf
+  return { ...leaf, agentStatus: { status: 'idle', updatedAt: Date.now() } }
+}
+
+function resetAgentStatusForSessionStart(): AgentStatusState {
+  return { status: 'idle', updatedAt: Date.now() }
+}
+
+function seedInitialAgentStatuses(node: PaneNode): PaneNode {
+  if (node.type === 'leaf') return seedInitialAgentStatus(node)
+  const first = seedInitialAgentStatuses(node.first)
+  const second = seedInitialAgentStatuses(node.second)
+  if (first === node.first && second === node.second) return node
+  return { ...node, first, second }
+}
+
+function seedInitialAgentStatusesInTab(tab: Tab): Tab {
+  if (!tab.rootNode) return tab
+  const rootNode = seedInitialAgentStatuses(tab.rootNode)
+  return rootNode === tab.rootNode ? tab : { ...tab, rootNode }
+}
 
 export function clearPendingRemoteFocus(): void {
   focusArming.pendingRemoteFocusWindowId = null
@@ -196,10 +232,23 @@ function hydrateTabRuntime(tabId: string, markReadyAfterRuntime = false): Promis
     return Promise.resolve()
   }
 
+  // Layout/transfer callers normally seed this already. Keep hydration itself a final
+  // absent-only boundary so an agent cannot render status-unknown while its runtime loads.
+  const hydratedTab = seedInitialAgentStatusesInTab(tab)
+  if (hydratedTab !== tab) {
+    usePanesStore.setState((s) => ({
+      tabs: s.tabs.map((candidate) => candidate.id === tabId ? hydratedTab : candidate),
+    }))
+  }
+  if (!hydratedTab.rootNode) {
+    if (markReadyAfterRuntime) markTabHydrated(tabId)
+    return Promise.resolve()
+  }
+
   const resumes: Promise<void>[] = []
 
-  for (const leaf of collectLeaves(tab.rootNode)) {
-    if (leaf.paneType !== 'agent' || !leaf.agentKind || !leaf.sessionId || leaf.ptyId) continue
+  for (const leaf of collectLeaves(hydratedTab.rootNode)) {
+    if (leaf.paneType !== 'agent' || !leaf.agentKind || !leaf.sessionId || leaf.ptyId || leaf.agentSuspension) continue
     if (hydratingPaneSessions[leaf.id] === leaf.sessionId) continue
 
     const { id: paneId, agentKind, sessionId, cwd } = leaf
@@ -347,6 +396,7 @@ interface PanesStore {
   resumeSession: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
   resumeSessionInNewTab: (agentKind: AgentKind, sessionId: string, cwd: string) => Promise<void>
   resumeAgentPane: (paneId: string) => Promise<void>
+  suspendAgentPane: (paneId: string) => void
   startNewAgentInPane: (paneId: string) => Promise<void>
   newSession: (cwd: string, direction?: SplitDirection, agentKind?: AgentKind) => Promise<void>
   addShellPane: (cwd: string, direction?: SplitDirection) => Promise<void>
@@ -512,7 +562,7 @@ async function resumeIntoPane(
 async function spawnPaneCore(get: PanesGet, set: PanesSet, args: SpawnPaneCoreArgs): Promise<void> {
   const resolvedAgent = args.paneType === 'agent' ? (args.agentKind ?? DEFAULT_AGENT_KIND) : undefined
   const newLeaf = args.paneType === 'agent'
-    ? markSessionDetectionPending(makeLeaf(args.cwd, args.paneType, resolvedAgent))
+    ? seedInitialAgentStatus(markSessionDetectionPending(makeLeaf(args.cwd, args.paneType, resolvedAgent)))
     : makeLeaf(args.cwd, args.paneType)
 
   set((s) => {
@@ -582,15 +632,16 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   detachedWindowActiveTabIds: {},
 
   initDetached: (tab, ptyIds) => {
+    const seededTab = seedInitialAgentStatusesInTab(tab)
     set({
-      tabs: [tab],
-      activeTabId: tab.id,
+      tabs: [seededTab],
+      activeTabId: seededTab.id,
       isDetachedWindow: true,
       sidebarOpen: false,
       hydratedTabIds: {},
-      sidebarSectionOpen: { [tabSidebarSectionId(tab.id)]: true },
+      sidebarSectionOpen: { [tabSidebarSectionId(seededTab.id)]: true },
     })
-    hydrateTabRuntime(tab.id, true)
+    hydrateTabRuntime(seededTab.id, true)
     if (typeof window !== 'undefined' && window.ipc) {
       const adoption = ptyIds.length > 0
         ? window.ipc.invoke('tab:adopt', ptyIds)
@@ -606,7 +657,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       // If this tab was previously torn off from this window it still exists as detached:true.
       // Un-mark it rather than appending a duplicate. Preserve existing data (synced rootNode/ptyIds).
       const existing = s.tabs.find((t) => t.id === tab.id)
-      const base = existing ? { ...existing, detached: false } : { ...tab, detached: false }
+      const base = seedInitialAgentStatusesInTab(existing
+        ? { ...existing, detached: false }
+        : { ...tab, detached: false })
       const rest = s.tabs.filter((t) => t.id !== tab.id)
 
       let newTabs: typeof rest
@@ -745,7 +798,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       // receiveTab/returnTab already claimed it; the sync is stale.
       for (const incoming of incomingTabs) {
         const idx = tabs.findIndex((t) => t.id === incoming.id)
-        const synced: Tab = { ...incoming, detached: true }
+        const synced = seedInitialAgentStatusesInTab({ ...incoming, detached: true })
         if (idx >= 0) {
           if (!tabs[idx].detached) continue  // already local — ignore stale sync
           tabs = [...tabs.slice(0, idx), synced, ...tabs.slice(idx + 1)]
@@ -778,13 +831,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   addPaneToTab: (pane, tabId) => {
+    const seededPane = seedInitialAgentStatus(pane)
     let found = false
     set((s) => ({
       tabs: s.tabs.map((t) => {
         if (t.id !== tabId) return t
         found = true
-        if (!t.rootNode) return { ...t, rootNode: pane, focusedPaneId: pane.id }
-        return { ...t, rootNode: makeSplit('vertical', t.rootNode, pane), focusedPaneId: pane.id }
+        if (!t.rootNode) return { ...t, rootNode: seededPane, focusedPaneId: seededPane.id }
+        return { ...t, rootNode: makeSplit('vertical', t.rootNode, seededPane), focusedPaneId: seededPane.id }
       }),
       hydratedTabIds: s.hydratedTabIds[tabId] ? removeHydratedTabs(s.hydratedTabIds, [tabId]) : s.hydratedTabIds,
     }))
@@ -1298,7 +1352,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       for (const tab of s.tabs) {
         if (!tab.rootNode) continue
         const leaf = findLeaf(tab.rootNode, paneId)
-        if (leaf && leaf.promotedFromShell === true) { promoted = true; break }
+        if (leaf && leaf.promotedFromShell === true && !leaf.agentSuspension) { promoted = true; break }
       }
       if (!promoted) return s
       const tabs = patchLeafInTabs(s.tabs, paneId, {
@@ -1341,7 +1395,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         if (!result.exitedLeaf) return t
         changed = true
         shouldRefreshSessions ||= !!result.exitedLeaf.sessionId
-        return { ...t, rootNode: result.node }
+        // A policy marker is written before pty:kill. Consume the expected exit
+        // in either event ordering without surfacing the unexpected-disconnect UI.
+        const rootNode = result.exitedLeaf.agentSuspension
+          ? updateLeaf(result.node, result.exitedLeaf.id, { agentDisconnected: undefined })
+          : result.node
+        return { ...t, rootNode }
       })
       return changed ? { tabs } : s
     })
@@ -1371,7 +1430,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   resumeSession: async (agentKind, sessionId, cwd) => {
-    const leaf = makeLeaf(cwd, 'agent', agentKind)
+    const leaf = seedInitialAgentStatus(makeLeaf(cwd, 'agent', agentKind))
     leaf.sessionId = sessionId
     let targetTabId = ''
     set((s) => {
@@ -1400,7 +1459,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   resumeSessionInNewTab: async (agentKind, sessionId, cwd) => {
-    const leaf = makeLeaf(cwd, 'agent', agentKind)
+    const leaf = seedInitialAgentStatus(makeLeaf(cwd, 'agent', agentKind))
     leaf.sessionId = sessionId
     const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
     set((s) => ({
@@ -1413,6 +1472,11 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   resumeAgentPane: async (paneId) => {
+    const existing = automaticResumeInFlight.get(paneId)
+    if (existing) {
+      await existing
+      return
+    }
     const pane = get().findPaneInAnyTab(paneId)
     if (!pane || pane.paneType !== 'agent' || !pane.agentKind) return
     if (!pane.sessionId) {
@@ -1420,14 +1484,72 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return
     }
     const { agentKind, sessionId, cwd } = pane
+    let resolveRun!: () => void
+    let rejectRun!: (error: unknown) => void
+    const run = new Promise<void>((resolve, reject) => {
+      resolveRun = resolve
+      rejectRun = reject
+    })
+    automaticResumeInFlight.set(paneId, run)
+    void (async () => {
+      try {
+        get().updatePane(paneId, {
+          ptyId: undefined,
+          agentStatus: resetAgentStatusForSessionStart(),
+          agentDisconnected: undefined,
+          resumeError: undefined,
+          sessionDetectionError: undefined,
+        })
+        await resumeIntoPane(get, paneId, agentKind, sessionId, cwd, {
+          extraFailurePatch: { agentDisconnected: pane.agentDisconnected },
+        })
+        const current = get().findPaneInAnyTab(paneId)
+        if (current?.ptyId && current.agentSuspension?.reason === 'idle-policy') {
+          get().updatePane(paneId, { agentSuspension: undefined })
+        }
+        resolveRun()
+      } catch (err) {
+        rejectRun(err)
+      }
+    })()
+    try {
+      await run
+    } finally {
+      if (automaticResumeInFlight.get(paneId) === run) automaticResumeInFlight.delete(paneId)
+    }
+  },
+
+  suspendAgentPane: (paneId) => {
+    if (automaticSuspensionInFlight.has(paneId) || automaticSuspensionFailed.has(paneId)) return
+    const pane = get().findPaneInAnyTab(paneId)
+    if (!pane || !isIdleAgentSuspensionEligible(pane)) return
+    const ptyId = pane.ptyId
+    if (!ptyId || !hasExactSessionIdentity(pane)) return
+    automaticSuspensionInFlight.add(paneId)
     get().updatePane(paneId, {
-      ptyId: undefined,
+      agentSuspension: { reason: 'idle-policy', at: Date.now() },
       agentDisconnected: undefined,
       resumeError: undefined,
-      sessionDetectionError: undefined,
     })
-    await resumeIntoPane(get, paneId, agentKind, sessionId, cwd, {
-      extraFailurePatch: { agentDisconnected: pane.agentDisconnected },
+    const kill = typeof window !== 'undefined' && window.ipc
+      ? window.ipc.invoke('pty:kill', ptyId)
+      : Promise.reject(new Error('IPC unavailable'))
+    void kill.then(() => {
+      automaticSuspensionFailed.delete(paneId)
+      const current = get().findPaneInAnyTab(paneId)
+      if (current?.agentSuspension?.reason === 'idle-policy' && current.ptyId === ptyId) {
+        get().updatePane(paneId, { ptyId: undefined })
+      }
+    }).catch(() => {
+      const current = get().findPaneInAnyTab(paneId)
+      // If pty:exit already consumed the live id, the intentional marker is
+      // still authoritative even though the kill invoke rejected afterward.
+      if (current?.agentSuspension?.reason === 'idle-policy' && current.ptyId === ptyId) {
+        automaticSuspensionFailed.add(paneId)
+        get().updatePane(paneId, { agentSuspension: undefined })
+      }
+    }).finally(() => {
+      automaticSuspensionInFlight.delete(paneId)
     })
   },
 
@@ -1438,6 +1560,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     get().updatePane(paneId, {
       ptyId: undefined,
       sessionId: undefined,
+      agentStatus: resetAgentStatusForSessionStart(),
+      agentSuspension: undefined,
       agentDisconnected: undefined,
       resumeError: undefined,
       sessionDetectionState: 'pending',
@@ -1504,7 +1628,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
             if (isRecoverablePending && typeof window !== 'undefined' && window.ipc) {
               const agentKind = migrated.agentKind
               const startedAt = migrated.sessionDetectionStartedAt
-              if (!agentKind || startedAt === undefined) return migrated
+              if (!agentKind || startedAt === undefined) return seedInitialAgentStatus(migrated)
               const recovered = await window.ipc.invoke(
                 'sessions:recover-pending',
                 agentKind,
@@ -1512,30 +1636,30 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
                 startedAt,
               ).catch(() => null)
               if (typeof recovered === 'string' && recovered) {
-                return {
+                return seedInitialAgentStatus({
                   ...migrated,
                   sessionId: recovered,
                   ptyId: undefined,
                   sessionDetectionState: 'detected',
                   sessionDetectionError: undefined,
                   resumeError: undefined,
-                }
+                })
               }
             }
 
             if (migrated.sessionDetectionState === 'pending' || migrated.sessionDetectionState === 'failed') {
-              return {
+              return seedInitialAgentStatus({
                 ...migrated,
                 ptyId: undefined,
                 sessionDetectionState: 'failed',
                 sessionDetectionError: migrated.sessionDetectionError ?? 'Session detection did not finish before shutdown',
                 resumeError: migrated.resumeError ?? 'Session detection did not finish before shutdown',
-              }
+              })
             }
 
             return { ...migrated, paneType: 'shell', agentKind: undefined, ptyId: undefined }
           }
-          return { ...migrated, ptyId: undefined }
+          return seedInitialAgentStatus({ ...migrated, ptyId: undefined })
         }
         const [first, second] = await Promise.all([sanitizeNode(node.first), sanitizeNode(node.second)])
         return { ...node, first, second }
@@ -1915,6 +2039,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   insertPaneAtSplit: (pane, targetPaneId, direction, sourceBefore) => {
     if (pane.id === targetPaneId) return false  // defensive: never split a pane against itself
+    const seededPane = seedInitialAgentStatus(pane)
     let activatedTabId = ''
     set((s) => {
       let targetTabIdx = -1
@@ -1929,12 +2054,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         const targetLeaf = findLeaf(tab.rootNode, targetPaneId)
         if (!targetLeaf) return tab
         const newSplit = sourceBefore
-          ? makeSplit(direction, pane, targetLeaf)
-          : makeSplit(direction, targetLeaf, pane)
+          ? makeSplit(direction, seededPane, targetLeaf)
+          : makeSplit(direction, targetLeaf, seededPane)
         return {
           ...tab,
           rootNode: replaceNode(tab.rootNode, targetPaneId, newSplit),
-          focusedPaneId: pane.id,
+          focusedPaneId: seededPane.id,
         }
       })
       activatedTabId = s.tabs[targetTabIdx].id
@@ -1954,16 +2079,17 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   replacePaneById: (paneId, replacement) => {
+    const seededReplacement = seedInitialAgentStatus(replacement)
     let found = false
     set((s) => ({
       tabs: s.tabs.map((t) => {
         if (!t.rootNode || !findLeaf(t.rootNode, paneId)) return t
         found = true
-        const newRoot = replaceNode(t.rootNode, paneId, replacement)
+        const newRoot = replaceNode(t.rootNode, paneId, seededReplacement)
         return {
           ...t,
           rootNode: newRoot,
-          focusedPaneId: t.focusedPaneId === paneId ? replacement.id : t.focusedPaneId,
+          focusedPaneId: t.focusedPaneId === paneId ? seededReplacement.id : t.focusedPaneId,
         }
       }),
     }))
@@ -2021,6 +2147,84 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     return undefined
   },
 }))
+
+export function startIdleAgentSuspensionCoordinator(): () => void {
+  if (idleCoordinatorCleanup) return idleCoordinatorCleanup
+
+  const evaluate = (): void => {
+    const store = usePanesStore.getState()
+    const policy = useSettingsStore.getState().idleAgentSuspension
+    const now = Date.now()
+    const ownedTabIds = new Set<string>()
+
+    for (const tab of store.tabs) {
+      // The primary renderer retains detached tabs as synchronized metadata;
+      // only the detached owner may suspend/resume their live panes.
+      if (!store.isDetachedWindow && tab.detached) continue
+      ownedTabIds.add(tab.id)
+      const focused = isTabFocused(tab, store.activeTabId, store.windowId, store.activeWindowId)
+      if (focused === null) {
+        // Do not infer inactivity while the owning window's focus state is
+        // unavailable. The next known-unfocused evaluation starts the clock.
+        tabUnfocusedSince.delete(tab.id)
+        continue
+      }
+      if (focused) {
+        tabUnfocusedSince.delete(tab.id)
+        if (tab.id === store.activeTabId) {
+          const suspended = collectPolicySuspendedPanes(tab).filter(hasExactSessionIdentity)
+          if (tab.rootNode) {
+            for (const pane of collectLeaves(tab.rootNode)) automaticSuspensionFailed.delete(pane.id)
+          }
+          // All panes are launched in the same evaluation pass. The per-pane
+          // guard in resumeAgentPane absorbs duplicate focus/timer events.
+          void Promise.all(suspended.map((pane) => store.resumeAgentPane(pane.id)))
+        }
+        continue
+      }
+
+      const since = tabUnfocusedSince.get(tab.id)
+      if (since === undefined) {
+        tabUnfocusedSince.set(tab.id, now)
+        continue
+      }
+      if (!policy.enabled || now - since < policy.timeoutMinutes * 60_000) continue
+      if (!tab.rootNode) continue
+      for (const pane of collectLeaves(tab.rootNode)) {
+        if (isIdleAgentSuspensionEligible(pane)) store.suspendAgentPane(pane.id)
+      }
+    }
+
+    for (const tabId of tabUnfocusedSince.keys()) {
+      if (!ownedTabIds.has(tabId)) tabUnfocusedSince.delete(tabId)
+    }
+  }
+
+  const timer = window.setInterval(evaluate, IDLE_SUSPENSION_EVALUATION_INTERVAL_MS)
+  const unsubscribePanes = usePanesStore.subscribe((state, previous) => {
+    if (
+      state.activeTabId !== previous.activeTabId ||
+      state.windowId !== previous.windowId ||
+      state.activeWindowId !== previous.activeWindowId ||
+      state.tabs !== previous.tabs ||
+      state.isDetachedWindow !== previous.isDetachedWindow
+    ) evaluate()
+  })
+  const unsubscribeSettings = useSettingsStore.subscribe((state, previous) => {
+    if (state.idleAgentSuspension !== previous.idleAgentSuspension) evaluate()
+  })
+  evaluate()
+
+  idleCoordinatorCleanup = () => {
+    window.clearInterval(timer)
+    unsubscribePanes()
+    unsubscribeSettings()
+    tabUnfocusedSince.clear()
+    automaticSuspensionFailed.clear()
+    idleCoordinatorCleanup = null
+  }
+  return idleCoordinatorCleanup
+}
 
 export function normalizeCwdKey(cwd: string): string {
   return cwd.replace(/\//g, '\\').toLowerCase()

@@ -1,7 +1,7 @@
 # Pane Layout & Multi-Window State (mechanism)
 
 The why/how behind the pane tree, layout save/restore, and cross-window tab/pane movement.
-The one-line guardrails live in `CLAUDE.md`.
+The one-line guardrails live in `AGENTS.md`.
 
 ---
 

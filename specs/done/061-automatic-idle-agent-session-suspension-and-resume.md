@@ -6,9 +6,9 @@ deliberately describes observable behavior and does not prescribe an
 implementation.
 -->
 
-Status: draft
+Status: done
 Created: 2026-08-01
-Completed:
+Completed: 2026-08-01
 
 ## Problem
 
@@ -129,7 +129,17 @@ Ordinary shell panes are not agent sessions and are not targets.
 25. Agent panes without a live process, including intentionally suspended
     panes and unexpectedly disconnected panes, MUST use a hollow grey circle as
     their disconnected status icon. They MUST NOT use a textual “Offline” or
-    “Disconnected” status label in place of that icon.
+    “Disconnected” status label in place of that icon. Both states MUST use the
+    shared `Disconnected` tooltip.
+26. When an eligible tab returns, the application MUST resume all
+    policy-suspended panes in that tab together. If a resume has started and
+    the tab becomes unfocused again, that resume MUST finish.
+27. On application startup, the application MUST immediately resume
+    policy-suspended panes only in the active tab. Policy-suspended panes in
+    inactive tabs MUST remain suspended until their tab becomes active.
+28. Automatic suspension and automatic resume MUST not be staggered in this
+    version: all eligible panes may suspend together, and all policy-suspended
+    panes in a returned tab may resume together.
 
 ## Non-Goals
 
@@ -220,6 +230,15 @@ Ordinary shell panes are not agent sessions and are not targets.
   **when** each event is processed, **then** only one resume attempt is active
   for that pane.
 
+- **Given** a returned tab contains several policy-suspended panes, **when** it
+  becomes active, **then** all of those panes begin resuming; if the tab becomes
+  unfocused during that work, each already-started resume finishes.
+
+- **Given** the application restarts with policy-suspended panes in active and
+  inactive tabs, **when** startup restoration completes, **then** only the
+  active tab's suspended panes resume and the inactive tabs remain suspended
+  until activated.
+
 - **Given** automatic resume fails, **when** the failure is shown, **then** the
   pane remains present and responsive, the exact session metadata is retained,
   and the user can retry, repair, start a new session, or close the pane as
@@ -232,7 +251,7 @@ Ordinary shell panes are not agent sessions and are not targets.
 - **Given** an agent pane is intentionally suspended or otherwise has no live
   process, **when** its status is shown in the pane header or sidebar, **then**
   it uses a hollow grey circle and does not display an “Offline” or
-  “Disconnected” text label.
+  “Disconnected” text label; its tooltip is `Disconnected` in either case.
 
 - **Given** the application is started or a saved agent pane is restored,
   **when** it is initialized before fresh lifecycle events arrive, **then** it
@@ -249,45 +268,8 @@ Ordinary shell panes are not agent sessions and are not targets.
 
 ## Open Questions
 
-- [ ] When a tab contains several suspended agent panes, should all suspended
-  panes resume automatically when the tab returns, or only the focused/visible
-  pane? The proposed default is to resume all panes in that tab.
-- [ ] If the user leaves the tab while automatic resume is starting, should an
-  already-started resume finish, or should it be cancelled before the agent
-  process starts? The proposed default is to let an already-started resume
-  finish.
-- [ ] After application restart, should only the active tab resume immediately
-  while suspended sessions in inactive tabs remain suspended until opened? The
-  proposed default is to resume only the active tab.
-- [ ] Should manually closed or manually disconnected sessions ever be resumed
-  automatically, or should automatic resume apply only to sessions suspended
-  by this policy? The proposed default is policy-suspended sessions only.
-- [ ] Should an unexpected agent crash retain the existing recovery dialog while
-  only policy suspensions use seamless resume? The proposed default is yes.
-- [ ] If the exact session cannot be resumed because its transcript or working
-  directory is missing, should the application offer recovery actions without
-  silently starting a replacement session? The proposed default is never to
-  silently replace the session.
-- [ ] When a restored session has not yet produced a lifecycle event, should it
-  be treated as idle immediately, or remain protected until the first status
-  event arrives? Treating it as idle enables cleanup; waiting for confirmation
-  is safer against interrupting work that began before observation.
-- [ ] Should sessions waiting for permission or user input remain protected
-  indefinitely, even if they stay in the background for hours? The proposed
-  default is yes.
-- [ ] Should minimized windows, locked workstations, and switching to another
-  desktop count as unfocused and allow idle suspension? The proposed default is
-  yes.
-- [ ] If many idle sessions become eligible at once, should they all suspend or
-  resume together, or should automatic work be staggered to avoid a temporary
-  CPU or memory spike? The proposed default is to suspend all eligible sessions
-  and limit simultaneous automatic resumes.
-- [ ] For the hollow grey circle, should its tooltip say “Suspended” for
-  policy-suspended sessions and “Disconnected” for unexpected exits, or should
-  both use the same tooltip?
-- [ ] Should the first version provide a per-pane “Never suspend this session”
-  exemption, or is a single global setting sufficient? The proposed default is
-  a global setting only.
+None outstanding.
+
 
 ## Resolved Decisions
 
@@ -296,9 +278,8 @@ Ordinary shell panes are not agent sessions and are not targets.
   specs.
 - Supported agent sessions include Claude, Codex, and OpenCode, including
   sessions linked from shell panes. Ordinary shell panes remain excluded.
-- Only an explicit idle state is proposed as eligible. Working, waiting, error,
-  unknown, missing status, and missing session identity are proposed as
-  protected pending confirmation of the open questions above.
+- Only an explicit idle state is eligible. Working, waiting, error, unknown,
+  missing status, and missing session identity are protected.
 - The timeout is measured per tab, and a tab is inactive when either its tab
   is not selected or its owning window is not OS-focused.
 - The shipped policy is disabled by default with a 30-minute timeout and a
@@ -308,14 +289,32 @@ Ordinary shell panes are not agent sessions and are not targets.
   that have already exceeded the new threshold. When prior focus state is not
   known, the application starts measuring from the setting change rather than
   making an unsafe assumption.
-- Intentional idle suspension is proposed to be visually distinct from an
-  unexpected exit: it uses the startup/resume experience and automatically
-  resumes on return; unexpected exits retain recovery UI. This remains subject
-  to confirmation above.
+- Intentional idle suspension is visually distinct from an unexpected exit: it
+  uses the startup/resume experience and automatically resumes on return;
+  unexpected exits retain recovery UI.
 - Intentional suspension preserves the pane and exact session rather than
   deleting or recreating them.
 - The disconnected state uses a hollow grey circle without an Offline or
   Disconnected text label.
+- All policy-suspended panes in a tab resume together when that tab returns.
+  A resume already in progress finishes if the tab becomes unfocused again.
+- After application restart, only policy-suspended panes in the active tab
+  resume immediately; inactive tabs wait until opened.
+- Automatic resume applies only to sessions suspended by this policy.
+  Unexpected exits retain the existing recovery UI.
+- If exact resume is impossible, recovery actions are offered and the
+  application never silently starts a replacement session.
+- New and restored panes initially count as idle and may be suspended after
+  the timeout, including sessions opened but never used. A live protected
+  lifecycle state takes precedence immediately.
+- Sessions waiting for permission or user input remain protected indefinitely.
+- Minimized windows, locked workstations, and virtual-desktop switches count
+  as unfocused for idle-suspension eligibility.
+- Eligible sessions may suspend together, and a returned tab's suspended panes
+  may resume together; this version does not stagger either operation.
+- The shared hollow-grey-circle tooltip is `Disconnected` for both intentional
+  suspension and unexpected disconnection.
+- This version has one global policy setting and no per-pane exemption.
 
 ## Out-of-Scope Notes
 

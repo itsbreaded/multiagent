@@ -22,6 +22,7 @@ import { UpdatesSection } from './UpdatesSection'
 import { ContrastRatioSetting } from './settings/ContrastRatioSetting'
 import { CliSessionLinkingSetting } from './settings/CliSessionLinkingSetting'
 import { AgentStatusScrapingSetting } from './settings/AgentStatusScrapingSetting'
+import { IdleAgentSuspensionSetting } from './settings/IdleAgentSuspensionSetting'
 import { GitBranchBadgesSetting } from './settings/GitBranchBadgesSetting'
 import { GpuAccelerationSetting } from './settings/GpuAccelerationSetting'
 import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
@@ -168,7 +169,8 @@ export function SettingsPanel(): JSX.Element {
   const showContrastSetting = matchesSettingQuery(normalizedQuery, 'minimum contrast ratio color accuracy')
   const showRescaleSetting = matchesSettingQuery(normalizedQuery, 'rescale overlapping glyphs wide ambiguous')
   const showScrollbackSetting = matchesSettingQuery(normalizedQuery, 'terminal scrollback lines history memory buffer maximum')
-  const anyTerminalSetting = showOptimizedRendererSetting || showGpuAccelSetting || showContrastSetting || showRescaleSetting || showScrollbackSetting
+  const showIdleSuspensionSetting = matchesSettingQuery(normalizedQuery, 'idle agent session suspension resume timeout unfocused tab')
+  const anyTerminalSetting = showOptimizedRendererSetting || showGpuAccelSetting || showContrastSetting || showRescaleSetting || showScrollbackSetting || showIdleSuspensionSetting
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
@@ -443,6 +445,7 @@ export function SettingsPanel(): JSX.Element {
                     <div style={{ marginTop: 8 }}><SectionLabel>Session detection</SectionLabel></div>
                     <CliSessionLinkingSetting />
                     <AgentStatusScrapingSetting />
+                    <IdleAgentSuspensionSetting />
                     {!anyTerminalSetting && (
                       <EmptyMessage>No terminal settings match your search.</EmptyMessage>
                     )}
@@ -470,6 +473,7 @@ export function SettingsPanel(): JSX.Element {
                 showContrastSetting={showContrastSetting}
                 showRescaleSetting={showRescaleSetting}
                 showScrollbackSetting={showScrollbackSetting}
+                showIdleSuspensionSetting={showIdleSuspensionSetting}
                 anyTerminalSetting={anyTerminalSetting}
                 visibleHotkeys={visibleHotkeys}
                 effectiveHotkeys={effectiveHotkeys}

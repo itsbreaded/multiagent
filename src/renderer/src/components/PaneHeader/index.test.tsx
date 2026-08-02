@@ -6,6 +6,7 @@ import type { PaneLeaf, Tab } from '../../../../shared/types'
 import { installMockIpc, type MockIpc } from '../../../../../tests/mockIpc'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
+import { isIdleAgentSuspensionEligible } from '../../store/idleAgentSuspension'
 import { PaneHeader } from './index'
 
 let ipc: MockIpc
@@ -112,19 +113,78 @@ describe('PaneHeader - presentation and actions', () => {
     const pane = makeLeaf('C:\\work')
     pane.paneType = 'agent'
     pane.agentKind = 'claude'
+    pane.ptyId = 'pty-working'
     pane.agentStatus = { status: 'working', detail: 'Bash', event: 'pre_tool_use', updatedAt: 1 }
     plantPane(pane)
     render(<PaneHeader pane={pane} isFocused />)
     expect(screen.getByTitle('Working: Bash (includes thinking)')).toBeInTheDocument()
   })
 
-  it('shows the honest unknown dot for an agent pane with no hook events yet (spec 032)', () => {
+  it('defaults an agent with no status object to idle when its PTY is live', () => {
     const pane = makeLeaf('C:\\work')
     pane.paneType = 'agent'
-    pane.agentKind = 'codex'
+    pane.agentKind = 'claude'
+    pane.ptyId = 'pty-live'
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Idle')).toBeInTheDocument()
+  })
+
+  it('preserves an explicit unknown status for a live agent', () => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = 'claude'
+    pane.ptyId = 'pty-live'
+    pane.agentStatus = { status: 'unknown', updatedAt: 1 }
     plantPane(pane)
     render(<PaneHeader pane={pane} isFocused />)
     expect(screen.getByTitle('Status unknown')).toBeInTheDocument()
+  })
+
+  it.each(['claude', 'codex', 'opencode'] as const)('shows disconnected while a %s pane has no live PTY, without changing seeded idle state', (agentKind) => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = agentKind
+    pane.agentStatus = { status: 'idle', updatedAt: 1 }
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Disconnected')).toBeInTheDocument()
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument()
+    expect(pane.agentStatus.status).toBe('idle')
+    expect(isIdleAgentSuspensionEligible(pane)).toBe(false)
+  })
+
+  it.each(['', '   '])('treats a %j PTY ID as disconnected', (ptyId) => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = 'claude'
+    pane.ptyId = ptyId
+    pane.agentStatus = { status: 'idle', updatedAt: 1 }
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Disconnected')).toBeInTheDocument()
+  })
+
+  it('keeps the normal lifecycle dot for a live idle agent pane', () => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = 'codex'
+    pane.ptyId = 'pty-idle'
+    pane.agentStatus = { status: 'idle', updatedAt: 1 }
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Idle')).toBeInTheDocument()
+  })
+
+  it('shows the shared disconnected icon for policy-suspended panes', () => {
+    const pane = makeLeaf('C:\\work')
+    pane.paneType = 'agent'
+    pane.agentKind = 'codex'
+    pane.agentSuspension = { reason: 'idle-policy', at: 1 }
+    plantPane(pane)
+    render(<PaneHeader pane={pane} isFocused />)
+    expect(screen.getByTitle('Disconnected')).toBeInTheDocument()
+    expect(screen.queryByTitle('Status unknown')).not.toBeInTheDocument()
   })
 
   it('does not render a status dot for a shell pane (spec 032)', () => {

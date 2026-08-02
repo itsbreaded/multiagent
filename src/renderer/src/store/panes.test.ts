@@ -4,9 +4,12 @@ import {
   makeLeaf,
   makeSplit,
   collectLeafIds,
+  collectLeaves,
   findLeaf,
 } from '../../../shared/paneTree'
-import type { PaneNode } from '../../../shared/types'
+import type { PaneNode, Tab } from '../../../shared/types'
+import { installMockIpc } from '../../../../tests/mockIpc'
+
 
 // Transition tests against the REAL usePanesStore. The auto-reset mock
 // (activated in tests/setup.renderer.ts) restores initial state in afterEach, so
@@ -86,6 +89,240 @@ describe('usePanesStore — stale resume failures', () => {
     const current = usePanesStore.getState().findPaneInAnyTab(pane.id)
     expect(current?.sessionId).toBe('session-2')
     expect(current?.resumeError).toBeUndefined()
+  })
+})
+
+describe('usePanesStore — idle defaults for agent session entry paths', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    Object.defineProperty(window, 'ipc', { configurable: true, value: undefined })
+  })
+
+  function layoutFor(tab: Tab) {
+    return {
+      tabs: [tab],
+      sidebarWidth: 220,
+      sidebarOpen: true,
+    }
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise })
+    return { promise, resolve }
+  }
+
+  it('seeds a newly created agent session idle', async () => {
+    const tabId = usePanesStore.getState().addTab('C:\\work')
+    await usePanesStore.getState().newSession('C:\\work', 'vertical', 'claude')
+    const tab = usePanesStore.getState().tabs.find((candidate) => candidate.id === tabId)
+    const pane = tab?.rootNode && findLeaf(tab.rootNode, tab.focusedPaneId)
+    expect(pane?.agentStatus?.status).toBe('idle')
+  })
+
+  it('seeds every retained agent layout outcome idle, including pending recovery placeholders', async () => {
+    const restored = makeLeaf('C:\\restored', 'agent', 'claude')
+    restored.sessionId = 'session-restored'
+    const pending = makeLeaf('C:\\pending', 'agent', 'codex')
+    pending.sessionDetectionState = 'pending'
+    pending.sessionDetectionStartedAt = 1
+    pending.sessionDetectionCwd = pending.cwd
+    await usePanesStore.getState().applyLayout(layoutFor({
+      id: 'tab-layout',
+      rootNode: makeSplit('vertical', restored, pending),
+      focusedPaneId: restored.id,
+    }))
+
+    const root = usePanesStore.getState().tabs[0].rootNode!
+    const leaves = collectLeaves(root)
+    expect(leaves.map((leaf) => leaf.agentStatus?.status)).toEqual(['idle', 'idle'])
+  })
+
+  it('preserves explicit unknown at layout and incoming-pane boundaries', async () => {
+    Object.defineProperty(window, 'ipc', { configurable: true, value: undefined })
+    const restored = makeLeaf('C:\\restored', 'agent', 'claude')
+    restored.sessionId = 'session-restored'
+    restored.agentStatus = { status: 'unknown', updatedAt: 1 }
+    await usePanesStore.getState().applyLayout(layoutFor({ id: 'tab-layout', rootNode: restored, focusedPaneId: restored.id }))
+    expect(usePanesStore.getState().findPaneInAnyTab(restored.id)?.agentStatus?.status).toBe('unknown')
+
+    const target = makeLeaf('C:\\target')
+    const tabId = plantTab(target)
+    const incoming = makeLeaf('C:\\incoming', 'agent', 'codex')
+    incoming.agentStatus = { status: 'unknown', updatedAt: 1 }
+    expect(usePanesStore.getState().addPaneToTab(incoming, tabId)).toBe(true)
+    expect(usePanesStore.getState().findPaneInAnyTab(incoming.id)?.agentStatus?.status).toBe('unknown')
+
+    const absent = makeLeaf('C:\\absent', 'agent', 'claude')
+    expect(usePanesStore.getState().addPaneToTab(absent, tabId)).toBe(true)
+    expect(usePanesStore.getState().findPaneInAnyTab(absent.id)?.agentStatus?.status).toBe('idle')
+
+    const detached = makeLeaf('C:\\detached', 'agent', 'claude')
+    usePanesStore.getState().initDetached({ id: 'detached-tab', rootNode: detached, focusedPaneId: detached.id }, [])
+    expect(usePanesStore.getState().findPaneInAnyTab(detached.id)?.agentStatus?.status).toBe('idle')
+
+    const received = makeLeaf('C:\\received', 'agent', 'codex')
+    usePanesStore.getState().receiveTab({ id: 'received-tab', rootNode: received, focusedPaneId: received.id })
+    expect(usePanesStore.getState().findPaneInAnyTab(received.id)?.agentStatus?.status).toBe('idle')
+
+    const synced = makeLeaf('C:\\synced', 'agent', 'opencode')
+    usePanesStore.getState().syncDetachedTabs(7, [{ id: 'synced-tab', rootNode: synced, focusedPaneId: synced.id }], 'synced-tab')
+    expect(usePanesStore.getState().findPaneInAnyTab(synced.id)?.agentStatus?.status).toBe('idle')
+
+    const splitTarget = makeLeaf('C:\\split-target')
+    const splitTabId = plantTab(splitTarget)
+    const splitIncoming = makeLeaf('C:\\split-incoming', 'agent', 'claude')
+    expect(usePanesStore.getState().insertPaneAtSplit(splitIncoming, splitTarget.id, 'vertical', false)).toBe(true)
+    expect(usePanesStore.getState().findPaneInAnyTab(splitIncoming.id)?.agentStatus?.status).toBe('idle')
+    const replacement = makeLeaf('C:\\replacement', 'agent', 'codex')
+    expect(usePanesStore.getState().replacePaneById(splitTarget.id, replacement)).toBe(true)
+    expect(usePanesStore.getState().findPaneInAnyTab(replacement.id)?.agentStatus?.status).toBe('idle')
+    expect(usePanesStore.getState().tabs.some((candidate) => candidate.id === splitTabId)).toBe(true)
+  })
+
+  it('resets an existing pane to idle before explicit resume IPC completes', async () => {
+    const pane = makeLeaf('C:\\resume', 'agent', 'claude')
+    pane.sessionId = 'session-1'
+    pane.ptyId = 'pty-old'
+    pane.agentStatus = { status: 'working', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+    const waiting = deferred<{ ptyId: string }>()
+    ipc.invoke.mockImplementation((channel: string) => channel === 'session:resume' ? waiting.promise : Promise.resolve(undefined))
+
+    const resume = usePanesStore.getState().resumeAgentPane(pane.id)
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
+    waiting.resolve({ ptyId: 'pty-new' })
+    await resume
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
+  })
+
+  it('resets an existing pane to idle before starting a replacement session', async () => {
+    const pane = makeLeaf('C:\\new', 'agent', 'codex')
+    pane.sessionId = 'old-session'
+    pane.ptyId = 'old-pty'
+    pane.agentStatus = { status: 'error', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+    const waiting = deferred<{ ptyId: string; sessionId: string }>()
+    ipc.invoke.mockImplementation((channel: string) => channel === 'session:new' ? waiting.promise : Promise.resolve(undefined))
+
+    const start = usePanesStore.getState().startNewAgentInPane(pane.id)
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
+    waiting.resolve({ ptyId: 'new-pty', sessionId: 'new-session' })
+    await start
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
+  })
+
+  it('resets to idle before retrying a failed resume', async () => {
+    const pane = makeLeaf('C:\\retry-resume', 'agent', 'claude')
+    pane.sessionId = 'retry-session'
+    pane.agentStatus = { status: 'waiting', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+    const retryWaiting = deferred<{ ptyId: string }>()
+    ipc.invoke
+      .mockImplementationOnce(() => Promise.reject(new Error('first resume failed')))
+      .mockImplementationOnce(() => retryWaiting.promise)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await usePanesStore.getState().resumeAgentPane(pane.id)
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.resumeError).toBeTruthy()
+    const retry = usePanesStore.getState().resumeAgentPane(pane.id)
+    const duringRetry = usePanesStore.getState().findPaneInAnyTab(pane.id)
+    expect(duringRetry?.agentStatus?.status).toBe('idle')
+    expect(duringRetry?.resumeError).toBeUndefined()
+    retryWaiting.resolve({ ptyId: 'retry-pty' })
+    await retry
+  })
+
+  it('resets to idle before retrying a failed new session', async () => {
+    const pane = makeLeaf('C:\\retry-new', 'agent', 'codex')
+    pane.agentStatus = { status: 'error', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+    const retryWaiting = deferred<{ ptyId: string; sessionId: string }>()
+    ipc.invoke
+      .mockImplementationOnce(() => Promise.reject(new Error('first new session failed')))
+      .mockImplementationOnce(() => retryWaiting.promise)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await usePanesStore.getState().startNewAgentInPane(pane.id)
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.resumeError).toBeTruthy()
+    const retry = usePanesStore.getState().startNewAgentInPane(pane.id)
+    const duringRetry = usePanesStore.getState().findPaneInAnyTab(pane.id)
+    expect(duringRetry?.agentStatus?.status).toBe('idle')
+    expect(duringRetry?.resumeError).toBeUndefined()
+    retryWaiting.resolve({ ptyId: 'retry-pty', sessionId: 'retry-session' })
+    await retry
+  })
+
+  it('seeds both session-browser resume variants idle before resume IPC completes', async () => {
+    const ipc = installMockIpc()
+    const waiting = deferred<{ ptyId: string }>()
+    ipc.invoke.mockImplementation((channel: string) => channel === 'session:resume' ? waiting.promise : Promise.resolve(undefined))
+
+    const existingTabResume = usePanesStore.getState().resumeSession('claude', 'session-split', 'C:\\split')
+    const splitPane = usePanesStore.getState().tabs[0].rootNode!
+    const splitLeaf = collectLeaves(splitPane)[0]
+    expect(splitLeaf.agentStatus?.status).toBe('idle')
+
+    const newTabResume = usePanesStore.getState().resumeSessionInNewTab('codex', 'session-tab', 'C:\\tab')
+    const newTab = usePanesStore.getState().tabs.at(-1)!
+    const newTabRoot = newTab.rootNode
+    expect(newTabRoot?.type).toBe('leaf')
+    if (newTabRoot?.type === 'leaf') expect(newTabRoot.agentStatus?.status).toBe('idle')
+
+    waiting.resolve({ ptyId: 'pty-resumed' })
+    await Promise.all([existingTabResume, newTabResume])
+  })
+})
+
+describe('usePanesStore — automatic idle suspension lifecycle', () => {
+  it('marks intent before killing and consumes the expected exit without disconnect recovery', async () => {
+    const pane = makeLeaf('C:\\repo', 'agent', 'claude')
+    pane.sessionId = 'session-1'
+    pane.ptyId = 'pty-1'
+    pane.agentStatus = { status: 'idle', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+    let resolveKill!: () => void
+    ipc.invoke.mockImplementation((channel: string) => channel === 'pty:kill' ? new Promise<void>((resolve) => { resolveKill = resolve }) : Promise.resolve(undefined))
+
+    usePanesStore.getState().suspendAgentPane(pane.id)
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentSuspension).toEqual({ reason: 'idle-policy', at: expect.any(Number) })
+    expect(ipc.invoke).toHaveBeenCalledWith('pty:kill', 'pty-1')
+
+    usePanesStore.getState().markPtyExited('pty-1', 0)
+    const afterExit = usePanesStore.getState().findPaneInAnyTab(pane.id)
+    expect(afterExit?.ptyId).toBeUndefined()
+    expect(afterExit?.agentSuspension?.reason).toBe('idle-policy')
+    expect(afterExit?.agentDisconnected).toBeUndefined()
+
+    resolveKill()
+    await Promise.resolve()
+  })
+
+  it('deduplicates resume attempts and clears policy intent only after success', async () => {
+    const pane = makeLeaf('C:\\repo', 'agent', 'codex')
+    pane.sessionId = 'session-1'
+    pane.agentSuspension = { reason: 'idle-policy', at: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+    let resolveResume!: (value: { ptyId: string }) => void
+    ipc.invoke.mockImplementation((channel: string) => channel === 'session:resume'
+      ? new Promise<{ ptyId: string }>((resolve) => { resolveResume = resolve })
+      : Promise.resolve(undefined))
+
+    const first = usePanesStore.getState().resumeAgentPane(pane.id)
+    const second = usePanesStore.getState().resumeAgentPane(pane.id)
+    expect(ipc.invoke.mock.calls.filter((call: unknown[]) => call[0] === 'session:resume')).toHaveLength(1)
+
+    resolveResume({ ptyId: 'pty-resumed' })
+    await Promise.all([first, second])
+    const resumed = usePanesStore.getState().findPaneInAnyTab(pane.id)
+    expect(resumed?.ptyId).toBe('pty-resumed')
+    expect(resumed?.agentSuspension).toBeUndefined()
   })
 })
 

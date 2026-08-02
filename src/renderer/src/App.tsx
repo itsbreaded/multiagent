@@ -9,7 +9,7 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SnapOverlay } from './components/SnapOverlay'
 import { DirPicker } from './components/DirPicker'
 import { UpdateBanner } from './components/UpdateBanner'
-import { usePanesStore } from './store/panes'
+import { startIdleAgentSuspensionCoordinator, usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
@@ -137,6 +137,18 @@ export default function App(): JSX.Element {
       .catch(() => {})
   }, [hydrateProviderAvailability])
 
+  // The main process owns the shared policy mirror so a change in the primary
+  // settings panel reaches every detached renderer immediately. The local
+  // settings store remains the persisted renderer-side cache and safe fallback.
+  const hydrateIdleAgentSuspension = useSettingsStore((s) => s.hydrateIdleAgentSuspension)
+  useEffect(() => {
+    const off = window.ipc.on('settings:idle-agent-suspension-changed', (settings: unknown) => {
+      hydrateIdleAgentSuspension(settings)
+    })
+    void window.ipc.invoke('settings:get-idle-agent-suspension').then(hydrateIdleAgentSuspension).catch(() => {})
+    return off
+  }, [hydrateIdleAgentSuspension])
+
   // Fetch this window's ID from main so the tab bar can use it for drag-out.
   const setWindowId = usePanesStore((s) => s.setWindowId)
   useEffect(() => {
@@ -166,6 +178,11 @@ export default function App(): JSX.Element {
       }).catch(() => {})
     }).catch(() => {}).finally(() => setLayoutReady(true))
   }, [])
+
+  useEffect(() => {
+    if (!layoutReady) return
+    return startIdleAgentSuspensionCoordinator()
+  }, [layoutReady])
 
   // Detached window: push tab state to primary on every change (debounced).
   useEffect(() => {

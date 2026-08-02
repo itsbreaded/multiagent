@@ -452,8 +452,9 @@ The same managed hooks also drive a per-pane status badge (`idle` / `working` / 
 event to a second report-server route, `/agent-event`, which main forwards raw to the
 owning pane's renderer; the renderer runs a pure `eventToState` reducer per pane. State is
 in-memory only (never persisted) and sourced **entirely from the agent's own hook events** —
-never from screen/OSC scraping (the lesson of the rolled-back spec 048). No hook events yet
-=> `unknown`, the honest fallback.
+never from screen/OSC scraping (the lesson of the rolled-back spec 048). New and restored
+agent sessions begin at `idle`; later hook events replace that initial state. Explicit
+`unknown` remains available when lifecycle state is genuinely undetermined.
 
 Event -> state mapping (the reducer in `src/shared/agentStatus.ts`):
 

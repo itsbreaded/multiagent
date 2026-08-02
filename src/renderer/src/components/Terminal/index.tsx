@@ -646,6 +646,24 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           {pane.paneType === 'agent' && pane.sessionId && (
             <button
               data-window-drag-exempt="true"
+              onClick={() => { void resumeAgentPane(pane.id) }}
+              style={{
+                backgroundColor: '#2d6cdf',
+                border: '1px solid #3979ee',
+                color: '#ffffff',
+                borderRadius: 4,
+                padding: '4px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              Retry resume
+            </button>
+          )}
+          {pane.paneType === 'agent' && pane.sessionId && (
+            <button
+              data-window-drag-exempt="true"
               onClick={() => {
                 setRepairError(null)
                 setRepairPickerOpen(true)

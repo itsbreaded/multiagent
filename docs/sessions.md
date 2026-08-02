@@ -1,7 +1,7 @@
 # Sessions: indexing, detection & repair (mechanism)
 
 The why/how behind session search, session-id detection, cwd repair, and the startup-resume /
-shutdown-state flow. The one-line guardrails live in `CLAUDE.md`. The hook-based session-id
+shutdown-state flow. The one-line guardrails live in `AGENTS.md`. The hook-based session-id
 **linking** mechanism — the one scoped exception to "don't mutate agent config" — is a deep
 dive in [`docs/session-linking-hooks.md`](session-linking-hooks.md); this doc covers everything
 else session-related.
@@ -130,6 +130,6 @@ click_at, type, hover, hover_at, keyboard, select, scroll, screenshot,
 get_content/url/elements/links, evaluate, wait_for/wait_for_text/wait_for_load, go_back,
 go_forward, reload, set_cookies). The renderer shows/hides it via `browser:toggle`. The tool
 surface and recommended selection order are documented with the MCP server itself — keep that
-list in sync with `BrowserMcpServer.ts`/`BrowserViewManager.ts`, not in `CLAUDE.md` or here.
+list in sync with `BrowserMcpServer.ts`/`BrowserViewManager.ts`, not in `AGENTS.md` or here.
 To override JS dialogs (`alert`/`confirm`/`prompt`), use `browser_evaluate` to patch
 `window.confirm = () => true` etc. after navigation.

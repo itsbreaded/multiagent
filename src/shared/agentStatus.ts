@@ -11,8 +11,9 @@
  * `terminal_error` event fed by the `agentStatusScraping` terminal-output observer,
  * which exists only because some fatal errors (notably Codex provider-compat failures)
  * print to the terminal and emit no hook at all. Default OFF; never on unless the user
- * opts in. When no events have arrived, the caller passes prev === undefined and the
- * pane renders `unknown` (the honest fallback).
+ * opts in. New/restored sessions are seeded `idle` by the renderer before events arrive.
+ * An explicit `unknown` state remains available when lifecycle state is genuinely
+ * undetermined.
  */
 
 import type { AgentStatusState, AgentStatusInput } from './types'
