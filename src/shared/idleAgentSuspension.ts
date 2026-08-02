@@ -1,7 +1,7 @@
 import type { IdleAgentSuspensionSettings } from './types'
 
-export const DEFAULT_IDLE_AGENT_SUSPENSION_ENABLED = false
-export const DEFAULT_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES = 30
+export const DEFAULT_IDLE_AGENT_SUSPENSION_ENABLED = true
+export const DEFAULT_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES = 10
 export const MIN_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES = 1
 export const MAX_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES = 1_440
 
@@ -23,7 +23,7 @@ export function normalizeIdleAgentSuspensionSettings(value: unknown): IdleAgentS
   if (!value || typeof value !== 'object') return { ...DEFAULT_IDLE_AGENT_SUSPENSION }
   const record = value as Record<string, unknown>
   return {
-    enabled: record.enabled === true,
+    enabled: typeof record.enabled === 'boolean' ? record.enabled : DEFAULT_IDLE_AGENT_SUSPENSION_ENABLED,
     timeoutMinutes: normalizeIdleAgentSuspensionTimeout(record.timeoutMinutes),
   }
 }

@@ -150,7 +150,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   let idleAgentSuspension: IdleAgentSuspensionSettings = { ...DEFAULT_IDLE_AGENT_SUSPENSION }
   try {
     idleAgentSuspension = normalizeIdleAgentSuspensionSettings(JSON.parse(fs.readFileSync(idleSuspensionPath, 'utf8')))
-  } catch { /* missing/corrupt -> safe disabled defaults */ }
+  } catch { /* missing/corrupt -> shipped defaults */ }
   function persistIdleAgentSuspension(settings: IdleAgentSuspensionSettings): void {
     try {
       writeJsonAtomic(idleSuspensionPath, settings, 2)

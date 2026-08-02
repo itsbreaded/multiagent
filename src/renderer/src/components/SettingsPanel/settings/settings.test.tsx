@@ -42,17 +42,17 @@ describe('store-connected setting controls', () => {
     expect(useSettingsStore.getState().terminalScrollbackLines).toBe(DEFAULT_TERMINAL_SCROLLBACK_LINES)
   })
 
-  it('edits the opt-in idle policy and clamps its whole-minute timeout', () => {
+  it('edits the idle policy and clamps its whole-minute timeout', () => {
     const first = render(<IdleAgentSuspensionSetting />)
     const checkbox = within(first.container).getByRole('checkbox')
-    expect(checkbox).not.toBeChecked()
+    expect(checkbox).toBeChecked()
     fireEvent.click(checkbox)
-    expect(useSettingsStore.getState().idleAgentSuspension.enabled).toBe(true)
+    expect(useSettingsStore.getState().idleAgentSuspension.enabled).toBe(false)
     const input = within(first.container).getByRole('textbox', { name: /timeout/i })
     fireEvent.change(input, { target: { value: '9999' } })
     fireEvent.blur(input)
     expect(useSettingsStore.getState().idleAgentSuspension.timeoutMinutes).toBe(1440)
     first.unmount()
-    expect(DEFAULT_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES).toBe(30)
+    expect(DEFAULT_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES).toBe(10)
   })
 })
