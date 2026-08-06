@@ -90,8 +90,9 @@ export function SettingsPanel(): JSX.Element {
       // bubble to App.tsx's global Escape handler and close the settings overlay.
       // This listener only exists while recording is active, so normal
       // Escape-to-close still works once recording ends.
-      if (!e.ctrlKey && !e.metaKey) {
+      if (e.altKey || (!e.ctrlKey && !e.metaKey)) {
         if (e.key === 'Escape') {
+          if (e.altKey) return
           e.preventDefault()
           e.stopPropagation()
           setRecording(null)
@@ -121,7 +122,7 @@ export function SettingsPanel(): JSX.Element {
       // Bidirectional clash: app hotkey shares code+shift with a terminal binding
       // held with Ctrl/Meta. Non-blocking — warn but still commit.
       const tbClash = terminalKeyBindings.find((b) =>
-        (b.trigger.ctrl || b.trigger.meta) &&
+        (b.trigger.ctrl || b.trigger.meta) && !b.trigger.alt &&
         b.trigger.code === newBinding.code &&
         b.trigger.shift === newBinding.shift
       )
@@ -179,7 +180,7 @@ export function SettingsPanel(): JSX.Element {
   function terminalClashLabelForHotkey(id: HotkeyId): string | null {
     const h = effectiveHotkeys[id]
     const clash = terminalKeyBindings.find((b) =>
-      (b.trigger.ctrl || b.trigger.meta) &&
+      (b.trigger.ctrl || b.trigger.meta) && !b.trigger.alt &&
       b.trigger.code === h.code &&
       b.trigger.shift === h.shift
     )

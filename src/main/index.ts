@@ -2,7 +2,7 @@ import { app, BrowserWindow, screen } from 'electron'
 import './e2eIsolation'
 import { join } from 'path'
 import { readFileSync } from 'fs'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { electronApp, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { initUpdater } from './updater'
 import { BrowserViewManager } from './browser/BrowserViewManager'
@@ -197,9 +197,11 @@ if (!gotTheLock) {
 
     // F12 opens DevTools in both dev and packaged builds
     app.on('browser-window-created', (_, window) => {
-      optimizer.watchWindowShortcuts(window)
+      // Do not use @electron-toolkit/utils' watchWindowShortcuts here. In a
+      // packaged build it prevents Ctrl+R in before-input-event, which stops
+      // terminal PTYs from receiving the control byte used by dotnet watch.
       window.webContents.on('before-input-event', (event, input) => {
-        if (input.key === 'F12') {
+        if (input.type === 'keyDown' && input.key === 'F12' && !input.isAutoRepeat) {
           window.webContents.toggleDevTools()
           event.preventDefault()
         }

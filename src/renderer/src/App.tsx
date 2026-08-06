@@ -48,12 +48,15 @@ function useGlobalKeyboard() {
     }
 
     function handler(e: KeyboardEvent) {
-      if (!e.ctrlKey && !e.metaKey) {
-        if (e.key === 'Escape') closeOverlays()
+      if (e.altKey || (!e.ctrlKey && !e.metaKey)) {
+        if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Escape') closeOverlays()
         return
       }
       const fn = dispatch[eventKey(e)]
-      if (fn) { e.preventDefault(); fn() }
+      if (fn) {
+        e.preventDefault()
+        if (!e.repeat) fn()
+      }
     }
 
     window.addEventListener('keydown', handler)

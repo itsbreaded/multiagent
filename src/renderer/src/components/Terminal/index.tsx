@@ -305,7 +305,10 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         }
       }
 
-      const mod = e.ctrlKey || e.metaKey
+      // App hotkeys are Ctrl/Meta bindings, never Alt bindings. Keeping Alt
+      // out here is important for AltGr layouts, which report Ctrl+Alt for
+      // ordinary characters and must not accidentally open a tab or pane.
+      const mod = (e.ctrlKey || e.metaKey) && !e.altKey
       const store = usePanesStore.getState()
 
       // Step 3 — Global app shortcuts (HotkeyId). Read overrides at call time
@@ -324,10 +327,13 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           [hotkeyKey(hotkeys.toggleSidebar)]:   () => store.toggleSidebar(),
         }
         const fn = dispatch[eventKey(e)]
-        if (fn) { fn(); return stop() }
+        if (fn) {
+          if (!e.repeat) fn()
+          return stop()
+        }
       }
 
-      if (!mod && !e.shiftKey && e.code === 'Escape') {
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Escape') {
         if (store.sessionBrowserOpen || store.commandPaletteOpen) { store.closeOverlays(); return stop() }
       }
 

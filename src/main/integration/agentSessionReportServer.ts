@@ -59,19 +59,16 @@ export class AgentSessionReportServer {
   start(): boolean {
     if (this.server) return true
     this.server = http.createServer((req, res) => this.handle(req, res))
-    // Synchronous listen on 127.0.0.1 only. If the OS cannot assign a port, fail closed
-    // (the feature degrades to phase-2 filesystem linking for Claude).
-    let assigned = false
+    // Listen on 127.0.0.1 only. If the OS cannot assign a port, fail closed (the feature
+    // degrades to phase-2 filesystem linking for Claude).
     this.server.listen(0, '127.0.0.1', () => {
       const addr = this.server?.address()
       this._port = addr && typeof addr === 'object' ? addr.port : null
-      assigned = true
     })
     this.server.on('error', (err) => {
       console.error('[MultiAgent] agent session report server error:', err)
       this.stop()
     })
-    void assigned
     return true
   }
 

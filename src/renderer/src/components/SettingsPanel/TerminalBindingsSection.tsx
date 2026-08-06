@@ -145,7 +145,7 @@ export function TerminalBindingsSection(): JSX.Element {
 
   // --- Clash helpers (computed per render) ----------------------------------
   function appHotkeyClash(t: Trigger): { id: HotkeyId; label: string } | null {
-    if (!t.ctrl && !t.meta) return null // app hotkeys require Ctrl/Meta; Alt-only combos can't clash
+    if ((!t.ctrl && !t.meta) || t.alt) return null // app hotkeys require Ctrl/Meta without Alt
     for (const id of Object.keys(effectiveHotkeys) as HotkeyId[]) {
       const h = effectiveHotkeys[id]
       if (h.code === t.code && h.shift === t.shift) {

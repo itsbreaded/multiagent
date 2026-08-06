@@ -20,8 +20,8 @@ describe('getHotkeys', () => {
   })
 })
 
-function ke(code: string, opts: Partial<Pick<KeyboardEvent, 'shiftKey' | 'ctrlKey' | 'metaKey'>>): KeyboardEvent {
-  return { code, shiftKey: false, ctrlKey: false, metaKey: false, ...opts } as unknown as KeyboardEvent
+function ke(code: string, opts: Partial<Pick<KeyboardEvent, 'shiftKey' | 'ctrlKey' | 'altKey' | 'metaKey'>>): KeyboardEvent {
+  return { code, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, ...opts } as unknown as KeyboardEvent
 }
 
 describe('codeToDisplayKey', () => {
@@ -55,6 +55,9 @@ describe('matches', () => {
   })
   it('does not match when shift differs', () => {
     expect(matches(ke('KeyW', { ctrlKey: true, shiftKey: true }), DEFAULT_HOTKEYS.closeTab)).toBe(false)
+  })
+  it('does not match when Alt is also held', () => {
+    expect(matches(ke('KeyW', { ctrlKey: true, altKey: true }), DEFAULT_HOTKEYS.closeTab)).toBe(false)
   })
 })
 

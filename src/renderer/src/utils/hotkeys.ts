@@ -1,4 +1,5 @@
-// Single source of truth for all keyboard shortcuts.
+// Single source of truth for all keyboard shortcuts. App hotkeys use Ctrl/Meta
+// plus optional Shift; Alt is reserved for terminal bindings and AltGr input.
 // Consumers read display strings for tooltips/labels, and use matches() for handling.
 
 export interface Hotkey {
@@ -66,6 +67,7 @@ export function matches(e: KeyboardEvent, hotkey: Hotkey): boolean {
   return (
     e.code === hotkey.code &&
     e.shiftKey === hotkey.shift &&
+    !e.altKey &&
     (e.ctrlKey || e.metaKey)
   )
 }
