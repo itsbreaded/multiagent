@@ -50,6 +50,7 @@ describe('PtyManager — worker crash fanout (spec 034)', () => {
     manager = new PtyManager()
     worker = lastWorker.current!
     expect(worker).toBeDefined()
+    worker.emit('message', { type: 'host-ready' })
   })
 
   afterEach(() => {
@@ -162,22 +163,52 @@ describe('PtyManager — worker crash fanout (spec 034)', () => {
     expect(exits).toHaveLength(0)
   })
 
-  it('post-crash createDeferred emits error on the next tick and leaves no silent entry', async () => {
+  it('post-crash createDeferred fails synchronously and cannot return a dead id', async () => {
     worker.exitCode = 1
     worker.emit('exit', 1)
 
-    const errors: Array<[string, string]> = []
-    manager.on('error', (id, err: Error) => errors.push([id, err.message]))
+    expect(() => manager.createDeferred(REAL_CWD, ['powershell.exe'])).toThrow('not running')
+    expect(worker.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'spawn' }))
+  })
 
-    const newId = manager.createDeferred(REAL_CWD, ['powershell.exe'])
-    // The error is emitted via setImmediate.
+  it('emits one host incident and recovers after the replacement announces readiness', async () => {
+    const id = manager.createDeferred(REAL_CWD, ['powershell.exe'])
     await flushImmediate()
+    const failures: Array<{ affectedPtyIds: string[]; unreadyPtyIds: string[] }> = []
+    const recovered: string[] = []
+    manager.on('host-failure', (event) => failures.push(event))
+    manager.on('host-recovered', ({ incidentId }) => recovered.push(incidentId))
 
-    expect(errors).toHaveLength(1)
-    expect(errors[0][0]).toBe(newId)
-    expect(errors[0][1]).toContain('not running')
-    // No spawn was sent to the dead worker.
-    expect(worker.send).not.toHaveBeenCalled()
+    worker.exitCode = 42
+    worker.emit('exit', 42)
+
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toMatchObject({ affectedPtyIds: [id], unreadyPtyIds: [id] })
+    const replacement = lastWorker.current!
+    expect(replacement).not.toBe(worker)
+    replacement.emit('message', { type: 'host-ready' })
+    await manager.waitForHost()
+    expect(recovered).toHaveLength(1)
+  })
+
+  it('rejects host waiters and does not retry when replacement startup fails', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const hostFailed: unknown[] = []
+    const recoveryFailed: unknown[] = []
+    manager.on('host-failure', (event) => hostFailed.push(event))
+    manager.on('host-recovery-failed', (event) => recoveryFailed.push(event))
+    worker.exitCode = 1
+    worker.emit('exit', 1)
+    const waiter = manager.waitForHost()
+    const replacement = lastWorker.current!
+    replacement.emit('error', new Error('spawn ENOENT'))
+
+    await expect(waiter).rejects.toThrow('not running')
+    expect(hostFailed).toHaveLength(1)
+    expect(recoveryFailed).toHaveLength(1)
+    expect(() => manager.createDeferred(REAL_CWD, ['powershell.exe'])).toThrow('not running')
+    expect(log.mock.calls.filter(([message]) => String(message).includes('terminal host failure'))).toHaveLength(1)
+    log.mockRestore()
   })
 
   it('per-pty exit message (normal worker message) still emits a single exit and cleans that id only', async () => {

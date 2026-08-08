@@ -140,6 +140,54 @@ export function markLeafExitedByPtyId(
 }
 
 /**
+ * Clear every pane whose PTY belonged to a failed terminal host generation.
+ * This is deliberately separate from normal per-process exit handling: shells
+ * also lose their PTY, and an unready new-agent launch must not become a
+ * resumable identity by accident.
+ */
+export function markLeavesForTerminalHostFailure(
+  node: PaneNode,
+  failure: {
+    incidentId: string
+    code: number | null
+    affectedPtyIds: readonly string[]
+    unreadyNewAgentPtyIds: readonly string[]
+    state?: 'recovering' | 'failed'
+    at: number
+  },
+): PaneNode {
+  const affected = new Set(failure.affectedPtyIds)
+  const unreadyNew = new Set(failure.unreadyNewAgentPtyIds)
+  if (node.type === 'leaf') {
+    if (!node.ptyId || !affected.has(node.ptyId)) return node
+    const newLaunchWithoutProcess = node.paneType === 'agent' && unreadyNew.has(node.ptyId)
+    const action = node.paneType === 'shell' ? 'shell' : (newLaunchWithoutProcess || !node.sessionId ? 'new' : 'resume')
+    const next: PaneLeaf = {
+      ...node,
+      ptyId: undefined,
+      terminalHostRecovery: { incidentId: failure.incidentId, state: failure.state ?? 'recovering', action },
+    }
+    if (node.paneType === 'agent' && action === 'new') {
+      next.sessionId = undefined
+      next.sessionDetectionState = 'failed'
+      next.sessionDetectionStartedAt = undefined
+      next.sessionDetectionCwd = undefined
+      next.sessionDetectionError = 'Terminal host failed before the new session was established'
+      next.resumeError = 'Terminal host failed before the new session was established'
+      next.agentDisconnected = undefined
+    } else if (node.paneType === 'agent') {
+      next.agentDisconnected = { exitCode: failure.code, at: failure.at }
+      next.resumeError = undefined
+      next.sessionDetectionError = undefined
+    }
+    return next
+  }
+  const first = markLeavesForTerminalHostFailure(node.first, failure)
+  const second = markLeavesForTerminalHostFailure(node.second, failure)
+  return first === node.first && second === node.second ? node : { ...node, first, second }
+}
+
+/**
  * Walk the tree rewriting every leaf cwd / sessionDetectionCwd through the repair
  * mapping. Returns the updated root plus a `changed` flag so callers can skip
  * no-op updates. Used by sessions:repair-cwd + layout:cwd-repaired.

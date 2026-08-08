@@ -16,6 +16,7 @@ import { createDirectPtyDataHandler } from '../../terminal/ptyData'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
+import { ui } from '../../styles/theme'
 import { createShellPty } from './createShellPty'
 
 const XTERM_THEME = {
@@ -40,6 +41,16 @@ const XTERM_THEME = {
   brightMagenta: '#c586c0',
   brightCyan: '#4ec9b0',
   brightWhite: '#e2e4e6',
+}
+
+const recoveryButtonStyle: React.CSSProperties = {
+  backgroundColor: ui.color.control,
+  border: `1px solid ${ui.color.border}`,
+  color: ui.color.text,
+  borderRadius: ui.radius.sm,
+  padding: '4px 8px',
+  fontSize: 11,
+  cursor: 'pointer',
 }
 
 const RESIZE_COL_DEBOUNCE_MS = 100
@@ -407,7 +418,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
   // extracted into createShellPty.ts so cancel-kill and retry-unblock are
   // unit-testable without xterm.
   useEffect(() => {
-    if (status === 'mounting' || pane.paneType !== 'shell' || pane.ptyId) return
+    if (status === 'mounting' || pane.paneType !== 'shell' || pane.ptyId || pane.terminalHostRecovery) return
     if (shellCreatePaneRef.current === pane.id) return
 
     shellCreatePaneRef.current = pane.id
@@ -434,14 +445,25 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     })
     return () => {
       handle.cancel()
+      // A host failure clears pane.ptyId while this effect is mounted. Release
+      // the same-pane guard so the recovered host can create a fresh shell.
+      if (shellCreatePaneRef.current === pane.id) shellCreatePaneRef.current = null
     }
-  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, setPtyId, isMounting])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.cwd, pane.terminalHostRecovery, setPtyId, isMounting])
 
   // Effect 3: connect to the PTY once a ptyId is available
   useEffect(() => {
     const xterm = xtermRef.current
     if (!xterm || status === 'mounting') return
     const terminal: XTerm = xterm
+
+    if (pane.terminalHostRecovery) {
+      setStatus(pane.terminalHostRecovery.state === 'failed' ? 'error' : 'ready')
+      setErrorMsg(pane.terminalHostRecovery.state === 'failed'
+        ? 'Terminal host recovery failed. Restart the application or retry this pane.'
+        : 'Terminal host unavailable. Recovering this pane…')
+      return
+    }
 
     if (pane.paneType === 'agent' && !pane.ptyId && pane.agentDisconnected) {
       setStatus('ready')
@@ -596,7 +618,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       // PTYs are killed explicitly by closePane() in the panes store.
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, isMounting])
+  }, [pane.id, pane.ptyId, pane.paneType, pane.agentDisconnected, pane.resumeError, pane.sessionDetectionError, pane.terminalHostRecovery, isMounting])
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -616,6 +638,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       ? 'Exited normally'
       : `Exited with code ${pane.agentDisconnected.exitCode ?? 'unknown'}`
     : ''
+  const hostRecovery = pane.terminalHostRecovery
 
   return (
     <div
@@ -630,7 +653,38 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       onContextMenu={onContextMenu}
       onClick={() => contextMenu && setContextMenu(null)}
     >
-      {status === 'connecting' && (
+      {hostRecovery && (
+        <div
+          style={{
+            position: 'absolute', inset: 0, zIndex: 21,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16, backgroundColor: 'rgba(14, 16, 17, 0.82)',
+            color: hostRecovery.state === 'failed' ? ui.color.danger : ui.color.textMuted,
+            fontSize: 12, textAlign: 'center',
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, maxWidth: 420 }}>
+            <span>
+              {hostRecovery.state === 'failed'
+                ? 'Terminal host recovery failed. This pane has no live process.'
+                : 'Terminal host unavailable. This pane will reconnect after recovery.'}
+            </span>
+            {hostRecovery.state === 'failed' && pane.paneType === 'agent' && pane.sessionId && (
+              <button type="button" onClick={() => { void resumeAgentPane(pane.id) }} style={recoveryButtonStyle}>
+                Retry resume
+              </button>
+            )}
+            {hostRecovery.state === 'failed' && pane.paneType === 'agent' && !pane.sessionId && (
+              <button type="button" onClick={() => { void startNewAgentInPane(pane.id) }} style={recoveryButtonStyle}>
+                Start new session
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {status === 'connecting' && !hostRecovery && (
         <div style={{
           position: 'absolute', inset: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -640,7 +694,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           {pane.paneType === 'agent' ? `Starting ${agentLabel(pane.agentKind ?? 'claude')} session...` : 'Connecting...'}
         </div>
       )}
-      {status === 'error' && errorMsg && (
+      {status === 'error' && errorMsg && !hostRecovery && (
         <div style={{
           position: 'absolute', top: 8, left: 8, right: 8,
           padding: '6px 8px', backgroundColor: '#1e1010',

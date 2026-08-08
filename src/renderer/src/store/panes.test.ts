@@ -763,6 +763,72 @@ describe('usePanesStore — identity-preserving pane patches', () => {
     expect(after.find((tab) => tab.id === shellTabId)).toBe(before.find((tab) => tab.id === shellTabId))
     expect(after.find((tab) => tab.id === agentTabId)).not.toBe(before.find((tab) => tab.id === agentTabId))
   })
+
+  it('host failure clears shell and agent PTYs while retaining known identity', () => {
+    const shell = makeLeaf('C:\\shell')
+    shell.ptyId = 'host-shell'
+    const known = makeLeaf('C:\\agent', 'agent', 'claude')
+    known.ptyId = 'host-known'
+    known.sessionId = 'session-known'
+    const pending = makeLeaf('C:\\pending', 'agent', 'codex')
+    pending.ptyId = 'host-pending'
+    pending.sessionId = 'speculative'
+    const tabId = plantTab(makeSplit('vertical', shell, makeSplit('horizontal', known, pending)))
+
+    usePanesStore.getState().handleTerminalHostStatus({
+      state: 'recovering', incidentId: 'incident-1', code: 9,
+      affectedPtyIds: ['host-shell', 'host-known', 'host-pending'],
+      unreadyPtyIds: ['host-pending'], unreadyNewAgentPtyIds: ['host-pending'],
+    })
+
+    const root = tabRoot(tabId)!
+    expect(collectLeaves(root).map((leaf) => leaf.ptyId)).toEqual([undefined, undefined, undefined])
+    expect(usePanesStore.getState().findPaneInAnyTab(known.id)?.sessionId).toBe('session-known')
+    expect(usePanesStore.getState().findPaneInAnyTab(pending.id)?.sessionId).toBeUndefined()
+    expect(usePanesStore.getState().findPaneInAnyTab(shell.id)?.terminalHostRecovery?.action).toBe('shell')
+    expect(usePanesStore.getState().findPaneInAnyTab(known.id)?.terminalHostRecovery?.action).toBe('resume')
+    expect(usePanesStore.getState().findPaneInAnyTab(pending.id)?.terminalHostRecovery?.action).toBe('new')
+  })
+
+  it('does not let a primary renderer recover a detached tab runtime', () => {
+    const shell = makeLeaf('C:\\detached')
+    shell.ptyId = 'detached-pty'
+    const tabId = plantTab(shell)
+    usePanesStore.setState((s) => ({
+      tabs: s.tabs.map((tab) => tab.id === tabId ? { ...tab, detached: true } : tab),
+      isDetachedWindow: false,
+    }))
+
+    usePanesStore.getState().handleTerminalHostStatus({
+      state: 'recovering', incidentId: 'incident-detached', code: 1,
+      affectedPtyIds: ['detached-pty'], unreadyPtyIds: [], unreadyNewAgentPtyIds: [],
+    })
+    usePanesStore.getState().handleTerminalHostStatus({ state: 'recovered', incidentId: 'incident-detached' })
+
+    expect(usePanesStore.getState().findPaneInAnyTab(shell.id)?.terminalHostRecovery?.state).toBe('recovering')
+  })
+
+  it('resumes a known agent exactly once after the host recovers', async () => {
+    const agent = makeLeaf('C:\\agent', 'agent', 'claude')
+    agent.ptyId = 'lost-agent'
+    agent.sessionId = 'session-known'
+    plantTab(agent)
+    const invoke = vi.fn((channel: string) => channel === 'session:resume'
+      ? Promise.resolve({ ptyId: 'fresh-agent' })
+      : Promise.resolve(undefined))
+    Object.defineProperty(window, 'ipc', { configurable: true, value: { invoke } })
+
+    usePanesStore.getState().handleTerminalHostStatus({
+      state: 'recovering', incidentId: 'incident-agent', code: 1,
+      affectedPtyIds: ['lost-agent'], unreadyPtyIds: [], unreadyNewAgentPtyIds: [],
+    })
+    usePanesStore.getState().handleTerminalHostStatus({ state: 'recovered', incidentId: 'incident-agent' })
+
+    await vi.waitFor(() => {
+      expect(invoke.mock.calls.filter((call) => call[0] === 'session:resume')).toHaveLength(1)
+    })
+    expect(usePanesStore.getState().findPaneInAnyTab(agent.id)?.ptyId).toBe('fresh-agent')
+  })
 })
 
 describe('usePanesStore — agent status badge (spec 032)', () => {

@@ -107,6 +107,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   and scrub inherited Claude flags + `MULTIAGENT_*` vars. `buildEnv.test.ts` guards this.
 - **No flow control** in PTY output or the renderer pipeline — no coalesce/ack/pause/watermarks.
   `pty:data` is `seq=0`, synchronous `terminal.write`. Resize is one-way `send`, not `invoke`.
+- Terminal-host failure must clear every affected PTY id, allow only one replacement-host attempt
+  per incident, and preserve only verified agent session identity; see the recovery mechanism in
+  `docs/pty-and-terminals.md`.
 - Agent PTYs spawn at the fitted pane size via the `deferSpawn` handshake — never 80×24 then
   resize. Agent panes launch the agent command directly through a non-profile shell — no
   interactive-shell-then-type.

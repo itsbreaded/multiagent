@@ -21,6 +21,7 @@ type WorkerMessage =
   | { type: 'shutdown' }
 
 type ParentMessage =
+  | { type: 'host-ready' }
   | { type: 'data'; id: string; data: string }
   | { type: 'exit'; id: string; exitCode: number; signal?: number }
   | { type: 'ready'; id: string; pid: number | null; cwd: string; windowsPty?: WindowsPtyTraits }
@@ -113,6 +114,12 @@ process.on('message', (msg: WorkerMessage) => {
       break
     }
   }
+})
+
+// Loading node-pty and installing the IPC handler is the host startup boundary.
+// PTY `ready` messages remain per-process readiness and are intentionally separate.
+setImmediate(() => {
+  try { send({ type: 'host-ready' }) } catch { /* parent may have exited */ }
 })
 
 function finishShutdownIfReady(): void {

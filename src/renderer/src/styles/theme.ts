@@ -116,6 +116,10 @@ export const sidebarStyles = {
     textTransform: 'uppercase',
     letterSpacing: '0.08em',
     flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     textAlign: 'left',
   },
   sectionToggle: {

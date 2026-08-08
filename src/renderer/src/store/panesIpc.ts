@@ -1,9 +1,10 @@
-import type { AgentLifecycleEvent, CwdRepairMapping, FocusTarget, PaneLeaf, Tab } from '../../../shared/types'
+import type { AgentLifecycleEvent, CwdRepairMapping, FocusTarget, PaneLeaf, Tab, TerminalHostStatus } from '../../../shared/types'
 import { collectLeaves, findLeafByPtyId } from '../../../shared/paneTree'
 import { eventToState } from '../../../shared/agentStatus'
 import { PANE_DRAG_MIME } from '../utils/paneDrag'
 import { focusArming, LOCAL_REARM_MS } from './focusArming'
 import { clearPendingRemoteFocus, isSpawnInTabPayload, reportCurrentFocusTarget, usePanesStore } from './panes'
+import { isTerminalHostStatus } from './terminalHost'
 
 // Imported as a side effect by panes.ts only after the store is initialized; keep
 // store access inside wirePanesIpc/listener callbacks to preserve that ordering.
@@ -35,6 +36,34 @@ export function wirePanesIpc(): void {
     const code = typeof exitCode === 'number' ? exitCode : null
     usePanesStore.getState().markPtyExited(ptyId, code, typeof signal === 'number' ? signal : undefined)
   })
+
+  window.ipc.on('terminal-host:status', (value: unknown) => {
+    if (!value || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    const state = record.state
+    if (state !== 'recovering' && state !== 'recovered' && state !== 'failed') return
+    if (typeof record.incidentId !== 'string') return
+    if (state === 'recovered') {
+      usePanesStore.getState().handleTerminalHostStatus(record as unknown as TerminalHostStatus)
+      return
+    }
+    if (
+      (typeof record.code !== 'number' && record.code !== null) ||
+      !Array.isArray(record.affectedPtyIds) ||
+      !Array.isArray(record.unreadyPtyIds) ||
+      !Array.isArray(record.unreadyNewAgentPtyIds) ||
+      !record.affectedPtyIds.every((id) => typeof id === 'string') ||
+      !record.unreadyPtyIds.every((id) => typeof id === 'string') ||
+      !record.unreadyNewAgentPtyIds.every((id) => typeof id === 'string')
+    ) return
+    if (state === 'failed' && typeof record.message !== 'string') return
+    usePanesStore.getState().handleTerminalHostStatus(record as unknown as TerminalHostStatus)
+  })
+  void window.ipc.invoke('terminal-host:get-status').then((value) => {
+    if (isTerminalHostStatus(value) && value.state !== 'recovered') {
+      usePanesStore.getState().handleTerminalHostStatus(value)
+    }
+  }).catch(() => {})
 
   window.ipc.on('session:detected', (ptyId: unknown, agentKind: unknown, sessionId: unknown) => {
     if (typeof ptyId !== 'string' || (agentKind !== 'claude' && agentKind !== 'codex' && agentKind !== 'opencode') || typeof sessionId !== 'string') return

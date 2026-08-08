@@ -12,7 +12,7 @@ import { OpencodeSessionScanner } from '../sessions/OpencodeSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner, setAgentProviderSettings, setOpencodePluginPath } from '../sessions/SessionSpawner'
 import { detectProviderAvailability } from '../sessions/cliAvailability'
-import { PtyManager } from '../pty/PtyManager'
+import { PtyManager, type PtyHostFailure, type PtyHostRecoveryFailure } from '../pty/PtyManager'
 import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
 import { TerminalStatusScraper } from '../pty/terminalStatusScraper'
 import { AgentSessionReportServer } from '../integration/agentSessionReportServer'
@@ -24,7 +24,7 @@ import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, IdleAgentSuspensionSettings, McpSettings, ProviderAvailability, SessionSearchRequest } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, IdleAgentSuspensionSettings, McpSettings, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -198,6 +198,32 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     scraper: statusScraper,
   })
 
+  let currentTerminalHostStatus: TerminalHostStatus | null = null
+  function releaseHostPtys(failure: Pick<PtyHostFailure, 'affectedPtyIds'>): void {
+    for (const ptyId of failure.affectedPtyIds) {
+      windowManager.unroutePty(ptyId)
+      ptyOutputRouter.releasePty(ptyId)
+      ptyAgentKind.delete(ptyId)
+    }
+  }
+  ptyManager.on('host-failure', (failure: PtyHostFailure) => {
+    currentTerminalHostStatus = { state: 'recovering', ...failure }
+    windowManager.broadcastAll('terminal-host:status', currentTerminalHostStatus)
+    // Keep routes alive until the manager's per-PTY error/exit fanout has
+    // drained; otherwise a pending-spawn error would create a new buffer after
+    // the host cleanup had already released it.
+    queueMicrotask(() => releaseHostPtys(failure))
+  })
+  ptyManager.on('host-recovered', ({ incidentId }: { incidentId: string }) => {
+    windowManager.broadcastAll('terminal-host:status', { state: 'recovered', incidentId })
+    currentTerminalHostStatus = null
+  })
+  ptyManager.on('host-recovery-failed', (failure: PtyHostRecoveryFailure) => {
+    currentTerminalHostStatus = { state: 'failed', ...failure }
+    windowManager.broadcastAll('terminal-host:status', currentTerminalHostStatus)
+    queueMicrotask(() => releaseHostPtys(failure))
+  })
+
   // spec 047 phase 1 / phase 4: CLI-launched agent detection. The sweeper promotes a shell
   // pane when a claude/codex process becomes the foreground in its tree, and demotes it
   // back to a shell when the agent exits (hooks fire on start, not exit — the sweeper owns
@@ -228,6 +254,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       win.webContents.send('sessions:updated', index.getAll())
       win.webContents.send('window:maximized-changed', win.isMaximized())
       win.webContents.send('settings:idle-agent-suspension-changed', idleAgentSuspension)
+      if (currentTerminalHostStatus) {
+        win.webContents.send('terminal-host:status', currentTerminalHostStatus)
+      }
       if (win.isFocused()) {
         windowManager.broadcastAll('window:became-active', win.id)
         win.webContents.send('window:focus-state-request')
@@ -274,6 +303,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   }, 5000)
 
   // --- IPC handlers ---
+
+  registrar.handle('terminal-host:get-status', () => currentTerminalHostStatus)
 
   registrar.handle('sessions:search', (_e, query: string) => {
     try {
@@ -369,6 +400,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     // Ensure the report server port is assigned (hooks linking on) before spawning, so an
     // app-Codex pane gets MULTIAGENT_HOOK_PORT and links at start (spec 047 p4 race fix).
     await linkingApplyPromise
+    await ptyManager.waitForHost()
     const result = await spawner.spawnNew(agentKind, cwd)
     // spec 050: record the ptyId -> agentKind association so the scraper can gate its
     // detector on agentKind without PtyManager having to track it.
@@ -381,6 +413,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   registrar.handle('session:resume', async (e, agentKind, sessionId: string, cwd: string) => {
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     await linkingApplyPromise
+    await ptyManager.waitForHost()
     const result = await spawner.spawnResume(agentKind, sessionId, cwd)
     ptyAgentKind.set(result.ptyId, agentKind)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
@@ -388,7 +421,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return result
   })
 
-  registrar.handle('pty:create', (e, cwd: string, cols?: number, rows?: number) => {
+  registrar.handle('pty:create', async (e, cwd: string, cols?: number, rows?: number) => {
+    await ptyManager.waitForHost()
     const initialSize = {
       cols: typeof cols === 'number' && cols > 0 ? Math.floor(cols) : 80,
       rows: typeof rows === 'number' && rows > 0 ? Math.floor(rows) : 24,
@@ -693,6 +727,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win || win.isDestroyed()) return
     win.close()
+  })
+
+  registrar.handle('app:restart', () => {
+    app.relaunch()
+    app.quit()
   })
 
   registrar.handle('window:is-maximized', (e) => {

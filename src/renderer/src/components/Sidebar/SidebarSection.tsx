@@ -136,6 +136,7 @@ export function SidebarSection({
           />
         ) : (
           <button
+            title={title}
             onClick={() => {
               if (onTitleClick) onTitleClick()
               else setOpen((o) => !o)

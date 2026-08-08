@@ -429,11 +429,40 @@ test.describe('cold-start layout restore', () => {
       await page.getByTitle(/Command palette/).click()
       await page.keyboard.type('New Shell Pane')
       await page.keyboard.press('Enter')
-      await expect(page.locator('.xterm-rows')).toContainText('terminal error:', { timeout: 10_000 })
+      await expect(page.getByRole('status')).toContainText('Terminal host recovery failed', { timeout: 10_000 })
+      await expect(page.getByRole('button', { name: 'Restart MultiAgent' })).toBeVisible()
     } finally {
       await closeApp(app)
       await rename(hiddenWorkerPath, workerPath)
     }
+  })
+
+  test('recreates a shell PTY after one terminal-host failure', async () => {
+    test.setTimeout(60_000)
+    await closeApp(app)
+    await launchTestApp('Alpha', {
+      MULTIAGENT_E2E_KILL_PTY_WORKER_ONCE: '1',
+      MULTIAGENT_E2E_KILL_PTY_WORKER_AFTER_MS: '4000',
+    })
+
+    const { ptyId: oldPtyId } = await spawnShell(page, userDataDir)
+    const oldReady = await page.evaluate((id) => window.ipc.invoke('pty:get-ready', id), oldPtyId)
+    expect(oldReady).not.toBeNull()
+
+    const layoutPath = join(userDataDir, 'layout.json')
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: SavedTab[] }
+      const id = saved.tabs[0]?.rootNode?.ptyId
+      return typeof id === 'string' && id.length > 0 && id !== oldPtyId
+    }, { timeout: 20_000 }).toBeTruthy()
+
+    const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: SavedTab[] }
+    const replacementPtyId = saved.tabs[0]?.rootNode?.ptyId
+    expect(replacementPtyId).toBeTruthy()
+    if (!replacementPtyId) throw new Error('replacement PTY id was not persisted')
+    expect(replacementPtyId).not.toBe(oldPtyId)
+    await expect.poll(() => page.evaluate((id) => window.ipc.invoke('pty:get-ready', id), replacementPtyId)).not.toBeNull()
+    await expect(page.getByRole('button', { name: 'Restart MultiAgent' })).toHaveCount(0)
   })
 
   test('moves a closed agent pane back to Recent while a refresh is in flight', async () => {

@@ -7,6 +7,26 @@ export type UpdaterStatus =
   | { state: 'up-to-date' }
   | { state: 'error' }
 
+export type TerminalHostStatus =
+  | {
+      state: 'recovering'
+      incidentId: string
+      code: number | null
+      affectedPtyIds: string[]
+      unreadyPtyIds: string[]
+      unreadyNewAgentPtyIds: string[]
+    }
+  | { state: 'recovered'; incidentId: string }
+  | {
+      state: 'failed'
+      incidentId: string
+      code: number | null
+      message: string
+      affectedPtyIds: string[]
+      unreadyPtyIds: string[]
+      unreadyNewAgentPtyIds: string[]
+    }
+
 // Session status
 export type SessionStatus = 'live-attached' | 'resumable'
 
@@ -257,6 +277,11 @@ export interface PaneLeaf {
   cwd: string
   sessionId?: string    // set when paneType === 'agent'
   ptyId?: string        // set once PTY is created
+  terminalHostRecovery?: {
+    incidentId: string
+    state: 'recovering' | 'failed'
+    action: 'shell' | 'resume' | 'new'
+  }
   agentDisconnected?: {
     exitCode: number | null
     signal?: number
@@ -456,6 +481,10 @@ export interface IPCChannels {
   // Main notifies renderer when a PTY exits
   'pty:exit': (ptyId: string, exitCode: number | null, signal?: number) => void
 
+  // Main broadcasts one incident-wide host lifecycle status to every renderer.
+  'terminal-host:status': (status: TerminalHostStatus) => void
+  'terminal-host:get-status': () => TerminalHostStatus | null
+
   // Main pushes CWD changes to renderer (parsed from OSC 7 sequences)
   'pty:cwd': (ptyId: string, cwd: string) => void
 
@@ -552,6 +581,7 @@ export interface IPCChannels {
   'window:minimize': () => void
   'window:toggle-maximize': () => boolean
   'window:close': () => void
+  'app:restart': () => void
   'window:is-maximized': () => boolean
   'window:start-drag': () => void
   'window:snap-apply': (targetWindowId: number, side: 'left' | 'right' | 'top' | 'bottom') => void
@@ -648,6 +678,7 @@ export type InvokeChannels = ChannelSubset<
   | 'session:resume'
   | 'pty:create'
   | 'pty:get-ready'
+  | 'terminal-host:get-status'
   | 'pty:kill'
   | 'shell:open-folder'
   | 'shell:open-external'
@@ -684,6 +715,7 @@ export type InvokeChannels = ChannelSubset<
   | 'window:minimize'
   | 'window:toggle-maximize'
   | 'window:close'
+  | 'app:restart'
   | 'window:is-maximized'
   | 'window:start-drag'
   | 'window:snap-apply'
@@ -706,6 +738,7 @@ export type EventChannels = ChannelSubset<
   | 'pty:data'
   | 'pty:ready'
   | 'pty:exit'
+  | 'terminal-host:status'
   | 'pty:cwd'
   | 'session:detected'
   | 'session:detection-failed'

@@ -9,6 +9,7 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { SnapOverlay } from './components/SnapOverlay'
 import { DirPicker } from './components/DirPicker'
 import { UpdateBanner } from './components/UpdateBanner'
+import { TerminalHostRecoveryBanner } from './components/TerminalHostRecoveryBanner'
 import { startIdleAgentSuspensionCoordinator, usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { border } from './styles/theme'
@@ -289,6 +290,7 @@ export default function App(): JSX.Element {
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             <AppChrome />
             {!isDetachedWindow && <UpdateBanner />}
+            <TerminalHostRecoveryBanner />
             <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <PaneGrid />
             </div>
@@ -298,6 +300,7 @@ export default function App(): JSX.Element {
         <>
           <AppChrome />
           {!isDetachedWindow && <UpdateBanner />}
+          <TerminalHostRecoveryBanner />
 
           {/* Main content row */}
           <div

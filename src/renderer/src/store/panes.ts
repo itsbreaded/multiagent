@@ -1,9 +1,9 @@
 import { create } from 'zustand'
-import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection } from '../../../shared/types'
+import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection, TerminalHostStatus } from '../../../shared/types'
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
-  collectLeaves, markLeafExitedByPtyId,
+  collectLeaves, markLeafExitedByPtyId, markLeavesForTerminalHostFailure,
 } from '../../../shared/paneTree'
 import { eventToState } from '../../../shared/agentStatus'
 import { replaceCwdPrefix } from '../../../shared/cwdRepair'
@@ -120,6 +120,40 @@ function patchLeafInTabs(tabs: Tab[], paneId: string, patch: Partial<PaneLeaf>):
     return { ...tab, rootNode }
   })
   return changed ? next : null
+}
+
+function setHostRecoveryState(node: PaneNode, incidentId: string, state: 'recovering' | 'failed'): PaneNode {
+  if (node.type === 'leaf') {
+    if (node.terminalHostRecovery?.incidentId !== incidentId || node.terminalHostRecovery.state === state) return node
+    return { ...node, terminalHostRecovery: { ...node.terminalHostRecovery, state } }
+  }
+  const first = setHostRecoveryState(node.first, incidentId, state)
+  const second = setHostRecoveryState(node.second, incidentId, state)
+  return first === node.first && second === node.second ? node : { ...node, first, second }
+}
+
+function clearHostRecoveryState(node: PaneNode, incidentId: string): { node: PaneNode; resumePaneIds: string[] } {
+  if (node.type === 'leaf') {
+    const recovery = node.terminalHostRecovery
+    if (!recovery || recovery.incidentId !== incidentId) return { node, resumePaneIds: [] }
+    return {
+      node: { ...node, terminalHostRecovery: undefined },
+      resumePaneIds: recovery.action === 'resume' ? [node.id] : [],
+    }
+  }
+  const first = clearHostRecoveryState(node.first, incidentId)
+  const second = clearHostRecoveryState(node.second, incidentId)
+  if (first.node === node.first && second.node === node.second) {
+    return { node, resumePaneIds: [...first.resumePaneIds, ...second.resumePaneIds] }
+  }
+  return {
+    node: { ...node, first: first.node, second: second.node },
+    resumePaneIds: [...first.resumePaneIds, ...second.resumePaneIds],
+  }
+}
+
+function ownsRuntimeTab(isDetachedWindow: boolean, tab: Tab): boolean {
+  return isDetachedWindow || !tab.detached
 }
 
 /**
@@ -390,6 +424,7 @@ interface PanesStore {
   setPaneAgentStatus: (paneId: string, state: AgentStatusState | undefined) => void
   updatePane: (paneId: string, patch: Partial<PaneLeaf>) => void
   markPtyExited: (ptyId: string, exitCode: number | null, signal?: number) => void
+  handleTerminalHostStatus: (status: TerminalHostStatus) => void
   applyCwdRepair: (mapping: CwdRepairMapping) => void
 
   // Session / PTY actions (Phase 2)
@@ -492,6 +527,7 @@ async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: Agen
       agentDisconnected: undefined,
       resumeError: undefined,
       sessionDetectionError: undefined,
+      terminalHostRecovery: undefined,
     }
     if (result?.ptyId) patch.ptyId = result.ptyId
     if (typeof result?.detectionStartedAt === 'number') patch.sessionDetectionStartedAt = result.detectionStartedAt
@@ -543,6 +579,7 @@ async function resumeIntoPane(
         agentDisconnected: undefined,
         resumeError: undefined,
         sessionDetectionError: undefined,
+        terminalHostRecovery: undefined,
       })
     }
   } catch (err) {
@@ -1269,6 +1306,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         ptyId,
         agentDisconnected: undefined,
         resumeError: undefined,
+        terminalHostRecovery: undefined,
       })
       return tabs ? { tabs } : s
     })
@@ -1409,6 +1447,49 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
+  handleTerminalHostStatus: (status) => {
+    if (status.state === 'recovered') {
+      const resumePaneIds: string[] = []
+      set((s) => {
+        let changed = false
+        const tabs = s.tabs.map((tab) => {
+          if (!tab.rootNode || !ownsRuntimeTab(s.isDetachedWindow, tab)) return tab
+          const cleared = clearHostRecoveryState(tab.rootNode, status.incidentId)
+          if (cleared.node === tab.rootNode) return tab
+          changed = true
+          resumePaneIds.push(...cleared.resumePaneIds)
+          return { ...tab, rootNode: cleared.node }
+        })
+        return changed ? { tabs } : s
+      })
+      // Shell panes are picked up by Terminal's normal no-pty effect. Known
+      // agents must use the existing guarded resume path explicitly.
+      for (const paneId of resumePaneIds) void get().resumeAgentPane(paneId)
+      return
+    }
+
+    const at = Date.now()
+    set((s) => {
+      let changed = false
+      const tabs = s.tabs.map((tab) => {
+        if (!tab.rootNode) return tab
+        const transitioned = markLeavesForTerminalHostFailure(tab.rootNode, {
+          incidentId: status.incidentId,
+          code: status.code,
+          affectedPtyIds: status.affectedPtyIds,
+          unreadyNewAgentPtyIds: status.unreadyNewAgentPtyIds,
+          state: status.state,
+          at,
+        })
+        const rootNode = setHostRecoveryState(transitioned, status.incidentId, status.state)
+        if (rootNode === tab.rootNode) return tab
+        changed = true
+        return { ...tab, rootNode }
+      })
+      return changed ? { tabs } : s
+    })
+  },
+
   applyCwdRepair: (mapping) => {
     set((s) => {
       let changed = false
@@ -1499,6 +1580,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
           agentDisconnected: undefined,
           resumeError: undefined,
           sessionDetectionError: undefined,
+          terminalHostRecovery: undefined,
         })
         await resumeIntoPane(get, paneId, agentKind, sessionId, cwd, {
           extraFailurePatch: { agentDisconnected: pane.agentDisconnected },
@@ -1564,6 +1646,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       agentSuspension: undefined,
       agentDisconnected: undefined,
       resumeError: undefined,
+      terminalHostRecovery: undefined,
       sessionDetectionState: 'pending',
       sessionDetectionStartedAt: Date.now(),
       sessionDetectionCwd: cwd,
@@ -1619,6 +1702,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
           const migrated: PaneLeaf = legacy.paneType === 'claude'
             ? { ...legacy, paneType: 'agent', agentKind: 'claude' }
             : { ...node, agentKind: node.paneType === 'agent' ? (node.agentKind ?? 'claude') : undefined }
+          migrated.terminalHostRecovery = undefined
           if (migrated.paneType === 'agent' && !migrated.sessionId) {
             const isRecoverablePending =
               migrated.sessionDetectionState === 'pending' &&

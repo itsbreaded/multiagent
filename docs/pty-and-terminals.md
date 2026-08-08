@@ -281,3 +281,27 @@ v1 wires app-spawned Codex panes only. CLI-launched Codex in a shell pane is pro
 runtime by the sweeper (see `agentProcessSweeper.ts`), whose private `emitted` map holds the
 transition — wiring the detector on sweeper promotion is a follow-up, not v1. Claude is empty
 in the pattern table today (StopFailure covers its error path).
+
+## Terminal-host failure recovery (spec 064)
+
+Shell and agent panes intentionally share one worker, so a worker failure invalidates every
+reservation owned by that worker generation. `PtyManager` sends a host-level `host-ready` handshake
+separately from per-PTY `ready` messages, binds child-process events to a generation token, and
+classifies one incident for an unexpected error/exit. It snapshots pending, spawned, and unready
+reservations, clears their runtime maps, emits the existing per-PTY failure signals, and broadcasts
+one typed host status to every renderer. Old PTY ids are never sent to a replacement worker.
+
+There is one automatic replacement-worker attempt. New shell, new-agent, and resume requests wait
+for the replacement host while it is starting; a request after failed recovery rejects before
+returning a new id. A replacement host only restores the host process. The renderer's runtime owner
+recreates affected shells at their saved directories and resumes agents with an established
+`sessionId`; it never reattaches a dead shell or agent process. Primary renderers retain detached-tab
+metadata but only the detached owner starts that tab's automatic retry.
+
+An unready new-agent launch is not evidence that its session exists. The renderer removes its
+speculative launch-time id and detection marker and leaves an explicit start-new placeholder. A
+known session id from an existing or established agent is retained. Host failure state is in-memory
+and never serialized; layout persistence still strips all PTY ids, so restart performs the ordinary
+known-agent resume and shell recreation paths. A failed replacement shows a global restart action
+and stops pane-level connecting loops. Diagnostics record only the incident id and host code, never
+terminal bytes, transcript content, credentials, environment, or command arguments.

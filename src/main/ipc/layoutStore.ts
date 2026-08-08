@@ -169,10 +169,11 @@ function normalizeNodeForLayout(node: unknown): unknown {
   if (!node || typeof node !== 'object') return node
   const record = node as Record<string, unknown>
   if (record['type'] === 'leaf') {
-    if (record['promotedFromShell'] === true) {
-      const promoted = { ...record }
-      delete promoted['promotedFromShell']
-      delete promoted['agentStatus'] // spec 032: in-memory only, never serialized
+      if (record['promotedFromShell'] === true) {
+        const promoted = { ...record }
+        delete promoted['promotedFromShell']
+        delete promoted['agentStatus'] // spec 032: in-memory only, never serialized
+        delete promoted['terminalHostRecovery'] // spec 064: in-memory only, never serialized
       if (!promoted['sessionId']) {
         // Phase-1-only promotion (no session linked): persist as the original shell pane.
         promoted['paneType'] = 'shell'
@@ -190,12 +191,19 @@ function normalizeNodeForLayout(node: unknown): unknown {
       const cleaned = { ...record }
       delete cleaned['promotedFromShell']
       delete cleaned['agentStatus'] // spec 032: in-memory only, never serialized
+      delete cleaned['terminalHostRecovery'] // spec 064: in-memory only, never serialized
       return cleaned
     }
     // spec 032: a native (non-promoted) agent leaf still must not persist agentStatus.
     if ('agentStatus' in record) {
       const cleaned = { ...record }
       delete cleaned['agentStatus']
+      delete cleaned['terminalHostRecovery'] // spec 064: in-memory only, never serialized
+      return cleaned
+    }
+    if ('terminalHostRecovery' in record) {
+      const cleaned = { ...record }
+      delete cleaned['terminalHostRecovery']
       return cleaned
     }
     return record

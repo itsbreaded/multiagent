@@ -43,6 +43,7 @@ export class SessionSpawner {
       undefined, // initialSize: overridden by renderer's first pty:resize (see deferSpawn)
       false,     // allowCwdFallback: assertUsableAgentCwd already validated
       true,      // deferSpawn: wait for fitted size before spawning CLI
+      'new-agent',
     )
     return { ptyId, sessionId, detectionStartedAt: startedAt }
   }
@@ -56,6 +57,7 @@ export class SessionSpawner {
       undefined, // initialSize: overridden by renderer's first pty:resize (see deferSpawn)
       false,     // allowCwdFallback
       true,      // deferSpawn: wait for fitted size before spawning CLI
+      'resume-agent',
     )
     return { ptyId }
   }

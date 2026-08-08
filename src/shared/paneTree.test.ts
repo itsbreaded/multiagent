@@ -13,6 +13,7 @@ import {
   collectLeafIds,
   collectLeaves,
   markLeafExitedByPtyId,
+  markLeavesForTerminalHostFailure,
   findLeafBySessionId,
   findLeafByPtyId,
 } from './paneTree'
@@ -59,6 +60,38 @@ describe('findLeaf', () => {
   })
   it('returns null when absent', () => {
     expect(findLeaf(tree, 'nope')).toBeNull()
+  })
+})
+
+describe('markLeavesForTerminalHostFailure', () => {
+  it('clears shells and agents, preserves known identity, and discards an unready new id', () => {
+    const shell = L('shell', { ptyId: 'pty-shell' })
+    const known = L('known', { paneType: 'agent', agentKind: 'claude', ptyId: 'pty-known', sessionId: 'session-1' })
+    const pending = L('pending', { paneType: 'agent', agentKind: 'codex', ptyId: 'pty-pending', sessionId: 'speculative' })
+    const tree = makeSplit('vertical', shell, makeSplit('horizontal', known, pending))
+    const next = markLeavesForTerminalHostFailure(tree, {
+      incidentId: 'incident-1',
+      code: 42,
+      affectedPtyIds: ['pty-shell', 'pty-known', 'pty-pending'],
+      unreadyNewAgentPtyIds: ['pty-pending'],
+      at: 100,
+    })
+    expect(findLeaf(next, 'shell')).toMatchObject({ ptyId: undefined, terminalHostRecovery: { action: 'shell' } })
+    expect(findLeaf(next, 'known')).toMatchObject({ ptyId: undefined, sessionId: 'session-1', terminalHostRecovery: { action: 'resume' } })
+    expect(findLeaf(next, 'pending')).toMatchObject({
+      ptyId: undefined,
+      sessionId: undefined,
+      sessionDetectionState: 'failed',
+      terminalHostRecovery: { action: 'new' },
+    })
+  })
+
+  it('leaves unrelated and already-invalidated PTYs unchanged', () => {
+    const unrelated = L('unrelated', { ptyId: 'other' })
+    const next = markLeavesForTerminalHostFailure(unrelated, {
+      incidentId: 'incident-1', code: 1, affectedPtyIds: ['missing'], unreadyNewAgentPtyIds: [], at: 1,
+    })
+    expect(next).toBe(unrelated)
   })
 })
 
