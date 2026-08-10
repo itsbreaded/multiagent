@@ -1,6 +1,6 @@
 {
   "name": "multiagent",
-  "version": "0.3.40",
+  "version": "0.3.41",
   "description": "Multiagent",
   "main": "out/main/index.js",
   "scripts": {

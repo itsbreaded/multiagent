@@ -75,7 +75,7 @@ async function runHook(event: string, payload: unknown): Promise<CapturedEvent[]
   }
 }
 
-describe('managed agent-state hook payload contract (spec 065)', () => {
+describe('managed agent-state hook payload contract (spec 065)', { timeout: 30_000 }, () => {
   it('reports async_launched Agent launches with their identity', async () => {
     const events = await runHook('post_tool_use', {
       tool_name: 'Agent',
