@@ -186,6 +186,22 @@ survives shell parsing. The script is chosen by `process.platform` at install ti
 **Every failure path exits 0 silently.** A hook must never block or break the agent's
 session start.
 
+### Background subagent lifecycle events (spec 065)
+
+Claude's managed PostToolUse hook recognizes an Agent or Task launch carrying
+async_launched or run_in_background. It reports bg_subagent_started with the
+launch-side agentId. Claude's managed SubagentStop hook reports
+bg_subagent_completed with the completed subagent's agent_id as agentId.
+Both events use the same localhost report server and parent-pane pty
+attribution as the ordinary lifecycle events.
+
+The report server accepts these two events only for Claude. The renderer keeps
+the active count and known identities on the in-memory agent status; identity
+tracking is not persisted or displayed. A completion with no matching identity
+is ignored so a missing or malformed signal leaves the pane protected rather
+than falsely idle. The shell and PowerShell assets remain self-contained and
+must never block the agent.
+
 ### 5. Main links the id to the pane
 
 When the report server's `onReport` fires, main does:
@@ -288,7 +304,7 @@ from the toggle. With the toggle **on** (default), `ManagedHookController`
 
 | File | What | Surgery |
 |---|---|---|
-| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matcher `permission_prompt`), `Stop`, `StopFailure` | `managedHooks.ts` (JSON) |
+| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matcher `permission_prompt`), `Stop`, `StopFailure`, `SubagentStop` | `managedHooks.ts` (JSON) |
 | `~/.codex/hooks.json` | Codex `SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PermissionRequest` (matcher `.*`), `Stop` | `managedHooks.ts` (same JSON shape) |
 | `~/.codex/config.toml` | `[features] hooks = true` | `codexConfigFeatures.ts` (line-based TOML) |
 

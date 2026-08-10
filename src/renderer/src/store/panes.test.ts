@@ -884,6 +884,19 @@ describe('usePanesStore — agent status badge (spec 032)', () => {
     handler('pty-missing', 'stop', undefined, 'turn-x')
     expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
   })
+
+  it('forwards the optional agent identity to background-subagent reducer events', () => {
+    const pane = makeLeaf('C:\\work', 'agent', 'claude')
+    pane.ptyId = 'pty-bg'
+    plantTab(pane)
+    const handler = paneAgentEventHandler!
+    handler('pty-bg', 'bg_subagent_started', 'background subagent', 'turn-1', 'sub-1')
+    handler('pty-bg', 'stop', undefined, 'turn-1')
+    const held = usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus
+    expect(held).toMatchObject({ status: 'working', activeBackgroundSubagents: 1, activeBackgroundSubagentIds: ['sub-1'] })
+    handler('pty-bg', 'bg_subagent_completed', undefined, 'turn-1', 'sub-1')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus).toMatchObject({ status: 'idle', event: 'stop' })
+  })
 })
 
 describe('usePanesStore — CLI agent promotion/demotion (spec 047)', () => {

@@ -139,10 +139,10 @@ describe('ManagedHookController (IO)', () => {
       }
       return out
     }
-    // Claude: 7 events; Codex: 5 events (no Notification/StopFailure/PostToolUse -- the
+    // Claude: 8 events; Codex: 5 events (no Notification/StopFailure/PostToolUse -- the
     // last is intentionally omitted: pre/post tool use are reducer-identical, so PostToolUse
     // changes no badge state and only adds Codex TUI "running" noise; see spec 032).
-    expect(ourCmds(claude)).toHaveLength(7)
+    expect(ourCmds(claude)).toHaveLength(8)
     expect(ourCmds(codex)).toHaveLength(5)
     // SessionStart stays arg-less (byte-identical to 047, preserves Codex trust). Build the
     // expected command via the same helper the controller uses (defaults to process.platform),
@@ -153,6 +153,9 @@ describe('ManagedHookController (IO)', () => {
     const claudePre = claude.hooks.PreToolUse.find((g: { hooks: { command: string }[] }) => g.hooks.some((h) => h.command.includes(HOOK_SENTINEL)))!.hooks[0].command
     expect(claudePre).toContain(base)
     expect(claudePre).toContain(' claude pre_tool_use')
+    const claudeSubagentStop = claude.hooks.SubagentStop.find((g: { hooks: { command: string }[] }) =>
+      g.hooks.some((h) => h.command.includes(HOOK_SENTINEL)))!.hooks[0].command
+    expect(claudeSubagentStop).toContain(' claude bg_subagent_completed')
     // Claude Notification uses the permission_prompt matcher; Codex PermissionRequest exists.
     expect(claude.hooks.Notification[0].matcher).toBe('permission_prompt')
     expect(codex.hooks.PermissionRequest).toBeDefined()
@@ -160,6 +163,8 @@ describe('ManagedHookController (IO)', () => {
     // Codex has no Notification / StopFailure.
     expect(codex.hooks.Notification).toBeUndefined()
     expect(codex.hooks.StopFailure).toBeUndefined()
+    expect(codex.hooks.PostToolUse).toBeUndefined()
+    expect(codex.hooks.SubagentStop).toBeUndefined()
     // Uninstall removes every managed entry across all event keys; unrelated hooks remain.
     ctrl.uninstall()
     expect(hasManagedHook(JSON.parse(fs.readFileSync(f.settingsPath, 'utf8')))).toBe(false)

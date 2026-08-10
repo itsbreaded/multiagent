@@ -190,7 +190,13 @@ describe('markLeafExitedByPtyId', () => {
   const disconnected = { exitCode: 1, signal: 9, at: 123 }
 
   it('marks an agent and preserves its sibling', () => {
-    const agent = L('A', { paneType: 'agent', agentKind: 'claude', ptyId: 'pty-1', sessionId: 's-1' })
+    const agent = L('A', {
+      paneType: 'agent',
+      agentKind: 'claude',
+      ptyId: 'pty-1',
+      sessionId: 's-1',
+      agentStatus: { status: 'working', activeBackgroundSubagents: 1, activeBackgroundSubagentIds: ['sub-1'], updatedAt: 1 },
+    })
     const sibling = L('B')
     const tree = makeSplit('vertical', agent, sibling)
     const result = markLeafExitedByPtyId(tree, 'pty-1', disconnected)
@@ -198,7 +204,7 @@ describe('markLeafExitedByPtyId', () => {
     expect(result.node).not.toBe(tree)
     expect(result.node.type).toBe('split')
     if (result.node.type === 'split') expect(result.node.second).toBe(sibling)
-    expect(findLeaf(result.node, 'A')).toMatchObject({ ptyId: undefined, agentDisconnected: disconnected })
+    expect(findLeaf(result.node, 'A')).toMatchObject({ ptyId: undefined, agentDisconnected: disconnected, agentStatus: undefined })
   })
 
   it('is a no-op for unknown PTYs and shell panes', () => {

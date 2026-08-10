@@ -187,6 +187,12 @@ export interface AgentStatusState {
   detail?: string        // tool name, permission message, error type -- shown in the tooltip
   turnId?: string
   event?: AgentLifecycleEvent
+  // Spec 065: in-memory background-subagent tracking. The count includes
+  // anonymous fail-safe launch slots; known identities are used to authorize
+  // individual completion events. Both fields are stripped with agentStatus
+  // during layout serialization.
+  activeBackgroundSubagents?: number
+  activeBackgroundSubagentIds?: string[]
   updatedAt: number      // Date.now() at the reducer call (injected for testability)
 }
 
@@ -200,13 +206,14 @@ export interface AgentStatusState {
 export type AgentLifecycleEvent =
   | 'session_start' | 'user_prompt_submit' | 'pre_tool_use' | 'post_tool_use'
   | 'stop' | 'permission_request' | 'stop_failure' | 'promote' | 'demote'
-  | 'terminal_error'
+  | 'terminal_error' | 'bg_subagent_started' | 'bg_subagent_completed'
 
 // What main forwards on pane:agent-event, and what the reducer consumes.
 export interface AgentStatusInput {
   event: AgentLifecycleEvent
   detail?: string
   turnId?: string
+  agentId?: string
 }
 // A CLI agent session as stored/displayed
 export interface Session {
@@ -567,7 +574,7 @@ export interface IPCChannels {
   'pane:agent-detected': (ptyId: string, agentKind: AgentKind | null) => void
   // Main -> renderer: a lifecycle hook event from an agent pane (spec 032). Raw forward;
   // main does NOT reduce -- the renderer owns per-pane prev state and runs eventToState.
-  'pane:agent-event': (ptyId: string, event: AgentLifecycleEvent, detail: string | undefined, turnId: string | undefined) => void
+  'pane:agent-event': (ptyId: string, event: AgentLifecycleEvent, detail: string | undefined, turnId: string | undefined, agentId?: string) => void
   // Main -> renderer: a fatal-terminal-error event from the opt-in scraping observer
   // (spec 050). Same shape as pane:agent-event (sans turnId) and feeds the SAME reducer;
   // scraping is explicitly NOT a second write path -- it adds one event type to the union.

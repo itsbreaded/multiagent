@@ -85,6 +85,27 @@ describe('layoutStore pure helpers', () => {
     expect(leaf['promotedFromShell']).toBeUndefined()
   })
 
+  it('does not persist background-subagent tracking with agentStatus (spec 065)', () => {
+    const tabs = [{
+      id: 't',
+      rootNode: {
+        type: 'leaf',
+        id: 'p',
+        paneType: 'agent',
+        agentKind: 'claude',
+        cwd: 'C:\\repo',
+        agentStatus: {
+          status: 'working',
+          activeBackgroundSubagents: 2,
+          activeBackgroundSubagentIds: ['sub-a', 'sub-b'],
+          updatedAt: 1,
+        },
+      },
+    }]
+    const out = normalizeTabsForLayout(tabs) as Array<{ rootNode: Record<string, unknown> }>
+    expect(out[0].rootNode['agentStatus']).toBeUndefined()
+  })
+
   it('strips a stray promotedFromShell on a split tree and leaves unrelated panes intact', () => {
     const tabs = [{
       id: 't',

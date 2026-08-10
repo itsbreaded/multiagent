@@ -67,6 +67,7 @@ const CLAUDE_EVENTS: readonly ManagedEvent[] = [
   { configKey: 'Notification', matcher: 'permission_prompt', scriptArg: 'permission_request' },
   { configKey: 'Stop', matcher: '', scriptArg: 'stop' },
   { configKey: 'StopFailure', matcher: '', scriptArg: 'stop_failure' },
+  { configKey: 'SubagentStop', matcher: '', scriptArg: 'bg_subagent_completed' },
 ]
 
 // Codex: null matcher = OMIT the key (Codex treats '' as match-nothing for source events);

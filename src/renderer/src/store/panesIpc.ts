@@ -110,14 +110,19 @@ export function wirePanesIpc(): void {
   // tab regardless of runtime hydration (spec 001), so findLeafByPtyId resolves and the
   // badge renders when PaneHeader mounts on first focus.
   const safeStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
-  window.ipc.on('pane:agent-event', (ptyId: unknown, event: unknown, detail: unknown, turnId: unknown) => {
+  window.ipc.on('pane:agent-event', (ptyId: unknown, event: unknown, detail: unknown, turnId: unknown, agentId: unknown) => {
     if (typeof ptyId !== 'string' || typeof event !== 'string') return
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
       if (!tab.rootNode) continue
       const pane = findLeafByPtyId(tab.rootNode, ptyId)
       if (pane) {
-        const next = eventToState(pane.agentStatus, { event: event as AgentLifecycleEvent, detail: safeStr(detail), turnId: safeStr(turnId) }, Date.now())
+        const next = eventToState(pane.agentStatus, {
+          event: event as AgentLifecycleEvent,
+          detail: safeStr(detail),
+          turnId: safeStr(turnId),
+          agentId: safeStr(agentId),
+        }, Date.now())
         store.setPaneAgentStatus(pane.id, next)
         break
       }

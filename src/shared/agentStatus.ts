@@ -18,6 +18,24 @@
 
 import type { AgentStatusState, AgentStatusInput } from './types'
 
+function clearBackgroundTracking(state: AgentStatusState): AgentStatusState {
+  const next = { ...state }
+  delete next.activeBackgroundSubagents
+  delete next.activeBackgroundSubagentIds
+  return next
+}
+
+function withBackgroundTracking(
+  state: AgentStatusState,
+  count: number,
+  ids: readonly string[],
+): AgentStatusState {
+  const next = clearBackgroundTracking(state)
+  if (count > 0) next.activeBackgroundSubagents = count
+  if (ids.length > 0) next.activeBackgroundSubagentIds = [...ids]
+  return next
+}
+
 /**
  * Reduce a lifecycle event into the next per-pane status state.
  *
@@ -37,6 +55,8 @@ export function eventToState(
   // (user_prompt_submit), a fresh session (session_start), or process exit (demote).
   // `stop_failure` is its own high-signal error path and stays put regardless.
   const latched = prev?.event === 'terminal_error'
+  const activeCount = prev?.activeBackgroundSubagents ?? 0
+  const activeIds = prev?.activeBackgroundSubagentIds ?? []
 
   switch (input.event) {
     case 'demote':
@@ -65,6 +85,9 @@ export function eventToState(
       // across restarts, which is exactly the "silent recovery we can't verify" the spec
       // forbids. Falls through to the existing preserve-prev behavior when NOT latched.
       if (latched) return { status: 'idle', event: 'session_start', updatedAt: now }
+      if (activeCount > 0) {
+        return { status: 'idle', turnId: prev?.turnId, event: 'session_start', updatedAt: now }
+      }
       return prev ?? { status: 'idle', event: 'session_start', updatedAt: now }
 
     case 'user_prompt_submit':
@@ -72,7 +95,12 @@ export function eventToState(
       // prompt. Seeds/refreshes working with the turn id so later out-of-order tool
       // events can be guarded. (Also the primary clear of a latched terminal_error --
       // the user retried.)
-      return { status: 'working', turnId: input.turnId, event: input.event, updatedAt: now }
+      return withBackgroundTracking({
+        status: 'working',
+        turnId: input.turnId,
+        event: input.event,
+        updatedAt: now,
+      }, activeCount, activeIds)
 
     case 'pre_tool_use':
     case 'post_tool_use': {
@@ -90,41 +118,50 @@ export function eventToState(
           return prev
         }
       }
-      return {
+      return withBackgroundTracking({
         status: 'working',
         detail: input.detail,
         turnId: input.turnId ?? prev?.turnId,
         event: input.event,
         updatedAt: now,
-      }
+      }, activeCount, activeIds)
     }
 
     case 'stop':
       // Turn ended, awaiting input. Clear the per-tool detail.
       if (latched) return prev   // dead turn: do not flap to idle from a late Stop
+      if (activeCount > 0) {
+        return withBackgroundTracking({
+          status: 'working',
+          detail: 'background subagent',
+          turnId: input.turnId ?? prev?.turnId,
+          event: 'stop',
+          updatedAt: now,
+        }, activeCount, activeIds)
+      }
       return { status: 'idle', turnId: input.turnId ?? prev?.turnId, event: 'stop', updatedAt: now }
 
     case 'stop_failure':
       // Claude only (Codex has no StopFailure). High-signal: always apply.
-      return {
+      return withBackgroundTracking({
         status: 'error',
         detail: input.detail ?? 'error',
         turnId: input.turnId ?? prev?.turnId,
         event: 'stop_failure',
         updatedAt: now,
-      }
+      }, activeCount, activeIds)
 
     case 'permission_request':
       // Permission prompt -- the headline signal. High-signal: always apply. Inherit the
       // turn id when the hook payload omits it (e.g. Claude Notification message-only).
       if (latched) return prev   // dead turn: do not flap to waiting from a stale prompt
-      return {
+      return withBackgroundTracking({
         status: 'waiting',
         detail: input.detail,
         turnId: input.turnId ?? prev?.turnId,
         event: 'permission_request',
         updatedAt: now,
-      }
+      }, activeCount, activeIds)
 
     case 'terminal_error':
       // spec 050: the ONLY event fed by the opt-in terminal-output observer (the
@@ -132,13 +169,61 @@ export function eventToState(
       // user_prompt_submit / session_start / demote -- see the `latched` guard at the
       // top of each preserving case. Carries no turn id (the detector has no turn
       // context), so it inherits the prior turn id to keep the tooltip coherent.
-      return {
+      return withBackgroundTracking({
         status: 'error',
         detail: input.detail ?? 'terminal error',
         turnId: prev?.turnId,
         event: 'terminal_error',
         updatedAt: now,
+      }, activeCount, activeIds)
+
+    case 'bg_subagent_started': {
+      const agentId = input.agentId?.trim() || undefined
+      if (agentId && activeIds.includes(agentId)) return prev
+      const nextCount = Math.max(0, activeCount) + 1
+      const nextIds = agentId ? [...activeIds, agentId] : activeIds
+      if (prev && (latched || prev.status === 'waiting' || prev.status === 'error')) {
+        return withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
       }
+      return withBackgroundTracking({
+        status: 'working',
+        detail: input.detail ?? 'background subagent',
+        turnId: input.turnId ?? prev?.turnId,
+        event: 'bg_subagent_started',
+        updatedAt: now,
+      }, nextCount, nextIds)
+    }
+
+    case 'bg_subagent_completed': {
+      const agentId = input.agentId?.trim() || undefined
+      if (!agentId) return prev
+      const index = activeIds.indexOf(agentId)
+      if (index < 0) return prev
+
+      const nextIds = activeIds.filter((id) => id !== agentId)
+      const nextCount = Math.max(0, activeCount - 1)
+      if (latched) {
+        return withBackgroundTracking({ ...prev!, updatedAt: now }, nextCount, nextIds)
+      }
+      if (nextCount > 0) {
+        if (prev?.status === 'waiting' || prev?.status === 'error') {
+          return withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
+        }
+        return withBackgroundTracking({
+          status: 'working',
+          detail: 'background subagent',
+          turnId: prev?.turnId,
+          event: prev?.event === 'stop' ? 'stop' : 'bg_subagent_completed',
+          updatedAt: now,
+        }, nextCount, nextIds)
+      }
+
+      const cleared = clearBackgroundTracking(prev!)
+      if (prev?.status === 'working' && prev.event === 'stop') {
+        return { status: 'idle', turnId: prev.turnId, event: 'stop', updatedAt: now }
+      }
+      return { ...cleared, updatedAt: now }
+    }
 
     default:
       // Unknown event (not in the allow-list). Never throws; keep the prior state so a

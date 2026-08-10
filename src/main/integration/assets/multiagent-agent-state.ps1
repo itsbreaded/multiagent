@@ -5,7 +5,7 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<path>" <agentKind> [<event>]
 # where <agentKind> is "claude" or "codex" and <event> is one of:
 #   session_start | user_prompt_submit | pre_tool_use | post_tool_use |
-#   stop | permission_request | stop_failure
+#   stop | permission_request | stop_failure | bg_subagent_completed
 # An absent <event> (legacy 047 SessionStart install) is treated as session_start for
 # back-compat -- it still seeds the badge AND posts the linking report.
 #
@@ -46,10 +46,11 @@ try {
 }
 
 function Post-Event {
-  param([string]$EventName, [string]$Detail, [string]$TurnId)
+  param([string]$EventName, [string]$Detail, [string]$TurnId, [string]$AgentId)
   $body = [ordered]@{ ptyId = $ptyId; agentKind = $agentKind; event = $EventName }
   if ($Detail) { $body['detail'] = $Detail }
   if ($TurnId) { $body['turnId'] = $TurnId }
+  if ($AgentId) { $body['agentId'] = $AgentId }
   try {
     $json = $body | ConvertTo-Json -Compress
     Invoke-RestMethod -Uri ("http://127.0.0.1:{0}/agent-event" -f $port) -Method POST -Body $json -ContentType 'application/json' -TimeoutSec 2 | Out-Null
@@ -74,6 +75,13 @@ function Get-TurnId {
   return $null
 }
 
+function Get-AgentId {
+  if (-not $payload) { return $null }
+  if ($event -eq 'bg_subagent_completed') { return $payload.agent_id }
+  if ($payload.tool_response) { return $payload.tool_response.agentId }
+  return $null
+}
+
 switch ($event) {
   'session_start' {
     $sid = $payload.session_id
@@ -91,7 +99,21 @@ switch ($event) {
     Post-Event -EventName 'pre_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId)
   }
   'post_tool_use' {
-    Post-Event -EventName 'post_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId)
+    $isAgentTool = $payload.tool_name -eq 'Agent' -or $payload.tool_name -eq 'Task'
+    $isBackground = $false
+    if ($isAgentTool) {
+      $isBackground = $payload.tool_response.status -eq 'async_launched' -or $payload.tool_input.run_in_background -eq $true
+    }
+    if ($isBackground) {
+      $detail = $payload.tool_name
+      if (-not $detail) { $detail = 'background subagent' }
+      Post-Event -EventName 'bg_subagent_started' -Detail $detail -TurnId (Get-TurnId) -AgentId (Get-AgentId)
+    } else {
+      Post-Event -EventName 'post_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId)
+    }
+  }
+  'bg_subagent_completed' {
+    Post-Event -EventName 'bg_subagent_completed' -TurnId (Get-TurnId) -AgentId (Get-AgentId)
   }
   'stop' {
     Post-Event -EventName 'stop' -TurnId (Get-TurnId)

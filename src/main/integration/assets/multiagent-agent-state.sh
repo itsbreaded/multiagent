@@ -7,6 +7,7 @@
 #   <agentKind> = "claude" | "codex"
 #   <event>     = session_start | user_prompt_submit | pre_tool_use | post_tool_use |
 #                 stop | permission_request | stop_failure
+#                 bg_subagent_completed
 # An absent <event> (legacy 047 SessionStart install) is treated as session_start.
 #
 # Reports lifecycle events to POST /agent-event (status badges) and, for session_start
@@ -50,11 +51,12 @@ turn_id() {
 }
 
 post_event() {
-  # $1 = event name, $2 = detail (may be empty), $3 = turnId (may be empty)
-  local ev="$1" detail="$2" tid="$3" body
+  # $1 = event name, $2 = detail, $3 = turnId, $4 = agentId (may be empty)
+  local ev="$1" detail="$2" tid="$3" aid="$4" body
   body="{\"ptyId\":\"$ptyId\",\"agentKind\":\"$agentKind\",\"event\":\"$ev\""
   [ -n "$detail" ] && body="$body,\"detail\":\"$(jsonesc "$detail")\""
-  [ -n "$tid" ] && body="$body,\"turnId\":\"$tid\""
+  [ -n "$tid" ] && body="$body,\"turnId\":\"$(jsonesc "$tid")\""
+  [ -n "$aid" ] && body="$body,\"agentId\":\"$(jsonesc "$aid")\""
   body="$body}"
   curl -s -m 2 -X POST -H 'Content-Type: application/json' -d "$body" \
     "http://127.0.0.1:$port/agent-event" >/dev/null 2>&1
@@ -90,7 +92,16 @@ case "$event" in
     post_event pre_tool_use "$(jsonstr tool_name)" "$(turn_id)"
     ;;
   post_tool_use)
-    post_event post_tool_use "$(jsonstr tool_name)" "$(turn_id)"
+    if printf '%s' "$raw" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"(Agent|Task)"' &&
+       { printf '%s' "$raw" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"async_launched"' ||
+         printf '%s' "$raw" | grep -Eq '"run_in_background"[[:space:]]*:[[:space:]]*true'; }; then
+      post_event bg_subagent_started "$(jsonstr tool_name)" "$(turn_id)" "$(jsonstr agentId)"
+    else
+      post_event post_tool_use "$(jsonstr tool_name)" "$(turn_id)"
+    fi
+    ;;
+  bg_subagent_completed)
+    post_event bg_subagent_completed "" "$(turn_id)" "$(jsonstr agent_id)"
     ;;
   stop)
     post_event stop "" "$(turn_id)"

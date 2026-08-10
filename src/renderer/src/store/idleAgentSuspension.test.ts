@@ -27,6 +27,13 @@ describe('idle suspension eligibility', () => {
     expect(isIdleAgentSuspensionEligible(pane)).toBe(true)
     pane.agentStatus = { status: 'working', updatedAt: 2 }
     expect(isIdleAgentSuspensionEligible(pane)).toBe(false)
+    pane.agentStatus = {
+      status: 'working',
+      activeBackgroundSubagents: 1,
+      activeBackgroundSubagentIds: ['sub-1'],
+      updatedAt: 2,
+    }
+    expect(isIdleAgentSuspensionEligible(pane)).toBe(false)
     pane.agentStatus = { status: 'unknown', updatedAt: 2 }
     expect(isIdleAgentSuspensionEligible(pane)).toBe(false)
     pane.agentStatus = { status: 'idle', updatedAt: 3 }

@@ -126,7 +126,7 @@ export function markLeafExitedByPtyId(
   if (node.type === 'leaf') {
     if (node.ptyId !== ptyId || node.paneType !== 'agent') return { node, exitedLeaf: null }
     return {
-      node: { ...node, ptyId: undefined, agentDisconnected: disconnected },
+      node: { ...node, ptyId: undefined, agentDisconnected: disconnected, agentStatus: undefined },
       exitedLeaf: node,
     }
   }

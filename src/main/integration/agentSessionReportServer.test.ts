@@ -114,6 +114,49 @@ describe('AgentSessionReportServer -- /agent-event (spec 032)', () => {
     expect(events).toEqual([{ ptyId: 'p2', agentKind: 'codex', event: 'stop', detail: undefined, turnId: undefined }])
   })
 
+  it('accepts Claude background-subagent events and preserves agentId', async () => {
+    const events: AgentEventReport[] = []
+    server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })
+    server.start()
+    const port = await server.ready()
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_started',
+      agentId: 'sub-1', turnId: 'turn-1',
+    })).toBe(204)
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_completed',
+      agentId: 'sub-1',
+    })).toBe(204)
+    expect(events).toEqual([
+      { ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_started', detail: undefined, turnId: 'turn-1', agentId: 'sub-1' },
+      { ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_completed', detail: undefined, turnId: undefined, agentId: 'sub-1' },
+    ])
+  })
+
+  it('rejects background-subagent events for Codex and OpenCode', async () => {
+    const events: unknown[] = []
+    server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })
+    server.start()
+    const port = await server.ready()
+    for (const agentKind of ['codex', 'opencode']) {
+      expect(await post(port!, '/agent-event', {
+        ptyId: 'p-' + agentKind, agentKind, event: 'bg_subagent_started', agentId: 'sub-1',
+      })).toBe(400)
+    }
+    expect(events).toHaveLength(0)
+  })
+
+  it('rejects an empty background-subagent identity', async () => {
+    const events: unknown[] = []
+    server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })
+    server.start()
+    const port = await server.ready()
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_completed', agentId: '',
+    })).toBe(400)
+    expect(events).toHaveLength(0)
+  })
+
   it('rejects a synthetic promote/demote event (not in the allow-list) with 400', async () => {
     const events: unknown[] = []
     server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })

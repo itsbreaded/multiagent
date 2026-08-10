@@ -89,7 +89,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     },
     // spec 032: forward each lifecycle event to the owning pane's window. Main does NOT
     // reduce -- the renderer owns per-pane prev state and runs eventToState.
-    onEvent: (e) => windowManager.sendToWindowForPty(e.ptyId, 'pane:agent-event', e.ptyId, e.event, e.detail, e.turnId),
+    onEvent: (e) => windowManager.sendToWindowForPty(e.ptyId, 'pane:agent-event', e.ptyId, e.event, e.detail, e.turnId, e.agentId),
   })
   const managedHook = new ManagedHookController({
     claudeSettingsPath: ManagedHookController.defaultClaudeSettingsPath(),

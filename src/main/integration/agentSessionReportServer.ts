@@ -19,11 +19,15 @@ import type { AgentKind, AgentLifecycleEvent } from '../../shared/types'
 
 const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex', 'opencode']
 
-// The lifecycle events the hook script may report (spec 032). NO promote/demote (those are
-// synthetic, renderer-only via the sweeper) and NO subagent_* (out of scope for v1).
+// The lifecycle events the hook script may report (spec 032 + spec 065). NO promote/demote
+// (those are synthetic, renderer-only via the sweeper).
 const VALID_EVENTS: readonly AgentLifecycleEvent[] = [
   'session_start', 'user_prompt_submit', 'pre_tool_use', 'post_tool_use',
   'stop', 'permission_request', 'stop_failure',
+  'bg_subagent_started', 'bg_subagent_completed',
+] as const
+const CLAUDE_ONLY_EVENTS: readonly AgentLifecycleEvent[] = [
+  'bg_subagent_started', 'bg_subagent_completed',
 ] as const
 
 export interface AgentSessionReport {
@@ -39,6 +43,7 @@ export interface AgentEventReport {
   event: AgentLifecycleEvent
   detail?: string
   turnId?: string
+  agentId?: string
 }
 
 export interface AgentSessionReportServerDeps {
@@ -142,15 +147,19 @@ export class AgentSessionReportServer {
           typeof parsed.agentKind === 'string' &&
           (VALID_AGENT_KINDS as readonly string[]).includes(parsed.agentKind) &&
           typeof parsed.event === 'string' &&
-          (VALID_EVENTS as readonly string[]).includes(parsed.event)
+          (VALID_EVENTS as readonly string[]).includes(parsed.event) &&
+          (!(CLAUDE_ONLY_EVENTS as readonly string[]).includes(parsed.event) || parsed.agentKind === 'claude') &&
+          (parsed.agentId === undefined || (typeof parsed.agentId === 'string' && parsed.agentId.length > 0))
         ) {
-          this.deps.onEvent({
+          const report: AgentEventReport = {
             ptyId: parsed.ptyId,
             agentKind: parsed.agentKind as AgentKind,
             event: parsed.event as AgentLifecycleEvent,
             detail: typeof parsed.detail === 'string' ? parsed.detail : undefined,
             turnId: typeof parsed.turnId === 'string' ? parsed.turnId : undefined,
-          })
+          }
+          if (typeof parsed.agentId === 'string') report.agentId = parsed.agentId
+          this.deps.onEvent(report)
           res.writeHead(204); res.end()
         } else {
           res.writeHead(400); res.end()

@@ -299,3 +299,126 @@ describe('eventToState -- terminal_error latch + clearing precedence (spec 050)'
     expect(eventToState(working, { event: 'session_start' }, NOW)).toBe(working)
   })
 })
+
+describe('eventToState -- background subagents (spec 065)', () => {
+  const launch = (prev: AgentStatusState | undefined, agentId?: string) => eventToState(
+    prev,
+    { event: 'bg_subagent_started', detail: 'background subagent', agentId },
+    NOW,
+  )
+  const complete = (prev: AgentStatusState | undefined, agentId?: string) => eventToState(
+    prev,
+    { event: 'bg_subagent_completed', agentId },
+    NOW,
+  )
+
+  it('holds working through Stop and returns idle after the matching completion', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = eventToState(started, { event: 'stop' }, NOW)!
+    expect(held).toMatchObject({
+      status: 'working',
+      event: 'stop',
+      activeBackgroundSubagents: 1,
+      activeBackgroundSubagentIds: ['sub-a'],
+    })
+    expect(complete(held, 'sub-a')).toEqual({
+      status: 'idle',
+      event: 'stop',
+      updatedAt: NOW,
+    })
+  })
+
+  it('keeps multiple subagents active until the final distinct completion', () => {
+    const two = launch(launch(undefined, 'sub-a'), 'sub-b')!
+    const held = eventToState(two, { event: 'stop' }, NOW)!
+    const one = complete(held, 'sub-a')!
+    expect(one).toMatchObject({
+      status: 'working',
+      activeBackgroundSubagents: 1,
+      activeBackgroundSubagentIds: ['sub-b'],
+    })
+    expect(complete(one, 'sub-a')).toBe(one)
+    expect(complete(one, 'sub-b')).toEqual({
+      status: 'idle',
+      event: 'stop',
+      updatedAt: NOW,
+    })
+  })
+
+  it('does not depend on parent Stop ordering', () => {
+    const started = launch(undefined, 'sub-a')!
+    const finished = complete(started, 'sub-a')!
+    expect(finished).toMatchObject({ status: 'working' })
+    expect(finished.activeBackgroundSubagents).toBeUndefined()
+    expect(eventToState(finished, { event: 'stop' }, NOW)?.status).toBe('idle')
+  })
+
+  it('allows a background completion during a new parent turn without false idle', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = eventToState(started, { event: 'stop' }, NOW)!
+    const newTurn = eventToState(held, { event: 'user_prompt_submit', turnId: 'turn-2' }, NOW)!
+    const after = complete(newTurn, 'sub-a')!
+    expect(after).toMatchObject({ status: 'working', event: 'user_prompt_submit', turnId: 'turn-2' })
+    expect(after.activeBackgroundSubagents).toBeUndefined()
+    expect(eventToState(after, { event: 'stop', turnId: 'turn-2' }, NOW)?.status).toBe('idle')
+  })
+
+  it('ignores missing, unknown, and foreground completion identities', () => {
+    const started = launch(undefined, 'sub-a')!
+    expect(complete(started)).toBe(started)
+    expect(complete(started, 'foreground-a')).toBe(started)
+    expect(started.activeBackgroundSubagents).toBe(1)
+  })
+
+  it('uses an anonymous launch slot as a fail-safe when launch identity is missing', () => {
+    const started = launch(undefined)!
+    expect(started).toMatchObject({ status: 'working', activeBackgroundSubagents: 1 })
+    expect(started.activeBackgroundSubagentIds).toBeUndefined()
+    expect(complete(started)).toBe(started)
+    expect(eventToState(started, { event: 'stop' }, NOW)?.status).toBe('working')
+  })
+
+  it('preserves waiting and stop_failure precedence while a known subagent completes', () => {
+    const waiting = eventToState(eventToState(launch(undefined, 'sub-a'), { event: 'stop' }, NOW), {
+      event: 'permission_request',
+      detail: 'Allow?',
+    }, NOW)!
+    const clearedWaiting = complete(waiting, 'sub-a')!
+    expect(clearedWaiting).toMatchObject({
+      status: 'waiting',
+      event: 'permission_request',
+    })
+    expect(clearedWaiting.activeBackgroundSubagents).toBeUndefined()
+
+    const errored = eventToState(eventToState(launch(undefined, 'sub-b'), { event: 'stop' }, NOW), {
+      event: 'stop_failure',
+      detail: 'boom',
+    }, NOW)!
+    const clearedError = complete(errored, 'sub-b')!
+    expect(clearedError).toMatchObject({ status: 'error', event: 'stop_failure' })
+    expect(clearedError.activeBackgroundSubagents).toBeUndefined()
+  })
+
+  it('removes a completed identity without clearing the terminal-error latch', () => {
+    const latched = eventToState(launch(undefined, 'sub-a'), {
+      event: 'terminal_error',
+      detail: 'terminal error',
+    }, NOW)!
+    const after = complete(latched, 'sub-a')!
+    expect(after).toMatchObject({ status: 'error', event: 'terminal_error' })
+    expect(after.activeBackgroundSubagents).toBeUndefined()
+  })
+
+  it('preserves active tracking across a new prompt and clears it on session start/demote', () => {
+    const started = launch(undefined, 'sub-a')!
+    const prompted = eventToState(started, { event: 'user_prompt_submit', turnId: 'turn-2' }, NOW)!
+    expect(prompted).toMatchObject({ status: 'working', activeBackgroundSubagentIds: ['sub-a'] })
+    expect(eventToState(prompted, { event: 'session_start' }, NOW)).toEqual({
+      status: 'idle',
+      turnId: 'turn-2',
+      event: 'session_start',
+      updatedAt: NOW,
+    })
+    expect(eventToState(started, { event: 'demote' }, NOW)).toBeUndefined()
+  })
+})
