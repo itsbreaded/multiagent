@@ -2,8 +2,6 @@ import { ipcMain, BrowserWindow, shell, clipboard, app, dialog } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { SessionIndex } from '../sessions/SessionIndex'
 import { createSessionPoller } from '../sessions/sessionPoll'
 import { TranscriptScanner } from '../sessions/TranscriptScanner'
@@ -11,7 +9,7 @@ import { CodexSessionScanner } from '../sessions/CodexSessionScanner'
 import { OpencodeSessionScanner } from '../sessions/OpencodeSessionScanner'
 import { DeepSearcher } from '../sessions/DeepSearcher'
 import { SessionSpawner, setAgentProviderSettings, setOpencodePluginPath } from '../sessions/SessionSpawner'
-import { detectProviderAvailability } from '../sessions/cliAvailability'
+import { detectProviderAvailability, resolveCommandOnPath } from '../sessions/cliAvailability'
 import { PtyManager, type PtyHostFailure, type PtyHostRecoveryFailure } from '../pty/PtyManager'
 import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
 import { TerminalStatusScraper } from '../pty/terminalStatusScraper'
@@ -47,8 +45,11 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   registerWindowHandlers: (win: BrowserWindow) => void
   performShutdownSave: () => Promise<void>
 }> {
-  const vsCodeAvailable = promisify(execFile)('code', ['--version'], { shell: true, timeout: 3000 })
-    .then(() => true, () => false)
+  const vsCodeAvailable = resolveCommandOnPath('code', {
+    path: process.env.PATH,
+    platform: process.platform,
+    pathext: process.env.PATHEXT,
+  }).then((resolved) => resolved !== null)
   const registrar = createIpcRegistrar(ipcMain)
   const layoutStore = createLayoutStore({
     layoutPath: path.join(app.getPath('userData'), 'layout.json'),
@@ -620,7 +621,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     : detectProviderAvailability({
         path: process.env.PATH,
         platform: process.platform,
-        patheext: process.env.PATHEXT,
+        pathext: process.env.PATHEXT,
       }).then((detected) => {
         providerAvailability = detected
       }, (err) => {

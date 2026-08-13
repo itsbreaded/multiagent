@@ -96,6 +96,22 @@ demotes back to a shell. That detection/promotion mechanism is in
   process is spawned. This prevents repeated doomed-spawn loops on startup when a session was
   deleted or moved.
 
+## PATH-based CLI availability
+
+Availability for a PATH-based target is a metadata capability check, not an application health
+check. The main process resolves the bare command against its inherited `PATH` and, on Windows,
+the inherited `PATHEXT` order. It checks candidate files asynchronously, rejects directories and
+inaccessible entries, and returns the first matching candidate without starting it. The same
+resolver backs provider CLI detection and the VS Code availability gate.
+
+This distinction matters for GUI-backed CLI shims such as VS Code's `code.cmd`: the CLI can write
+valid output and still take much longer to exit because it starts an Electron process. Waiting
+for `code --version` to terminate therefore produces false “not installed” results. The actual
+VS Code project action remains the `vscode://file/...` URI path; availability only decides whether
+that existing action is offered. Do not reintroduce a version probe or a fixed installation-path
+fallback for ordinary availability checks. Detection sees the PATH inherited by MultiAgent, not
+shell profile changes made after launch.
+
 ## MCP injection (process-scoped only)
 
 The app must not mutate user or project agent config files. Do not write to `~/.claude.json`,

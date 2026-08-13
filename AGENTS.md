@@ -182,6 +182,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   single cwd/time match or stay as recovery placeholders; legacy no-marker panes revert to
   shell. `hydrateTabRuntime` validates `(agentKind, sessionId, cwd)` before resume — missing
   transcript → `resumeError`, no spawn.
+- PATH-based app/provider availability resolves regular command files from the inherited
+  `PATH`/`PATHEXT` asynchronously; never launch a version probe or search fixed install paths
+  to answer availability. → [`docs/sessions.md`](docs/sessions.md)
 - **Don't mutate user/project agent config** (`~/.claude.json`, `~/.codex/config.toml`,
   `.mcp.json`). MCP injection is process-scoped only. The **one** scoped exception is the
   managed `SessionStart` + lifecycle hook install (spec 047 + 032: marked-block, `.bak`, atomic, reversible from the

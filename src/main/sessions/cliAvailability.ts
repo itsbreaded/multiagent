@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import * as nodePath from 'path'
 import type { AgentKind, AgentProviderSettings } from '../../shared/types'
 
 /**
@@ -35,7 +36,7 @@ export interface DetectEnv {
   /** `process.platform`. */
   platform: NodeJS.Platform
   /** `process.env.PATHEXT` — Windows extension list, e.g. `.COM;.EXE;.BAT;.CMD`. */
-  patheext?: string
+  pathext?: string
 }
 
 export type ProviderAvailability = Record<AgentKind, boolean>
@@ -55,10 +56,41 @@ export function applyAvailabilityToSettings(
  * caller can skip a persist), otherwise a new object with the undetected kinds
  * disabled. Pure; tested without Electron.
  */
-/** A minimal stat result — only the fields `binaryExists` consults. Injectable for tests. */
+/** A minimal stat result — only the fields command resolution consults. Injectable for tests. */
 export interface StatLike {
   isFile(): boolean
   mode: number
+}
+
+/**
+ * Resolve a bare command name against the supplied process PATH. The result is
+ * the first matching candidate in PATH/PATHEXT order, or null when no regular
+ * executable file is found. This is deliberately a metadata-only capability
+ * check: it never starts the candidate or waits for an application to exit.
+ */
+export async function resolveCommandOnPath(
+  command: string,
+  env: DetectEnv,
+  statFn: (p: string) => Promise<StatLike> = (p) => fs.promises.stat(p) as unknown as Promise<StatLike>,
+): Promise<string | null> {
+  if (!command.trim()) return null
+
+  const dirs = (env.path ?? '')
+    .split(env.platform === 'win32' ? ';' : ':')
+    .map((entry) => {
+      const trimmed = entry.trim()
+      return trimmed.startsWith('"') && trimmed.endsWith('"')
+        ? trimmed.slice(1, -1)
+        : trimmed
+    })
+    .filter(Boolean)
+  const explicitExtension = env.platform === 'win32' && nodePath.win32.extname(command) !== ''
+  const exts = env.platform === 'win32' && !explicitExtension ? parsePathext(env.pathext) : ['']
+  const join = env.platform === 'win32' ? nodePath.win32.join : nodePath.posix.join
+  const candidates = dirs.flatMap((dir) => exts.map((ext) => join(dir, `${command}${ext}`)))
+  const results = await Promise.all(candidates.map((candidate) => isUsableCommandFile(candidate, env.platform, statFn)))
+  const matchIndex = results.findIndex(Boolean)
+  return matchIndex >= 0 ? candidates[matchIndex] : null
 }
 
 /**
@@ -74,56 +106,39 @@ export async function detectProviderAvailability(
   env: DetectEnv,
   statFn: (p: string) => Promise<StatLike> = (p) => fs.promises.stat(p) as unknown as Promise<StatLike>,
 ): Promise<ProviderAvailability> {
-  const dirs = (env.path ?? '').split(env.platform === 'win32' ? ';' : ':').filter(Boolean)
-  const exts = env.platform === 'win32' ? parsePathext(env.patheext) : ['']
   const entries = await Promise.all(
     AGENT_KINDS.map(async (kind) => {
-      const found = await binaryExists(dirs, AGENT_BINARIES[kind], exts, env.platform, statFn)
-      return [kind, found] as const
+      const resolved = await resolveCommandOnPath(AGENT_BINARIES[kind], env, statFn)
+      return [kind, resolved !== null] as const
     }),
   )
   return Object.fromEntries(entries) as ProviderAvailability
 }
 
-function parsePathext(patheext: string | undefined): string[] {
-  if (!patheext) return ['.COM', '.EXE', '.BAT', '.CMD']
-  return patheext
+function parsePathext(pathext: string | undefined): string[] {
+  if (!pathext) return ['.COM', '.EXE', '.BAT', '.CMD']
+  return pathext
     .split(';')
     .map((e) => e.trim())
     .filter(Boolean)
     .map((e) => (e.startsWith('.') ? e : `.${e}`))
 }
 
-async function binaryExists(
-  dirs: string[],
-  bin: string,
-  exts: string[],
+async function isUsableCommandFile(
+  candidate: string,
   platform: NodeJS.Platform,
   statFn: (p: string) => Promise<StatLike>,
 ): Promise<boolean> {
-  const sep = platform === 'win32' ? '\\' : '/'
-  const candidates: string[] = []
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const name = platform === 'win32' ? `${bin}${ext}` : bin
-      candidates.push(dir.endsWith(sep) ? `${dir}${name}` : `${dir}${sep}${name}`)
-    }
+  try {
+    // On POSIX, require an executable bit (x bit for owner/group/other). On
+    // Windows there is no executable bit; a regular file is enough — the shell
+    // resolves it via PATHEXT, and access(X_OK) is unreliable on win32.
+    const stat = await statFn(candidate)
+    if (!stat.isFile()) return false
+    if (platform === 'win32') return true
+    return (stat.mode & 0o111) !== 0
+  } catch {
+    // missing or inaccessible
+    return false
   }
-  const results = await Promise.all(
-    candidates.map(async (candidate) => {
-      try {
-        // On POSIX, require an executable bit (x bit for owner/group/other). On
-        // Windows there is no executable bit; a regular file is enough — the shell
-        // resolves it via PATHEXT, and access(X_OK) is unreliable on win32.
-        const stat = await statFn(candidate)
-        if (!stat.isFile()) return false
-        if (platform === 'win32') return true
-        return (stat.mode & 0o111) !== 0
-      } catch {
-        // missing or inaccessible
-        return false
-      }
-    }),
-  )
-  return results.some(Boolean)
 }

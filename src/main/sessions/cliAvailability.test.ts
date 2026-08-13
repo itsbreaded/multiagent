@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { detectProviderAvailability, applyAvailabilityToSettings, type StatLike } from './cliAvailability'
+import { detectProviderAvailability, resolveCommandOnPath, applyAvailabilityToSettings, type StatLike } from './cliAvailability'
 import { defaultAgentProviderSettings } from '../../shared/agentProviderSettings'
 import type { AgentProviderSettings, ProviderAvailability } from '../../shared/types'
 
@@ -33,6 +33,72 @@ function setFile(fullPath: string, opts: Partial<Entry> = {}): void {
   files.set(fullPath, { isFile: true, mode: 0o755, ...opts })
 }
 
+describe('resolveCommandOnPath', () => {
+  it('returns the first matching Windows candidate in PATH and PATHEXT order', async () => {
+    setFile('C:\\first\\tool.EXE')
+    setFile('C:\\second\\tool.CMD')
+    const result = await resolveCommandOnPath(
+      'tool',
+      { path: 'C:\\first;C:\\second', platform: 'win32', pathext: '.EXE;.CMD' },
+      statFn,
+    )
+    expect(result).toBe('C:\\first\\tool.EXE')
+  })
+
+  it('honors PATHEXT order within a PATH directory', async () => {
+    setFile('C:\\tools\\tool.EXE')
+    setFile('C:\\tools\\tool.CMD')
+    const result = await resolveCommandOnPath(
+      'tool',
+      { path: 'C:\\tools', platform: 'win32', pathext: '.CMD;.EXE' },
+      statFn,
+    )
+    expect(result).toBe('C:\\tools\\tool.CMD')
+  })
+
+  it('does not append PATHEXT when the command already has an extension', async () => {
+    setFile('C:\\tools\\tool.cmd')
+    const result = await resolveCommandOnPath(
+      'tool.cmd',
+      { path: 'C:\\tools', platform: 'win32', pathext: '.EXE;.CMD' },
+      statFn,
+    )
+    expect(result).toBe('C:\\tools\\tool.cmd')
+  })
+
+  it('requires an executable bit on POSIX and returns the resolved candidate', async () => {
+    setFile('/tools/tool', { mode: 0o755 })
+    const result = await resolveCommandOnPath('tool', { path: '/tools', platform: 'linux' }, statFn)
+    expect(result).toBe('/tools/tool')
+  })
+
+  it('returns null for missing, inaccessible, or directory candidates', async () => {
+    setFile('C:\\tools\\missing', { isFile: false })
+    const result = await resolveCommandOnPath('missing', { path: 'C:\\tools', platform: 'win32' }, statFn)
+    expect(result).toBeNull()
+  })
+
+  it('supports a generic command name beyond the built-in providers', async () => {
+    setFile('C:\\tools\\my-editor.CMD')
+    const result = await resolveCommandOnPath('my-editor', { path: 'C:\\tools', platform: 'win32' }, statFn)
+    expect(result).toBe('C:\\tools\\my-editor.CMD')
+  })
+
+  it('resolves the VS Code command shim without executing it', async () => {
+    setFile('C:\\Users\\test\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.CMD')
+    const result = await resolveCommandOnPath(
+      'code',
+      {
+        path: 'C:\\Windows\\System32;C:\\Users\\test\\AppData\\Local\\Programs\\Microsoft VS Code\\bin',
+        platform: 'win32',
+        pathext: '.EXE;.CMD',
+      },
+      statFn,
+    )
+    expect(result).toBe('C:\\Users\\test\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.CMD')
+  })
+})
+
 describe('detectProviderAvailability (spec 055)', () => {
   it('marks a kind available when its binary is on PATH (POSIX, exec bit set)', async () => {
     setFile('/bin/claude', { mode: 0o755 })
@@ -49,7 +115,7 @@ describe('detectProviderAvailability (spec 055)', () => {
   it('applies PATHEXT on Windows and resolves claude.cmd', async () => {
     setFile('C:\\tools\\claude.CMD')
     const result = await detectProviderAvailability(
-      { path: 'C:\\tools;D:\\missing', platform: 'win32', patheext: '.COM;.EXE;.BAT;.CMD' },
+      { path: 'C:\\tools;D:\\missing', platform: 'win32', pathext: '.COM;.EXE;.BAT;.CMD' },
       statFn,
     )
     expect(result.claude).toBe(true)
@@ -85,7 +151,7 @@ describe('detectProviderAvailability (spec 055)', () => {
   it('treats a regular file as executable on Windows (no exec bit needed)', async () => {
     setFile('C:\\tools\\codex.BAT')
     const result = await detectProviderAvailability(
-      { path: 'C:\\tools', platform: 'win32', patheext: '.BAT' },
+      { path: 'C:\\tools', platform: 'win32', pathext: '.BAT' },
       statFn,
     )
     expect(result.codex).toBe(true)

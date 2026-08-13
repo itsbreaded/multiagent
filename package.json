@@ -1,6 +1,6 @@
 {
   "name": "multiagent",
-  "version": "0.3.41",
+  "version": "0.3.42",
   "description": "Multiagent",
   "main": "out/main/index.js",
   "scripts": {
@@ -29,7 +29,6 @@
     "node": ">=24 <25"
   },
   "devDependencies": {
-    "@electron-toolkit/eslint-config-ts": "^3.0.0",
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@electron/rebuild": "^4.0.4",
     "@playwright/test": "^1.61.1",
