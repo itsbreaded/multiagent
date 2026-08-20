@@ -185,6 +185,7 @@ export type AgentStatus = 'idle' | 'working' | 'waiting' | 'error' | 'unknown'
 export interface AgentStatusState {
   status: AgentStatus
   detail?: string        // tool name, permission message, error type -- shown in the tooltip
+  sessionId?: string
   turnId?: string
   event?: AgentLifecycleEvent
   // Spec 065: in-memory background-subagent tracking. The count includes
@@ -193,7 +194,38 @@ export interface AgentStatusState {
   // during layout serialization.
   activeBackgroundSubagents?: number
   activeBackgroundSubagentIds?: string[]
+  activeWorkCount?: number
+  scheduledWorkCount?: number
+  activeWorkIds?: string[]
+  scheduledWorkIds?: string[]
+  workSnapshot?: AgentWorkSnapshot
+  recoveryProvenance?: 'ordinary_completion' | 'interrupt_recovery' | 'idle_prompt_recovery' | 'stale_work_reconciliation'
+  recoveryGeneration?: number
+  pendingInterrupt?: {
+    sessionId: string
+    turnId: string
+    generation: number
+  }
   updatedAt: number      // Date.now() at the reducer call (injected for testability)
+}
+
+export type AgentWorkTerminalState = 'completed' | 'interrupted' | 'failed' | 'idle' | 'busy' | 'retry'
+
+export interface AgentWorkSnapshot {
+  provider: AgentKind
+  completeness: 'complete' | 'incomplete'
+  terminalState: AgentWorkTerminalState
+  activeCount: number
+  scheduledCount: number
+  activeIds?: string[]
+  scheduledIds?: string[]
+  sessionId?: string
+  turnId?: string
+}
+
+export interface AgentEventMeta {
+  sessionId?: string
+  evidence?: AgentWorkSnapshot
 }
 
 // Lifecycle events the hook script reports. `promote`/`demote` are synthetic, fed by the
@@ -207,13 +239,17 @@ export type AgentLifecycleEvent =
   | 'session_start' | 'user_prompt_submit' | 'pre_tool_use' | 'post_tool_use'
   | 'stop' | 'permission_request' | 'stop_failure' | 'promote' | 'demote'
   | 'terminal_error' | 'bg_subagent_started' | 'bg_subagent_completed'
+  | 'work_snapshot' | 'turn_interrupted' | 'idle_prompt' | 'interrupt_requested'
 
 // What main forwards on pane:agent-event, and what the reducer consumes.
 export interface AgentStatusInput {
   event: AgentLifecycleEvent
   detail?: string
+  sessionId?: string
   turnId?: string
   agentId?: string
+  evidence?: AgentWorkSnapshot
+  recoveryGeneration?: number
 }
 // A CLI agent session as stored/displayed
 export interface Session {
@@ -574,7 +610,7 @@ export interface IPCChannels {
   'pane:agent-detected': (ptyId: string, agentKind: AgentKind | null) => void
   // Main -> renderer: a lifecycle hook event from an agent pane (spec 032). Raw forward;
   // main does NOT reduce -- the renderer owns per-pane prev state and runs eventToState.
-  'pane:agent-event': (ptyId: string, event: AgentLifecycleEvent, detail: string | undefined, turnId: string | undefined, agentId?: string) => void
+  'pane:agent-event': (ptyId: string, event: AgentLifecycleEvent, detail: string | undefined, turnId: string | undefined, agentId?: string, meta?: AgentEventMeta) => void
   // Main -> renderer: a fatal-terminal-error event from the opt-in scraping observer
   // (spec 050). Same shape as pane:agent-event (sans turnId) and feeds the SAME reducer;
   // scraping is explicitly NOT a second write path -- it adds one event type to the union.

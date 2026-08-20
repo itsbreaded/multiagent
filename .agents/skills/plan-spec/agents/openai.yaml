@@ -1,4 +1,4 @@
 interface:
-  display_name: "Plan Spec"
+  display_name: "003. Plan Spec"
   short_description: "Write a detailed implementation plan for review"
   default_prompt: "Use $plan-spec to write a detailed implementation plan for this ready spec: $ARGUMENTS"

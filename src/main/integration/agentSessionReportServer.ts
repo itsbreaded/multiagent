@@ -15,7 +15,8 @@
  */
 
 import * as http from 'http'
-import type { AgentKind, AgentLifecycleEvent } from '../../shared/types'
+import type { AgentKind, AgentLifecycleEvent, AgentWorkSnapshot } from '../../shared/types'
+import { MAX_AGENT_EVENT_BODY_BYTES, MAX_AGENT_ID_LENGTH, normalizeAgentWorkSnapshot } from '../../shared/agentStatusEvidence'
 
 const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex', 'opencode']
 
@@ -24,10 +25,10 @@ const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex', 'opencode']
 const VALID_EVENTS: readonly AgentLifecycleEvent[] = [
   'session_start', 'user_prompt_submit', 'pre_tool_use', 'post_tool_use',
   'stop', 'permission_request', 'stop_failure',
-  'bg_subagent_started', 'bg_subagent_completed',
+  'bg_subagent_started', 'bg_subagent_completed', 'work_snapshot', 'turn_interrupted', 'idle_prompt',
 ] as const
 const CLAUDE_ONLY_EVENTS: readonly AgentLifecycleEvent[] = [
-  'bg_subagent_started', 'bg_subagent_completed',
+  'bg_subagent_started', 'bg_subagent_completed', 'idle_prompt',
 ] as const
 
 export interface AgentSessionReport {
@@ -42,8 +43,10 @@ export interface AgentEventReport {
   agentKind: AgentKind
   event: AgentLifecycleEvent
   detail?: string
+  sessionId?: string
   turnId?: string
   agentId?: string
+  evidence?: AgentWorkSnapshot
 }
 
 export interface AgentSessionReportServerDeps {
@@ -106,21 +109,29 @@ export class AgentSessionReportServer {
     res.writeHead(404); res.end()
   }
 
-  private readBody(req: http.IncomingMessage): Promise<string> {
+  private readBody(req: http.IncomingMessage): Promise<string | null> {
     let body = ''
-    req.on('data', (chunk: Buffer) => { body += chunk.toString() })
-    return new Promise((resolve) => req.on('end', () => resolve(body)))
+    let bytes = 0
+    let oversized = false
+    req.on('data', (chunk: Buffer) => {
+      bytes += chunk.byteLength
+      if (bytes <= MAX_AGENT_EVENT_BODY_BYTES) body += chunk.toString()
+      else oversized = true
+    })
+    return new Promise((resolve) => req.on('end', () => resolve(oversized ? null : body)))
   }
 
   private handleSession(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.readBody(req).then((body) => {
+      if (body === null) { res.writeHead(413); res.end(); return }
       try {
         const parsed = JSON.parse(body) as Partial<AgentSessionReport>
         if (
-          typeof parsed.ptyId === 'string' &&
+          typeof parsed.ptyId === 'string' && parsed.ptyId.length > 0 && parsed.ptyId.length <= MAX_AGENT_ID_LENGTH &&
           typeof parsed.agentKind === 'string' &&
           (VALID_AGENT_KINDS as readonly string[]).includes(parsed.agentKind) &&
-          typeof parsed.sessionId === 'string' && parsed.sessionId
+          typeof parsed.sessionId === 'string' && parsed.sessionId.length > 0 && parsed.sessionId.length <= MAX_AGENT_ID_LENGTH &&
+          (parsed.transcriptPath === undefined || (typeof parsed.transcriptPath === 'string' && parsed.transcriptPath.length <= MAX_AGENT_EVENT_BODY_BYTES))
         ) {
           this.deps.onReport({
             ptyId: parsed.ptyId,
@@ -140,6 +151,7 @@ export class AgentSessionReportServer {
 
   private handleEvent(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.readBody(req).then((body) => {
+      if (body === null) { res.writeHead(413); res.end(); return }
       try {
         const parsed = JSON.parse(body) as Partial<AgentEventReport>
         if (
@@ -149,14 +161,24 @@ export class AgentSessionReportServer {
           typeof parsed.event === 'string' &&
           (VALID_EVENTS as readonly string[]).includes(parsed.event) &&
           (!(CLAUDE_ONLY_EVENTS as readonly string[]).includes(parsed.event) || parsed.agentKind === 'claude') &&
-          (parsed.agentId === undefined || (typeof parsed.agentId === 'string' && parsed.agentId.length > 0))
+          (parsed.sessionId === undefined || (typeof parsed.sessionId === 'string' && parsed.sessionId.length > 0 && parsed.sessionId.length <= MAX_AGENT_ID_LENGTH)) &&
+          (parsed.turnId === undefined || (typeof parsed.turnId === 'string' && parsed.turnId.length > 0 && parsed.turnId.length <= MAX_AGENT_ID_LENGTH)) &&
+          (parsed.detail === undefined || (typeof parsed.detail === 'string' && parsed.detail.length <= MAX_AGENT_ID_LENGTH)) &&
+          (parsed.agentId === undefined || (typeof parsed.agentId === 'string' && parsed.agentId.length > 0 && parsed.agentId.length <= MAX_AGENT_ID_LENGTH))
         ) {
+          const evidence = parsed.evidence === undefined ? undefined : normalizeAgentWorkSnapshot(parsed.evidence)
+          if (parsed.evidence !== undefined && !evidence) { res.writeHead(400); res.end(); return }
+          if (evidence && evidence.provider !== parsed.agentKind) { res.writeHead(400); res.end(); return }
+          if (parsed.sessionId && evidence?.sessionId && parsed.sessionId !== evidence.sessionId) { res.writeHead(400); res.end(); return }
+          if (parsed.turnId && evidence?.turnId && parsed.turnId !== evidence.turnId) { res.writeHead(400); res.end(); return }
           const report: AgentEventReport = {
             ptyId: parsed.ptyId,
             agentKind: parsed.agentKind as AgentKind,
             event: parsed.event as AgentLifecycleEvent,
             detail: typeof parsed.detail === 'string' ? parsed.detail : undefined,
+            sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : undefined,
             turnId: typeof parsed.turnId === 'string' ? parsed.turnId : undefined,
+            evidence,
           }
           if (typeof parsed.agentId === 'string') report.agentId = parsed.agentId
           this.deps.onEvent(report)

@@ -1,180 +1,272 @@
-/**
- * agentStatus -- pure lifecycle-event -> badge-state reducer (spec 032).
- *
- * Mirrors the discipline of paneTree.ts / cwdRepair.ts: no Electron deps, no IO, fully
- * deterministic. The renderer runs this per pane on each `pane:agent-event` (and on the
- * synthetic promote/demote from the agent-process sweeper). `now` (Date.now()) is injected
- * so tests are deterministic via vi.setSystemTime.
- *
- * The state machine is sourced primarily from agent-self-reported lifecycle hooks --
- * the authoritative path. ONE scoped, opt-in exception exists (spec 050): the
- * `terminal_error` event fed by the `agentStatusScraping` terminal-output observer,
- * which exists only because some fatal errors (notably Codex provider-compat failures)
- * print to the terminal and emit no hook at all. Default OFF; never on unless the user
- * opts in. New/restored sessions are seeded `idle` by the renderer before events arrive.
- * An explicit `unknown` state remains available when lifecycle state is genuinely
- * undetermined.
- */
+/** Pure lifecycle/evidence reducer. Main forwards; renderer state owns status. */
 
-import type { AgentStatusState, AgentStatusInput } from './types'
+import type { AgentStatusState, AgentStatusInput, AgentWorkSnapshot } from './types'
+import { hasAgentEvidenceIdentityMismatch } from './agentStatusEvidence'
 
-function clearBackgroundTracking(state: AgentStatusState): AgentStatusState {
+type RecoveryProvenance = NonNullable<AgentStatusState['recoveryProvenance']>
+
+const TERMINAL_EVENTS = new Set<AgentStatusInput['event']>([
+  'stop', 'stop_failure', 'permission_request', 'turn_interrupted', 'work_snapshot',
+  'idle_prompt', 'bg_subagent_completed',
+])
+const IDENTITY_REQUIRED_TERMINAL_EVENTS = new Set<AgentStatusInput['event']>([
+  'stop', 'turn_interrupted', 'work_snapshot', 'bg_subagent_completed',
+])
+
+function clearWork(state: AgentStatusState): AgentStatusState {
   const next = { ...state }
   delete next.activeBackgroundSubagents
   delete next.activeBackgroundSubagentIds
+  delete next.activeWorkCount
+  delete next.scheduledWorkCount
+  delete next.activeWorkIds
+  delete next.scheduledWorkIds
+  delete next.workSnapshot
   return next
 }
 
-function withBackgroundTracking(
-  state: AgentStatusState,
-  count: number,
-  ids: readonly string[],
-): AgentStatusState {
-  const next = clearBackgroundTracking(state)
+function clearRecovery(state: AgentStatusState): AgentStatusState {
+  const next = { ...state }
+  delete next.pendingInterrupt
+  delete next.recoveryGeneration
+  delete next.recoveryProvenance
+  return next
+}
+
+function copyWorkTracking(target: AgentStatusState, source: AgentStatusState | undefined): void {
+  if (!source) return
+  if (source.activeWorkCount !== undefined) target.activeWorkCount = source.activeWorkCount
+  if (source.scheduledWorkCount !== undefined) target.scheduledWorkCount = source.scheduledWorkCount
+  if (source.activeWorkIds) target.activeWorkIds = [...source.activeWorkIds]
+  if (source.scheduledWorkIds) target.scheduledWorkIds = [...source.scheduledWorkIds]
+  if (source.workSnapshot) target.workSnapshot = source.workSnapshot
+}
+
+function withBackgroundTracking(state: AgentStatusState, count: number, ids: readonly string[]): AgentStatusState {
+  const next = { ...state }
+  delete next.activeBackgroundSubagents
+  delete next.activeBackgroundSubagentIds
   if (count > 0) next.activeBackgroundSubagents = count
   if (ids.length > 0) next.activeBackgroundSubagentIds = [...ids]
+  if (count > 0) {
+    delete next.pendingInterrupt
+    delete next.recoveryGeneration
+  }
   return next
 }
 
-/**
- * Reduce a lifecycle event into the next per-pane status state.
- *
- * @param prev  the pane's current status (undefined on cold start / after demote).
- * @param input the event the hook script (or the synthetic sweeper) reported.
- * @param now   Date.now() at the call site (injected for testability).
- * @returns     the next status state, or undefined to clear the badge (demote).
- */
-export function eventToState(
-  prev: AgentStatusState | undefined,
-  input: AgentStatusInput,
-  now: number,
-): AgentStatusState | undefined {
-  // spec 050: a latched terminal_error is sticky. Any straggler hook event from the dead
-  // turn (a late tool, a stop, a permission echo, a re-promote) must NOT flap the badge
-  // back to working/idle/waiting -- the only legitimate clears are a fresh turn
-  // (user_prompt_submit), a fresh session (session_start), or process exit (demote).
-  // `stop_failure` is its own high-signal error path and stays put regardless.
+function activeWork(state: AgentStatusState | undefined): boolean {
+  return Boolean(
+    (state?.activeBackgroundSubagents ?? 0) > 0 ||
+    (state?.activeWorkCount ?? 0) > 0 ||
+    (state?.scheduledWorkCount ?? 0) > 0,
+  )
+}
+
+function identityFromInput(input: AgentStatusInput): { sessionId?: string; turnId?: string } {
+  return { sessionId: input.sessionId ?? input.evidence?.sessionId, turnId: input.turnId ?? input.evidence?.turnId }
+}
+
+function isStaleSession(prev: AgentStatusState | undefined, input: AgentStatusInput): boolean {
+  if (!prev?.sessionId) return false
+  const incoming = identityFromInput(input).sessionId
+  return incoming !== undefined && incoming !== prev.sessionId
+}
+
+function terminalIdentityMissing(prev: AgentStatusState, input: AgentStatusInput): boolean {
+  const incoming = identityFromInput(input)
+  return !prev.sessionId || !prev.turnId || !incoming.sessionId || !incoming.turnId ||
+    prev.sessionId !== incoming.sessionId || prev.turnId !== incoming.turnId
+}
+
+function idlePromptCanRecover(prev: AgentStatusState, input: AgentStatusInput): boolean {
+  const pending = prev.pendingInterrupt
+  const incomingSession = input.sessionId ?? input.evidence?.sessionId
+  return Boolean(
+    pending && prev.sessionId && prev.turnId && incomingSession === prev.sessionId &&
+    pending.sessionId === prev.sessionId && pending.turnId === prev.turnId &&
+    pending.generation === prev.recoveryGeneration && !activeWork(prev) &&
+    prev.status !== 'waiting' && prev.status !== 'error' && prev.event !== 'terminal_error',
+  )
+}
+
+function withSnapshot(state: AgentStatusState, snapshot: AgentWorkSnapshot, provenance: RecoveryProvenance, now: number): AgentStatusState {
+  const next = clearWork(state)
+  next.activeWorkCount = snapshot.activeCount
+  next.scheduledWorkCount = snapshot.scheduledCount
+  if (snapshot.activeIds?.length) next.activeWorkIds = [...snapshot.activeIds]
+  if (snapshot.scheduledIds?.length) next.scheduledWorkIds = [...snapshot.scheduledIds]
+  if (snapshot.provider === 'claude' && snapshot.activeCount > 0) {
+    next.activeBackgroundSubagents = snapshot.activeCount
+    if (snapshot.activeIds?.length) next.activeBackgroundSubagentIds = [...snapshot.activeIds]
+  }
+  next.workSnapshot = snapshot
+  next.recoveryProvenance = provenance
+  next.updatedAt = now
+  return next
+}
+
+function reconcileSnapshot(prev: AgentStatusState, input: AgentStatusInput, now: number, provenance: RecoveryProvenance): AgentStatusState {
+  const snapshot = input.evidence
+  if (!snapshot) return prev
+  if (snapshot.completeness !== 'complete') {
+    // Incomplete active evidence is still protective. Incomplete zero evidence cannot
+    // erase an earlier work record because the provider did not prove coverage. It
+    // also cannot leave an already-idle pane suspension-eligible: unknown coverage
+    // is represented as protected working until a complete snapshot arrives.
+    const protective = snapshot.activeCount > 0 || snapshot.scheduledCount > 0
+      ? withSnapshot(prev, snapshot, provenance, now)
+      : { ...prev, workSnapshot: snapshot, recoveryProvenance: provenance, updatedAt: now }
+    protective.sessionId = prev.sessionId ?? snapshot.sessionId ?? input.sessionId
+    protective.turnId = prev.turnId ?? snapshot.turnId ?? input.turnId
+    protective.event = input.event
+    delete protective.pendingInterrupt
+    delete protective.recoveryGeneration
+    if (prev.status !== 'waiting' && prev.status !== 'error' && prev.event !== 'terminal_error') {
+      protective.status = 'working'
+      protective.detail = 'background work'
+    }
+    return protective
+  }
+  const next = withSnapshot(prev, snapshot, provenance, now)
+  next.sessionId = prev.sessionId ?? snapshot.sessionId ?? input.sessionId
+  next.turnId = prev.turnId ?? snapshot.turnId ?? input.turnId
+  next.event = input.event
+  if (snapshot.activeCount > 0 || snapshot.scheduledCount > 0) {
+    delete next.pendingInterrupt
+    delete next.recoveryGeneration
+    if (prev.status !== 'waiting' && prev.status !== 'error' && prev.event !== 'terminal_error') {
+      next.status = 'working'
+      next.detail = 'background work'
+    }
+    return next
+  }
+  if (prev.status === 'waiting' || prev.status === 'error' || prev.event === 'terminal_error') return next
+  if (snapshot.terminalState === 'busy' || snapshot.terminalState === 'retry') {
+    next.status = 'working'
+    next.detail = input.detail ?? snapshot.terminalState
+    return next
+  }
+  if (snapshot.terminalState === 'failed') {
+    next.status = 'error'
+    next.detail = input.detail ?? 'error'
+    return next
+  }
+  next.status = 'idle'
+  delete next.detail
+  return next
+}
+
+/** Reduce one validated lifecycle/evidence event. */
+export function eventToState(prev: AgentStatusState | undefined, input: AgentStatusInput, now: number): AgentStatusState | undefined {
+  // Never downgrade a conflicting envelope to a bare lifecycle event.
+  if (hasAgentEvidenceIdentityMismatch(input)) return prev
+
   const latched = prev?.event === 'terminal_error'
   const activeCount = prev?.activeBackgroundSubagents ?? 0
   const activeIds = prev?.activeBackgroundSubagentIds ?? []
 
-  switch (input.event) {
-    case 'demote':
-      // The agent process exited (sweeper). Clear the badge entirely -- this is the
-      // missed-Stop fallback: even if a Stop hook was dropped, demotion clears it.
-      // (Also the legitimate clear of a latched terminal_error -- the dead process is gone.)
-      return undefined
+  if (isStaleSession(prev, input) && input.event !== 'session_start' && input.event !== 'user_prompt_submit') return prev
+  if (TERMINAL_EVENTS.has(input.event) && !prev) return prev
+  if (prev && IDENTITY_REQUIRED_TERMINAL_EVENTS.has(input.event) && terminalIdentityMissing(prev, input)) return prev
+  if (prev && input.event === 'idle_prompt' && !idlePromptCanRecover(prev, input)) return prev
 
+  switch (input.event) {
+    case 'demote': return undefined
     case 'promote':
-      // A CLI-launched agent was detected. Seed working immediately; the first real hook
-      // event refines it. No turnId/detail yet (the hook has not reported).
-      if (latched) return prev   // dead turn: do not resurrect working
+      if (latched) return prev
       return { status: 'working', event: 'promote', updatedAt: now }
 
-    case 'session_start':
-      // A session is ready and waiting for input (cold launch, resume, clear, compact) -- NOT
-      // a turn in progress. Seed idle ONLY on cold start (prev undefined) so an app-
-      // launched pane badges immediately instead of unknown. If state already exists,
-      // preserve it: session_start must not flip a live working turn to idle (e.g. Codex
-      // fires SessionStart on the first user message, which can arrive after
-      // UserPromptSubmit; an in-pane resume fork can fire mid-turn).
-      //
-      // spec 050 exception: when the badge is latched on terminal_error, a session_start
-      // (resume/clear/compact) is the legitimate re-arm -- the prior error is from a dead
-      // turn and the new session is a fresh start. Without this the dot would stay red
-      // across restarts, which is exactly the "silent recovery we can't verify" the spec
-      // forbids. Falls through to the existing preserve-prev behavior when NOT latched.
-      if (latched) return { status: 'idle', event: 'session_start', updatedAt: now }
-      if (activeCount > 0) {
-        return { status: 'idle', turnId: prev?.turnId, event: 'session_start', updatedAt: now }
-      }
-      return prev ?? { status: 'idle', event: 'session_start', updatedAt: now }
+    case 'session_start': {
+      const reportedSessionId = input.sessionId ?? input.evidence?.sessionId
+      const sessionId = reportedSessionId ?? prev?.sessionId
+      const changed = Boolean(prev?.sessionId && sessionId && prev.sessionId !== sessionId)
+      if (changed || !prev) return { status: 'idle', ...(sessionId ? { sessionId } : {}), event: 'session_start', updatedAt: now }
+      if (latched) return { status: 'idle', ...(sessionId ? { sessionId } : {}), event: 'session_start', updatedAt: now }
+      if (!reportedSessionId && !prev.pendingInterrupt && !prev.recoveryGeneration && !prev.recoveryProvenance) return prev
+      const next = clearRecovery(prev)
+      next.sessionId = sessionId
+      if (activeWork(next)) next.status = 'working'
+      next.event = prev.event ?? 'session_start'
+      return next
+    }
 
-    case 'user_prompt_submit':
-      // The authoritative 'a turn is in progress' signal: the user actually submitted a
-      // prompt. Seeds/refreshes working with the turn id so later out-of-order tool
-      // events can be guarded. (Also the primary clear of a latched terminal_error --
-      // the user retried.)
-      return withBackgroundTracking({
-        status: 'working',
-        turnId: input.turnId,
-        event: input.event,
-        updatedAt: now,
-      }, activeCount, activeIds)
+    case 'user_prompt_submit': {
+      const sessionId = input.sessionId ?? input.evidence?.sessionId ?? prev?.sessionId
+      const next = clearRecovery({
+        status: 'working', ...(sessionId ? { sessionId } : {}),
+        turnId: input.turnId ?? input.evidence?.turnId, event: input.event, updatedAt: now,
+      })
+      const sameSession = !prev?.sessionId || !sessionId || prev.sessionId === sessionId
+      if (sameSession) copyWorkTracking(next, prev)
+      return withBackgroundTracking(next, sameSession ? activeCount : 0, sameSession ? activeIds : [])
+    }
+
+    case 'interrupt_requested': {
+      if (!prev?.sessionId || !prev.turnId) return prev
+      const sessionId = input.sessionId ?? prev.sessionId
+      const turnId = input.turnId ?? prev.turnId
+      if (sessionId !== prev.sessionId || turnId !== prev.turnId) return prev
+      const generation = input.recoveryGeneration ?? ((prev.recoveryGeneration ?? 0) + 1)
+      return { ...prev, recoveryGeneration: generation, pendingInterrupt: { sessionId, turnId, generation }, updatedAt: now }
+    }
+
+    case 'idle_prompt': {
+      const next = clearWork(prev as AgentStatusState)
+      next.status = 'idle'
+      next.event = input.event
+      next.recoveryProvenance = 'idle_prompt_recovery'
+      delete next.detail
+      delete next.pendingInterrupt
+      next.updatedAt = now
+      return next
+    }
+
+    case 'work_snapshot':
+      return reconcileSnapshot(prev as AgentStatusState, input, now, 'stale_work_reconciliation')
+    case 'turn_interrupted':
+      return reconcileSnapshot(prev as AgentStatusState, input, now, 'interrupt_recovery')
 
     case 'pre_tool_use':
     case 'post_tool_use': {
-      // spec 050: the latch check goes at the TOP of the case so a late tool event from
-      // the dead turn short-circuits BEFORE the existing turn-id guard runs. Without this
-      // a stray post_tool_use would resurrect `working` on a pane whose turn is dead.
       if (latched) return prev
-      // Turn-id guard: once a turn ended (idle), drop late tool events from THAT turn.
-      // A tool event from a *different* turn id means a new turn started (we missed its
-      // UserPromptSubmit, or the tool fired first) -> promote to working. If the turn id
-      // is absent (older Claude with no prompt_id) we cannot distinguish, so we keep the
-      // honest idle rather than flapping -- a stuck idle is benign, a false working is not.
-      if (prev?.status === 'idle') {
-        if (input.turnId === undefined || input.turnId === prev.turnId) {
-          return prev
-        }
-      }
+      if (prev?.status === 'idle' && (input.turnId === undefined || input.turnId === prev.turnId)) return prev
       return withBackgroundTracking({
-        status: 'working',
-        detail: input.detail,
-        turnId: input.turnId ?? prev?.turnId,
-        event: input.event,
-        updatedAt: now,
+        status: 'working', ...(input.sessionId ?? input.evidence?.sessionId ?? prev?.sessionId
+          ? { sessionId: input.sessionId ?? input.evidence?.sessionId ?? prev?.sessionId } : {}),
+        detail: input.detail, turnId: input.turnId ?? prev?.turnId, event: input.event, updatedAt: now,
+        ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
       }, activeCount, activeIds)
     }
 
     case 'stop':
-      // Turn ended, awaiting input. Clear the per-tool detail.
-      if (latched) return prev   // dead turn: do not flap to idle from a late Stop
-      if (activeCount > 0) {
-        return withBackgroundTracking({
-          status: 'working',
-          detail: 'background subagent',
-          turnId: input.turnId ?? prev?.turnId,
-          event: 'stop',
-          updatedAt: now,
-        }, activeCount, activeIds)
-      }
-      return { status: 'idle', turnId: input.turnId ?? prev?.turnId, event: 'stop', updatedAt: now }
+      if (latched) return prev
+      return input.evidence ? reconcileSnapshot(prev as AgentStatusState, input, now, 'ordinary_completion') : prev
 
     case 'stop_failure':
-      // Claude only (Codex has no StopFailure). High-signal: always apply.
       return withBackgroundTracking({
-        status: 'error',
-        detail: input.detail ?? 'error',
-        turnId: input.turnId ?? prev?.turnId,
-        event: 'stop_failure',
-        updatedAt: now,
+        status: 'error', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail ?? 'error',
+        turnId: input.turnId ?? prev?.turnId, event: 'stop_failure', updatedAt: now,
+        ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
       }, activeCount, activeIds)
 
     case 'permission_request':
-      // Permission prompt -- the headline signal. High-signal: always apply. Inherit the
-      // turn id when the hook payload omits it (e.g. Claude Notification message-only).
-      if (latched) return prev   // dead turn: do not flap to waiting from a stale prompt
+      if (latched) return prev
       return withBackgroundTracking({
-        status: 'waiting',
-        detail: input.detail,
-        turnId: input.turnId ?? prev?.turnId,
-        event: 'permission_request',
-        updatedAt: now,
+        status: 'waiting', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail,
+        turnId: input.turnId ?? prev?.turnId, event: 'permission_request', updatedAt: now,
+        ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
       }, activeCount, activeIds)
 
     case 'terminal_error':
-      // spec 050: the ONLY event fed by the opt-in terminal-output observer (the
-      // `agentStatusScraping` setting). Latches the badge red until the next
-      // user_prompt_submit / session_start / demote -- see the `latched` guard at the
-      // top of each preserving case. Carries no turn id (the detector has no turn
-      // context), so it inherits the prior turn id to keep the tooltip coherent.
       return withBackgroundTracking({
-        status: 'error',
-        detail: input.detail ?? 'terminal error',
-        turnId: prev?.turnId,
-        event: 'terminal_error',
-        updatedAt: now,
+        status: 'error', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail ?? 'terminal error',
+        turnId: prev?.turnId, event: 'terminal_error', updatedAt: now,
+        ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
       }, activeCount, activeIds)
 
     case 'bg_subagent_started': {
@@ -182,52 +274,53 @@ export function eventToState(
       if (agentId && activeIds.includes(agentId)) return prev
       const nextCount = Math.max(0, activeCount) + 1
       const nextIds = agentId ? [...activeIds, agentId] : activeIds
-      if (prev && (latched || prev.status === 'waiting' || prev.status === 'error')) {
-        return withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
-      }
+      if (prev && (latched || prev.status === 'waiting' || prev.status === 'error')) return withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
       return withBackgroundTracking({
-        status: 'working',
-        detail: input.detail ?? 'background subagent',
-        turnId: input.turnId ?? prev?.turnId,
-        event: 'bg_subagent_started',
-        updatedAt: now,
+        status: 'working', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail ?? 'background subagent',
+        turnId: input.turnId ?? prev?.turnId, event: input.event, updatedAt: now,
       }, nextCount, nextIds)
     }
 
     case 'bg_subagent_completed': {
+      // Claude's SubagentStop payload can carry the provider's complete task/cron
+      // snapshot. Prefer that authoritative reconciliation over the legacy
+      // single-identity counter; one child completion must not hide siblings or
+      // scheduled work.
+      if (input.evidence) return reconcileSnapshot(prev as AgentStatusState, input, now, 'ordinary_completion')
       const agentId = input.agentId?.trim() || undefined
-      if (!agentId) return prev
+      if (!agentId || !prev) return prev
       const index = activeIds.indexOf(agentId)
       if (index < 0) return prev
-
       const nextIds = activeIds.filter((id) => id !== agentId)
       const nextCount = Math.max(0, activeCount - 1)
-      if (latched) {
-        return withBackgroundTracking({ ...prev!, updatedAt: now }, nextCount, nextIds)
-      }
-      if (nextCount > 0) {
-        if (prev?.status === 'waiting' || prev?.status === 'error') {
-          return withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
+      const reconciled = withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
+      // A provider-authorized completion may release its own known aggregate
+      // identity, but it cannot decrement an aggregate count whose identities
+      // were not supplied.
+      if (reconciled.activeWorkIds?.includes(agentId)) {
+        const remainingIds = reconciled.activeWorkIds.filter((id) => id !== agentId)
+        reconciled.activeWorkIds = remainingIds.length > 0 ? remainingIds : undefined
+        reconciled.activeWorkCount = Math.max(0, (reconciled.activeWorkCount ?? 0) - 1)
+        if (reconciled.workSnapshot?.completeness === 'complete') {
+          reconciled.workSnapshot = {
+            ...reconciled.workSnapshot,
+            activeCount: reconciled.activeWorkCount,
+            ...(remainingIds.length > 0 ? { activeIds: remainingIds } : { activeIds: undefined }),
+          }
         }
-        return withBackgroundTracking({
-          status: 'working',
-          detail: 'background subagent',
-          turnId: prev?.turnId,
-          event: prev?.event === 'stop' ? 'stop' : 'bg_subagent_completed',
-          updatedAt: now,
-        }, nextCount, nextIds)
       }
-
-      const cleared = clearBackgroundTracking(prev!)
-      if (prev?.status === 'working' && prev.event === 'stop') {
-        return { status: 'idle', turnId: prev.turnId, event: 'stop', updatedAt: now }
+      if (latched) return reconciled
+      if (nextCount > 0) {
+        if (prev.status === 'waiting' || prev.status === 'error') return reconciled
+        return { ...reconciled, status: 'working', detail: 'background subagent' }
       }
+      const remainingUnknownWork = reconciled.workSnapshot?.completeness === 'incomplete'
+      if (activeWork(reconciled) || remainingUnknownWork) return reconciled
+      const cleared = clearWork(reconciled)
+      if (prev.status === 'working' && prev.event === 'stop') return { status: 'idle', sessionId: prev.sessionId, turnId: prev.turnId, event: 'stop', updatedAt: now }
       return { ...cleared, updatedAt: now }
     }
 
-    default:
-      // Unknown event (not in the allow-list). Never throws; keep the prior state so a
-      // stray/forward-incompatible event cannot blank a live badge.
-      return prev
+    default: return prev
   }
 }

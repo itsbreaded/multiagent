@@ -40,17 +40,19 @@ if (-not $event) { $event = 'session_start' }
 
 try {
   $raw = [Console]::In.ReadToEnd()
-  if ($raw) { $payload = $raw | ConvertFrom-Json } else { $payload = $null }
+  if ($raw) { $payload = $raw | ConvertFrom-Json -ErrorAction Stop } else { $payload = $null }
 } catch {
   $payload = $null
 }
 
 function Post-Event {
-  param([string]$EventName, [string]$Detail, [string]$TurnId, [string]$AgentId)
+  param([string]$EventName, [string]$Detail, [string]$TurnId, [string]$AgentId, [string]$SessionId, [object]$Evidence)
   $body = [ordered]@{ ptyId = $ptyId; agentKind = $agentKind; event = $EventName }
   if ($Detail) { $body['detail'] = $Detail }
   if ($TurnId) { $body['turnId'] = $TurnId }
   if ($AgentId) { $body['agentId'] = $AgentId }
+  if ($SessionId) { $body['sessionId'] = $SessionId }
+  if ($null -ne $Evidence) { $body['evidence'] = $Evidence }
   try {
     $json = $body | ConvertTo-Json -Compress
     Invoke-RestMethod -Uri ("http://127.0.0.1:{0}/agent-event" -f $port) -Method POST -Body $json -ContentType 'application/json' -TimeoutSec 2 | Out-Null
@@ -75,6 +77,43 @@ function Get-TurnId {
   return $null
 }
 
+function Get-SessionId {
+  if ($payload) { return $payload.session_id }
+  return $null
+}
+
+function New-ClaudeSnapshot {
+  param([string]$TerminalState)
+  if (-not $payload) { return [pscustomobject]@{ provider = 'claude'; completeness = 'incomplete'; terminalState = $TerminalState; activeCount = 1; scheduledCount = 1 } }
+  $complete = $true
+  $active = @()
+  $scheduled = @()
+  foreach ($name in @('background_tasks', 'session_crons')) {
+    $property = $payload.PSObject.Properties[$name]
+    if ($null -eq $property -or $null -eq $property.Value) { $complete = $false; continue }
+    $value = @($property.Value)
+    if ($value.Count -gt 64) { $complete = $false; continue }
+    foreach ($item in $value) {
+      if ($null -eq $item -or $item -is [string] -or $item -is [ValueType]) { $complete = $false; continue }
+      if ($name -eq 'background_tasks') { $active += $item } else { $scheduled += $item }
+    }
+  }
+  $result = [ordered]@{
+    provider = 'claude'
+    completeness = $(if ($complete) { 'complete' } else { 'incomplete' })
+    terminalState = $TerminalState
+    activeCount = $(if ($complete) { $active.Count } else { [Math]::Max(1, $active.Count) })
+    scheduledCount = $(if ($complete) { $scheduled.Count } else { [Math]::Max(1, $scheduled.Count) })
+  }
+  if ($complete) {
+    $activeIds = @($active | ForEach-Object { if ($_.id) { $_.id } else { $_.task_id } } | Where-Object { $_ -is [string] -and $_.Length -le 256 })
+    $scheduledIds = @($scheduled | ForEach-Object { $_.id } | Where-Object { $_ -is [string] -and $_.Length -le 256 })
+    if ($activeIds.Count -eq $active.Count -and $activeIds.Count -gt 0) { $result['activeIds'] = $activeIds }
+    if ($scheduledIds.Count -eq $scheduled.Count -and $scheduledIds.Count -gt 0) { $result['scheduledIds'] = $scheduledIds }
+  }
+  return [pscustomobject]$result
+}
+
 function Get-AgentId {
   if (-not $payload) { return $null }
   if ($event -eq 'bg_subagent_completed') { return $payload.agent_id }
@@ -87,16 +126,16 @@ switch ($event) {
     $sid = $payload.session_id
     # Always seed the badge (working). The session-id linking report is skipped for
     # app-launched Claude (MULTIAGENT_SESSION_ID set) -- it already has its id.
-    Post-Event -EventName 'session_start' -TurnId $sid
+    Post-Event -EventName 'session_start' -SessionId $sid
     if (-not $env:MULTIAGENT_SESSION_ID -and $sid) {
       Post-Session -SessionId $sid -TranscriptPath $payload.transcript_path
     }
   }
   'user_prompt_submit' {
-    Post-Event -EventName 'user_prompt_submit' -TurnId (Get-TurnId)
+    Post-Event -EventName 'user_prompt_submit' -TurnId (Get-TurnId) -SessionId (Get-SessionId)
   }
   'pre_tool_use' {
-    Post-Event -EventName 'pre_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId)
+    Post-Event -EventName 'pre_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId) -SessionId (Get-SessionId)
   }
   'post_tool_use' {
     $isAgentTool = $payload.tool_name -eq 'Agent' -or $payload.tool_name -eq 'Task'
@@ -107,29 +146,37 @@ switch ($event) {
     if ($isBackground) {
       $detail = $payload.tool_name
       if (-not $detail) { $detail = 'background subagent' }
-      Post-Event -EventName 'bg_subagent_started' -Detail $detail -TurnId (Get-TurnId) -AgentId (Get-AgentId)
+      Post-Event -EventName 'bg_subagent_started' -Detail $detail -TurnId (Get-TurnId) -AgentId (Get-AgentId) -SessionId (Get-SessionId)
     } else {
-      Post-Event -EventName 'post_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId)
+      Post-Event -EventName 'post_tool_use' -Detail $payload.tool_name -TurnId (Get-TurnId) -SessionId (Get-SessionId)
     }
   }
   'bg_subagent_completed' {
-    Post-Event -EventName 'bg_subagent_completed' -TurnId (Get-TurnId) -AgentId (Get-AgentId)
+    $evidence = if ($agentKind -eq 'claude') { New-ClaudeSnapshot -TerminalState 'completed' } else { $null }
+    Post-Event -EventName 'bg_subagent_completed' -TurnId (Get-TurnId) -AgentId (Get-AgentId) -SessionId (Get-SessionId) -Evidence $evidence
   }
   'stop' {
-    Post-Event -EventName 'stop' -TurnId (Get-TurnId)
+    $evidence = if ($agentKind -eq 'claude') { New-ClaudeSnapshot -TerminalState 'completed' } else { $null }
+    Post-Event -EventName 'stop' -TurnId (Get-TurnId) -SessionId (Get-SessionId) -Evidence $evidence
+  }
+  'idle_prompt' {
+    $sid = Get-SessionId
+    if ($payload.notification_type -eq 'idle_prompt' -and $sid) {
+      Post-Event -EventName 'idle_prompt' -SessionId $sid
+    }
   }
   'permission_request' {
     # Claude Notification(permission_prompt) carries `message`; Codex PermissionRequest
     # carries `tool_name`. Prefer the notification message, fall back to the tool name.
     $detail = $payload.message
     if (-not $detail) { $detail = $payload.tool_name }
-    Post-Event -EventName 'permission_request' -Detail $detail -TurnId (Get-TurnId)
+    Post-Event -EventName 'permission_request' -Detail $detail -TurnId (Get-TurnId) -SessionId (Get-SessionId)
   }
   'stop_failure' {
     # Claude only. The payload may carry an error type/message; send whatever is present.
     $detail = $payload.error_type
     if (-not $detail) { $detail = $payload.message }
-    Post-Event -EventName 'stop_failure' -Detail $detail -TurnId (Get-TurnId)
+    Post-Event -EventName 'stop_failure' -Detail $detail -TurnId (Get-TurnId) -SessionId (Get-SessionId)
   }
   default {
     # Unknown event arg: no-op. Never blocks.

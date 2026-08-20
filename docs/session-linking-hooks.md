@@ -304,7 +304,7 @@ from the toggle. With the toggle **on** (default), `ManagedHookController`
 
 | File | What | Surgery |
 |---|---|---|
-| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matcher `permission_prompt`), `Stop`, `StopFailure`, `SubagentStop` | `managedHooks.ts` (JSON) |
+| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matchers `permission_prompt` + `idle_prompt`), `Stop`, `StopFailure`, `SubagentStop` | `managedHooks.ts` (JSON) |
 | `~/.codex/hooks.json` | Codex `SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PermissionRequest` (matcher `.*`), `Stop` | `managedHooks.ts` (same JSON shape) |
 | `~/.codex/config.toml` | `[features] hooks = true` | `codexConfigFeatures.ts` (line-based TOML) |
 
@@ -453,7 +453,8 @@ In all cases the pane continues to work as a terminal — only the session linka
 | `src/main/integration/managedHookController.ts` | IO orchestrator: installs/uninstalls both hooks + the feature flag, copies the script to `<userData>`, writes `.bak`, atomic replace, legacy cleanup. |
 | `src/main/ipc/handlers.ts` | Constructs the report server + controller, wires `getPaneEnv`, emits `session:detected` from `onReport`, default-on apply + startup-race `await`. |
 | `src/main/pty/buildEnv.ts` | Scrubs inherited `MULTIAGENT_*` vars so a nested MultiAgent can't reuse them. |
-| `src/main/sessions/SessionSpawner.ts` | App-Claude `--session-id` + `MULTIAGENT_SESSION_ID` via `agentEnv`. (Codex launches plain — no bypass flag.) |
+| `src/main/sessions/SessionSpawner.ts` | App-Claude `--session-id` + `MULTIAGENT_SESSION_ID` via `agentEnv`; app-Codex sidecar preparation and `--remote` launch with direct fallback. |
+| `src/main/integration/codexAppServer.ts` | Pane-local Unix-socket Codex App Server/proxy observer, bounded work reconciliation, reconnect, and cleanup. |
 | `src/main/pty/agentProcessSweeper.ts` | Phase 1: process-tree promotion/demotion of shell panes that host a CLI agent. Independent of the hook; needed for demotion-on-exit (hooks fire on start, not exit). |
 | `src/renderer/src/store/panesIpc.ts` | Listener for `session:detected` → promote-if-shell → `setSessionId`. |
 | `src/renderer/src/store/settings.ts` + `…/CliSessionLinkingSetting.tsx` | The toggle (default-on, hydrates from main). |
@@ -461,18 +462,33 @@ In all cases the pane continues to work as a terminal — only the session linka
 
 ---
 
-## Live status badges (spec 032)
+## Live status badges and recovery (spec 032 / 067)
+
+Spec 067 extends this section with a fail-closed evidence contract. The report server bounds
+and validates an optional session/turn-aware work snapshot; main preserves it across IPC and
+the renderer's single `eventToState` reducer owns the result. Runtime status, work counts,
+session/turn identity, and recovery provenance remain in memory and are never persisted.
+
+An idle transition requires provider-authoritative complete empty evidence for the current
+session/turn. A bare `stop`, missing or stale identity, malformed report, or incomplete
+zero-work snapshot cannot establish idle. Any active or scheduled work keeps the pane
+protected. Escape records one renderer-side interrupt marker; Claude's exact
+`Notification` `idle_prompt` can recover only that matching marker while no work is active.
+New prompts, session replacement, PTY exit, demotion, and active-work evidence invalidate it.
+There is no quiet-time timer, process-age rule, terminal-text classifier, or second status
+writer. Automatic suspension performs a microtask commit check so active work arriving before
+the kill commit cancels the kill.
 
 The same managed hooks also drive a per-pane status badge (`idle` / `working` / `waiting` /
 `error` / `unknown`) in each agent's `PaneHeader`. The hook script POSTs each lifecycle
 event to a second report-server route, `/agent-event`, which main forwards raw to the
 owning pane's renderer; the renderer runs a pure `eventToState` reducer per pane. State is
-in-memory only (never persisted) and sourced **entirely from the agent's own hook events** —
+in-memory only (never persisted) and sourced from provider lifecycle hooks and adapters —
 never from screen/OSC scraping (the lesson of the rolled-back spec 048). New and restored
-agent sessions begin at `idle`; later hook events replace that initial state. Explicit
+agent sessions begin at `idle`; later provider events replace that initial state. Explicit
 `unknown` remains available when lifecycle state is genuinely undetermined.
 
-Event -> state mapping (the reducer in `src/shared/agentStatus.ts`):
+Event -> state mapping (the reducer in `src/shared/agentStatus.ts`; completion is evidence-gated):
 
 | Event | State |
 |---|---|
@@ -480,21 +496,38 @@ Event -> state mapping (the reducer in `src/shared/agentStatus.ts`):
 | `user_prompt_submit` | `working` (turn started) |
 | `pre_tool_use` / `post_tool_use` | `working` (detail = tool name) |
 | `permission_request` | `waiting` (permission prompt — needs you) |
-| `stop` | `idle` (turn ended) |
+| `stop` | `idle` only with complete empty current-session evidence; otherwise remains protected |
 | `stop_failure` | `error` (Claude only) |
 | `promote` / `demote` (synthetic, from the process sweeper) | `working` / clears the badge |
+
+The legacy event table above describes the visible vocabulary; completion semantics are now
+evidence-gated as described above. Provider-specific recovery remains independent:
+
+- **Claude** installs separate `Notification` matchers for `permission_prompt` and
+  `idle_prompt`. `Stop` and `SubagentStop` include bounded task/schedule evidence when the
+  hook payload exposes it; missing or non-empty/unparseable arrays remain incomplete.
+- **Codex** direct-CLI panes retain hook-only reporting. App-launched Codex uses a pane-local
+  Unix-socket App Server sidecar and `codex --remote`; its observer reconciles turn completion
+  with background-terminal and descendant-thread queries. Preparation can fall back to direct
+  CLI before the PTY exists; observer loss after launch is incomplete/protected and does not
+  recreate the user's pane. Cleanup is awaited on kill, PTY exit/error, host recovery,
+  replacement, and shutdown.
+- **OpenCode** uses the process-scoped plugin's current `session.created`/`updated`,
+  `session.status`, `session.error`, and permission events. Current `1.18.14` exposes no
+  authoritative child-coverage field, so root-only idle is incomplete/protected; a child
+  status never stops its parent. Unknown or drifted event shapes are ignored.
 
 Claude vs Codex for badges:
 - **Claude** reports permission prompts via the `Notification` hook (matcher
   `permission_prompt`) and turn failures via `StopFailure`, so all five states are
   reachable.
 - **Codex** has **no `Notification` hook** and **no `StopFailure`**. Permission prompts come
-  from the `PermissionRequest` hook (matcher `.*`); a failed Codex turn simply shows `idle`
-  (honest — there is no hook error signal to report). `error` is therefore Claude-only via
-  hooks. Spec 050 adds the scoped, opt-in `agentStatusScraping` complement that detects
-  Codex fatal terminal errors (e.g. provider-compat 4xx/5xx) from the PTY byte stream as a
-  latched `terminal_error` event — see `docs/pty-and-terminals.md`. It is off by default and
-  composes at the reducer; it does not add a hook or a second status write path.
+  from the `PermissionRequest` hook (matcher `.*`). Direct-CLI panes therefore retain the
+  hook-only contract; app-launched panes additionally use the pane-local App Server observer
+  when it is available. Spec 050 adds the scoped, opt-in `agentStatusScraping` complement that
+  detects Codex fatal terminal errors (e.g. provider-compat 4xx/5xx) from the PTY byte stream
+  as a latched `terminal_error` event — see `docs/pty-and-terminals.md`. It is off by default
+  and composes at the reducer; it does not add a hook or a second status write path.
 - Both seed `working` on every turn via `UserPromptSubmit` (Codex ignores the matcher for
   that event but still fires it; turn identity is Codex's `turn_id`, Claude's `prompt_id`).
 - Turn identity (`prompt_id` / `turn_id`) lets the reducer drop out-of-order late tool

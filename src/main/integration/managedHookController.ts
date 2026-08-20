@@ -35,7 +35,7 @@ import { timestampForFilename } from '../ipc/layoutStore'
 import {
   injectManagedHook,
   removeManagedHook,
-  pruneManagedHooks,
+  reconcileManagedHooks,
   hasManagedHook,
   generateHookCommand,
 } from './managedHooks'
@@ -65,6 +65,7 @@ const CLAUDE_EVENTS: readonly ManagedEvent[] = [
   { configKey: 'PreToolUse', matcher: '', scriptArg: 'pre_tool_use' },
   { configKey: 'PostToolUse', matcher: '', scriptArg: 'post_tool_use' },
   { configKey: 'Notification', matcher: 'permission_prompt', scriptArg: 'permission_request' },
+  { configKey: 'Notification', matcher: 'idle_prompt', scriptArg: 'idle_prompt' },
   { configKey: 'Stop', matcher: '', scriptArg: 'stop' },
   { configKey: 'StopFailure', matcher: '', scriptArg: 'stop_failure' },
   { configKey: 'SubagentStop', matcher: '', scriptArg: 'bg_subagent_completed' },
@@ -167,14 +168,14 @@ export class ManagedHookController {
       // Reconcile first: drop managed entries from event keys no longer in the desired set
       // (orphans left by a prior version), then inject/update the current set. Idempotent --
       // a steady-state install produces a byte-identical config and writeJsonConfig skips.
-      let next = pruneManagedHooks(cfg, new Set(CLAUDE_EVENTS.map((e) => e.configKey)))
+      let next = reconcileManagedHooks(cfg, CLAUDE_EVENTS)
       for (const ev of CLAUDE_EVENTS) {
         next = injectManagedHook(next, ev.configKey, generateHookCommand(scriptPath, 'claude', ev.scriptArg), ev.matcher)
       }
       return next
     })
     this.writeJsonConfig(this.deps.codexHooksPath, (cfg) => {
-      let next = pruneManagedHooks(cfg, new Set(CODEX_EVENTS.map((e) => e.configKey)))
+      let next = reconcileManagedHooks(cfg, CODEX_EVENTS)
       for (const ev of CODEX_EVENTS) {
         next = injectManagedHook(next, ev.configKey, generateHookCommand(scriptPath, 'codex', ev.scriptArg), ev.matcher)
       }

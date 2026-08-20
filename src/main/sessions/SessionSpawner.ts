@@ -1,6 +1,8 @@
 import * as fs from 'fs'
 import { randomUUID } from 'crypto'
 import type { PtyManager } from '../pty/PtyManager'
+import { buildEnv } from '../pty/buildEnv'
+import type { CodexAppServerManager } from '../integration/codexAppServer'
 import type { AgentKind, AgentProviderSettings } from '../../shared/types'
 import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentOpencodeMcpUrl, currentMcpSettings, currentUiMcpUrl } from '../mcp/McpInjector'
 import { defaultShell } from '../pty/shell'
@@ -23,11 +25,22 @@ export function setOpencodePluginPath(pathToPlugin: string | null): void {
 }
 
 export class SessionSpawner {
-  constructor(private ptyManager: PtyManager) {}
+  constructor(
+    private ptyManager: PtyManager,
+    private readonly options: { getPaneEnv?: (ptyId: string) => Record<string, string | undefined>; codexAppServer?: CodexAppServerManager } = {},
+  ) {}
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     // spec 047 phase 4: the Codex file-poll scanner is gone (replaced by managed hooks).
-    // Nothing timer-based remains here.
+    await this.options.codexAppServer?.dispose()
+  }
+
+  async disposePty(ptyId: string): Promise<void> {
+    await this.options.codexAppServer?.disposePty(ptyId)
+  }
+
+  bindAgentSession(ptyId: string, agentKind: AgentKind, sessionId: string): void {
+    if (agentKind === 'codex') this.options.codexAppServer?.bindSession(ptyId, sessionId)
   }
 
   async spawnNew(agentKind: AgentKind, cwd: string): Promise<{ ptyId: string; sessionId: string | null; detectionStartedAt: number }> {
@@ -36,30 +49,58 @@ export class SessionSpawner {
     // spec 047 phase 4: Codex no longer gets a launch-time id. App-launched Codex links via
     // the managed SessionStart hook (after a one-time `codex /hooks` trust); Claude keeps --session-id.
     const sessionId = agentKind === 'claude' ? randomUUID() : null
-    const ptyId = this.ptyManager.createDeferred(
-      cwd,
-      agentLaunchCommand(newSessionCommand(agentKind, sessionId ?? undefined)),
-      agentEnv(agentKind, sessionId ?? undefined),
-      undefined, // initialSize: overridden by renderer's first pty:resize (see deferSpawn)
-      false,     // allowCwdFallback: assertUsableAgentCwd already validated
-      true,      // deferSpawn: wait for fitted size before spawning CLI
-      'new-agent',
-    )
-    return { ptyId, sessionId, detectionStartedAt: startedAt }
+    const requestedId = agentKind === 'codex' ? randomUUID() : undefined
+    const extraEnv = agentEnv(agentKind, sessionId ?? undefined)
+    const sidecar = await this.prepareCodex(requestedId, agentKind, cwd, extraEnv)
+    try {
+      const ptyId = this.ptyManager.createDeferred(
+        cwd,
+        agentLaunchCommand(sidecar ? codexRemoteCommand(sidecar.socketPath) : newSessionCommand(agentKind, sessionId ?? undefined)),
+        extraEnv,
+        undefined, false, true, 'new-agent', requestedId,
+      )
+      return { ptyId, sessionId, detectionStartedAt: startedAt }
+    } catch (error) {
+      if (requestedId) await this.options.codexAppServer?.disposePty(requestedId)
+      throw error
+    }
   }
 
   async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string): Promise<{ ptyId: string }> {
     assertUsableAgentCwd(cwd)
-    const ptyId = this.ptyManager.createDeferred(
-      cwd,
-      agentLaunchCommand(resumeSessionCommand(agentKind, sessionId, cwd)),
-      agentEnv(agentKind, agentKind === 'claude' ? sessionId : undefined),
-      undefined, // initialSize: overridden by renderer's first pty:resize (see deferSpawn)
-      false,     // allowCwdFallback
-      true,      // deferSpawn: wait for fitted size before spawning CLI
-      'resume-agent',
-    )
-    return { ptyId }
+    const requestedId = agentKind === 'codex' ? randomUUID() : undefined
+    const extraEnv = agentEnv(agentKind, agentKind === 'claude' ? sessionId : undefined)
+    const sidecar = await this.prepareCodex(requestedId, agentKind, cwd, extraEnv)
+    try {
+      const ptyId = this.ptyManager.createDeferred(
+        cwd,
+        agentLaunchCommand(sidecar ? codexRemoteCommand(sidecar.socketPath, sessionId, cwd) : resumeSessionCommand(agentKind, sessionId, cwd)),
+        extraEnv,
+        undefined, false, true, 'resume-agent', requestedId,
+      )
+      return { ptyId }
+    } catch (error) {
+      if (requestedId) await this.options.codexAppServer?.disposePty(requestedId)
+      throw error
+    }
+  }
+
+  private async prepareCodex(
+    requestedId: string | undefined,
+    agentKind: AgentKind,
+    cwd: string,
+    extraEnv: Record<string, string | undefined>,
+  ): Promise<{ socketPath: string } | null> {
+    if (agentKind !== 'codex' || !requestedId || !this.options.codexAppServer || process.env['MULTIAGENT_E2E_USER_DATA_DIR']) return null
+    try {
+      const paneEnv = this.options.getPaneEnv?.(requestedId) ?? {}
+      return await this.options.codexAppServer.prepare(requestedId, cwd, buildEnv({ ...extraEnv, ...paneEnv }))
+    } catch {
+      // Sidecar preparation is best-effort before the PTY exists. The direct CLI
+      // fallback remains available; PTY creation still fails normally if its own
+      // environment or launch setup is invalid.
+      return null
+    }
   }
 }
 
@@ -317,6 +358,12 @@ export function resumeSessionCommand(agentKind: AgentKind, sessionId: string, cw
   if (agentKind === 'claude') return `claude${claudeCliArgs()} --resume ${shellArg(sessionId)}`
   if (agentKind === 'opencode') return `opencode --session ${shellArg(sessionId)}${opencodeCliArgs()}`
   return `codex resume${codexCliArgs()} -C ${shellArg(cwd)} ${shellArg(sessionId)}`
+}
+
+export function codexRemoteCommand(socketPath: string, sessionId?: string, cwd?: string): string {
+  const remote = ` --remote ${shellArg(`unix://${socketPath.replace(/\\/g, '/')}`)}`
+  if (!sessionId) return `codex${codexCliArgs()}${remote}`
+  return `codex${codexCliArgs()}${remote} resume -C ${shellArg(cwd ?? '')} ${shellArg(sessionId)}`
 }
 
 function claudeCliArgs(sessionId?: string): string {

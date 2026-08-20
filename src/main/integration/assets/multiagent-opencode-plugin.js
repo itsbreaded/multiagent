@@ -56,14 +56,91 @@ function reportSession(sessionId, transcriptPath) {
   })
 }
 
-function reportEvent(event, detail, turnId) {
+function reportEvent(event, detail, sessionID) {
+  const rootID = rootFor(sessionID)
+  if (!rootID) return
   post('/agent-event', {
     ptyId: PTY_ID,
     agentKind: 'opencode',
     event: event,
     detail: detail,
-    turnId: turnId,
+    turnId: turnFor(rootID, false),
+    sessionId: rootID,
   })
+}
+
+const MAX_SESSIONS = 256
+const sessionInfo = new Map()
+const sessionStatus = new Map()
+const sessionTurns = new Map()
+const unresolvedSessions = new Set()
+let rootSessionID
+
+function rememberSession(info) {
+  if (!info || typeof info.id !== 'string' || !info.id) return
+  sessionInfo.set(info.id, { parentID: typeof info.parentID === 'string' ? info.parentID : undefined })
+  unresolvedSessions.delete(info.id)
+  if (!info.parentID && !rootSessionID) rootSessionID = info.id
+  while (sessionInfo.size > MAX_SESSIONS) {
+    const first = sessionInfo.keys().next().value
+    if (first === rootSessionID && sessionInfo.size > 1) {
+      const second = sessionInfo.keys()
+      second.next()
+      const victim = second.next().value
+      if (victim) sessionInfo.delete(victim)
+    } else if (first) {
+      sessionInfo.delete(first)
+    } else break
+  }
+}
+
+function rootFor(sessionID) {
+  if (typeof sessionID !== 'string' || !sessionID) return undefined
+  let current = sessionID
+  const seen = new Set()
+  while (!seen.has(current)) {
+    seen.add(current)
+    const info = sessionInfo.get(current)
+    if (!info) return undefined
+    if (!info.parentID) return current
+    current = info.parentID
+  }
+  return undefined
+}
+
+function turnFor(rootID, create) {
+  const existing = sessionTurns.get(rootID)
+  if (existing || !create) return existing
+  const next = rootID + ':turn:1'
+  sessionTurns.set(rootID, next)
+  return next
+}
+
+function reportEventWithEvidence(event, detail, rootID, turnID, evidence) {
+  if (!rootID) return
+  const body = { ptyId: PTY_ID, agentKind: 'opencode', event, detail, turnId: turnID, sessionId: rootID }
+  if (evidence) body.evidence = evidence
+  post('/agent-event', body)
+}
+
+function snapshot(rootID, terminalState) {
+  const allActiveIDs = []
+  for (const [id, state] of sessionStatus) {
+    if (state !== 'busy' && state !== 'retry') continue
+    if (rootFor(id) === rootID) allActiveIDs.push(id)
+  }
+  const activeCount = Math.min(allActiveIDs.length, 64)
+  const activeIDs = allActiveIDs.filter((id) => typeof id === 'string' && id.length <= 256).slice(0, 64)
+  return {
+    provider: 'opencode',
+    completeness: 'incomplete',
+    terminalState,
+    activeCount,
+    scheduledCount: 0,
+    ...(activeCount > 0 && activeIDs.length === activeCount ? { activeIds: activeIDs } : {}),
+    sessionId: rootID,
+    turnId: turnFor(rootID, false),
+  }
 }
 
 export const MultiAgentPlugin = async function () {
@@ -78,30 +155,54 @@ export const MultiAgentPlugin = async function () {
         switch (event.type) {
           case 'session.created': {
             const info = event.properties?.info
-            if (info?.id) reportSession(String(info.id), null)
-            reportEvent('session_start', undefined, info?.id ? String(info.id) : undefined)
+            rememberSession(info)
+            if (info?.id && !info.parentID) {
+              rootSessionID = String(info.id)
+              reportSession(rootSessionID, null)
+              reportEventWithEvidence('session_start', undefined, rootSessionID, undefined)
+            }
             break
           }
-          case 'session.idle': {
-            reportEvent('stop', undefined, event.properties?.sessionID)
+          case 'session.updated': {
+            const info = event.properties?.info
+            rememberSession(info)
             break
           }
           case 'session.status': {
-            // properties.status is a discriminated union: {type:'idle'|'busy'|'retry',...}.
-            // Only a busy status means a turn is actively running.
-            if (event.properties?.status?.type === 'busy') {
-              reportEvent('user_prompt_submit', undefined, event.properties?.sessionID)
+            const sessionID = event.properties?.sessionID
+            const type = event.properties?.status?.type
+            if (!sessionID || typeof type !== 'string') break
+            sessionStatus.set(sessionID, type)
+            const rootID = rootFor(sessionID)
+            if (!rootID) {
+              unresolvedSessions.add(sessionID)
+              while (unresolvedSessions.size > MAX_SESSIONS) unresolvedSessions.delete(unresolvedSessions.values().next().value)
+              break
+            }
+            unresolvedSessions.delete(sessionID)
+            if (type === 'busy') {
+              const turnID = turnFor(rootID, true)
+              reportEventWithEvidence('user_prompt_submit', undefined, rootID, turnID)
+              reportEventWithEvidence('work_snapshot', undefined, rootID, turnID, snapshot(rootID, 'busy'))
+            } else if (type === 'retry') {
+              const turnID = turnFor(rootID, true)
+              reportEventWithEvidence('user_prompt_submit', undefined, rootID, turnID)
+              reportEventWithEvidence('work_snapshot', event.properties.status.message, rootID, turnID, snapshot(rootID, 'retry'))
+            } else if (type === 'idle') {
+              reportEventWithEvidence('work_snapshot', undefined, rootID, turnFor(rootID, false), snapshot(rootID, 'idle'))
             }
             break
           }
           case 'session.error': {
             const detail = event.properties?.error?.message ?? 'session error'
-            reportEvent('stop_failure', String(detail), event.properties?.sessionID)
+            const rootID = rootFor(event.properties?.sessionID)
+            reportEventWithEvidence('stop_failure', String(detail), rootID, turnFor(rootID, false))
             break
           }
           case 'permission.updated': {
             const perm = event.properties
-            reportEvent('permission_request', perm?.title ? String(perm.title) : undefined, perm?.sessionID)
+            const rootID = rootFor(perm?.sessionID)
+            reportEventWithEvidence('permission_request', perm?.title ? String(perm.title) : undefined, rootID, turnFor(rootID, false))
             break
           }
           default:

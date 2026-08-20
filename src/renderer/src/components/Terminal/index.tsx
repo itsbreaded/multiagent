@@ -346,6 +346,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
 
       if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Escape') {
         if (store.sessionBrowserOpen || store.commandPaletteOpen) { store.closeOverlays(); return stop() }
+        if (!e.repeat && pane.paneType === 'agent') store.requestAgentInterrupt(pane.id)
       }
 
       return true

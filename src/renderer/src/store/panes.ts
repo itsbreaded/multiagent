@@ -36,17 +36,30 @@ const hydratingTabs = new Map<string, Promise<void>>()
 const automaticResumeInFlight = new Map<string, Promise<void>>()
 const automaticSuspensionInFlight = new Set<string>()
 const automaticSuspensionFailed = new Set<string>()
+const automaticSuspensionTokens = new Map<string, symbol>()
 const tabUnfocusedSince = new Map<string, number>()
 let idleCoordinatorCleanup: (() => void) | null = null
 const DEFAULT_AGENT_KIND: AgentKind = 'claude'
 
+function bindSessionToAgentStatus(leaf: PaneLeaf, sessionId: string): PaneLeaf {
+  if (leaf.paneType !== 'agent') return leaf
+  const agentStatus = eventToState(
+    leaf.agentStatus,
+    { event: 'session_start', sessionId },
+    Date.now(),
+  ) ?? { status: 'idle', sessionId, event: 'session_start', updatedAt: Date.now() }
+  return { ...leaf, sessionId, agentStatus }
+}
+
 function seedInitialAgentStatus(leaf: PaneLeaf): PaneLeaf {
-  if (leaf.paneType !== 'agent' || leaf.agentStatus) return leaf
+  if (leaf.paneType !== 'agent') return leaf
+  if (leaf.sessionId) return bindSessionToAgentStatus(leaf, leaf.sessionId)
+  if (leaf.agentStatus) return leaf
   return { ...leaf, agentStatus: { status: 'idle', updatedAt: Date.now() } }
 }
 
-function resetAgentStatusForSessionStart(): AgentStatusState {
-  return { status: 'idle', updatedAt: Date.now() }
+function resetAgentStatusForSessionStart(sessionId?: string): AgentStatusState {
+  return { status: 'idle', ...(sessionId ? { sessionId } : {}), updatedAt: Date.now() }
 }
 
 function seedInitialAgentStatuses(node: PaneNode): PaneNode {
@@ -415,6 +428,7 @@ interface PanesStore {
   updatePaneRatio: (splitId: string, ratio: number) => void
   setPtyId: (paneId: string, ptyId: string) => void
   setSessionId: (paneId: string, sessionId: string) => void
+  requestAgentInterrupt: (paneId: string) => void
   // spec 047: promote a shell pane to an agent pane (CLI agent detected in its tree) /
   // demote a previously-promoted pane back to a shell (agent exited). Pure metadata —
   // neither kills the pty nor clears scrollback. Only promotedFromShell panes demote.
@@ -539,6 +553,7 @@ async function runNewAgentSession(get: PanesGet, paneId: string, agentKind: Agen
       patch.sessionDetectionState = 'pending'
     }
     get().updatePane(paneId, patch)
+    if (typeof result?.sessionId === 'string' && result.sessionId) get().setSessionId(paneId, result.sessionId)
   } catch (err) {
     console.error('session:new IPC failed', err)
     const message = agentIpcErrorMessage(err, 'Session detection failed to start')
@@ -561,6 +576,12 @@ async function resumeIntoPane(
 ): Promise<void> {
   try {
     if (typeof window === 'undefined' || !window.ipc) return
+    // Hydrated, automatic, and explicit resumes all bind the known session before any
+    // provider output or Escape can arrive.
+    const existing = get().findPaneInAnyTab(paneId)
+    if (existing?.paneType === 'agent' && existing.sessionId === sessionId && existing.agentStatus?.sessionId !== sessionId) {
+      get().setSessionId(paneId, sessionId)
+    }
     if (opts.validateFirst) {
       const validation = await window.ipc.invoke('sessions:validate', agentKind, sessionId, cwd).catch(() => null)
       if (!validation?.found) {
@@ -1344,13 +1365,43 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   setSessionId: (paneId, sessionId) => {
     // Search all tabs — the active tab may have changed by the time the IPC call returns.
     set((s) => {
-      const tabs = patchLeafInTabs(s.tabs, paneId, {
-        sessionId,
-        sessionDetectionState: 'detected',
-        sessionDetectionError: undefined,
-        resumeError: undefined,
+      let changed = false
+      const tabs = s.tabs.map((tab) => {
+        if (!tab.rootNode) return tab
+        const pane = findLeaf(tab.rootNode, paneId)
+        if (!pane) return tab
+        const bound = bindSessionToAgentStatus(pane, sessionId)
+        const rootNode = updateLeaf(tab.rootNode, paneId, {
+          ...bound,
+          sessionDetectionState: 'detected',
+          sessionDetectionError: undefined,
+          resumeError: undefined,
+        })
+        if (rootNode === tab.rootNode) return tab
+        changed = true
+        return { ...tab, rootNode }
       })
-      return tabs ? { tabs } : s
+      return changed ? { tabs } : s
+    })
+  },
+
+  requestAgentInterrupt: (paneId) => {
+    set((s) => {
+      let changed = false
+      const tabs = s.tabs.map((tab) => {
+        if (!tab.rootNode) return tab
+        const pane = findLeaf(tab.rootNode, paneId)
+        if (!pane || pane.paneType !== 'agent') return tab
+        const nextStatus = eventToState(pane.agentStatus, {
+          event: 'interrupt_requested',
+          sessionId: pane.agentStatus?.sessionId ?? pane.sessionId,
+          turnId: pane.agentStatus?.turnId,
+        }, Date.now())
+        if (nextStatus === pane.agentStatus) return tab
+        changed = true
+        return { ...tab, rootNode: updateLeaf(tab.rootNode, paneId, { agentStatus: nextStatus }) }
+      })
+      return changed ? { tabs } : s
     })
   },
 
@@ -1410,8 +1461,25 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   setPaneAgentStatus: (paneId, state) => {
     set((s) => {
-      const tabs = patchLeafInTabs(s.tabs, paneId, { agentStatus: state })
-      return tabs ? { tabs } : s
+      let changed = false
+      const tabs = s.tabs.map((tab) => {
+        if (!tab.rootNode) return tab
+        const pane = findLeaf(tab.rootNode, paneId)
+        if (!pane) return tab
+        const active = state?.status === 'working' || (state?.activeWorkCount ?? 0) > 0 || (state?.scheduledWorkCount ?? 0) > 0 || (state?.activeBackgroundSubagents ?? 0) > 0
+        if (active && pane.agentSuspension?.reason === 'idle-policy') {
+          automaticSuspensionTokens.delete(paneId)
+          automaticSuspensionInFlight.delete(paneId)
+        }
+        const rootNode = updateLeaf(tab.rootNode, paneId, {
+          agentStatus: state,
+          ...(active && pane.agentSuspension?.reason === 'idle-policy' ? { agentSuspension: undefined } : {}),
+        })
+        if (rootNode === tab.rootNode) return tab
+        changed = true
+        return { ...tab, rootNode }
+      })
+      return changed ? { tabs } : s
     })
   },
 
@@ -1511,8 +1579,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   resumeSession: async (agentKind, sessionId, cwd) => {
-    const leaf = seedInitialAgentStatus(makeLeaf(cwd, 'agent', agentKind))
-    leaf.sessionId = sessionId
+    const leaf = bindSessionToAgentStatus(seedInitialAgentStatus(makeLeaf(cwd, 'agent', agentKind)), sessionId)
     let targetTabId = ''
     set((s) => {
       if (s.tabs.length === 0) {
@@ -1540,8 +1607,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   resumeSessionInNewTab: async (agentKind, sessionId, cwd) => {
-    const leaf = seedInitialAgentStatus(makeLeaf(cwd, 'agent', agentKind))
-    leaf.sessionId = sessionId
+    const leaf = bindSessionToAgentStatus(seedInitialAgentStatus(makeLeaf(cwd, 'agent', agentKind)), sessionId)
     const tab: Tab = { id: uuid(), rootNode: leaf, focusedPaneId: leaf.id }
     set((s) => ({
       tabs: [...s.tabs, tab],
@@ -1576,7 +1642,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       try {
         get().updatePane(paneId, {
           ptyId: undefined,
-          agentStatus: resetAgentStatusForSessionStart(),
+          agentStatus: resetAgentStatusForSessionStart(sessionId),
           agentDisconnected: undefined,
           resumeError: undefined,
           sessionDetectionError: undefined,
@@ -1608,21 +1674,36 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const ptyId = pane.ptyId
     if (!ptyId || !hasExactSessionIdentity(pane)) return
     automaticSuspensionInFlight.add(paneId)
+    const token = Symbol(paneId)
+    automaticSuspensionTokens.set(paneId, token)
     get().updatePane(paneId, {
       agentSuspension: { reason: 'idle-policy', at: Date.now() },
       agentDisconnected: undefined,
       resumeError: undefined,
     })
-    const kill = typeof window !== 'undefined' && window.ipc
-      ? window.ipc.invoke('pty:kill', ptyId)
-      : Promise.reject(new Error('IPC unavailable'))
-    void kill.then(() => {
+    queueMicrotask(() => {
+      const currentBeforeKill = get().findPaneInAnyTab(paneId)
+      const canCommit = automaticSuspensionTokens.get(paneId) === token &&
+        currentBeforeKill?.ptyId === ptyId &&
+        currentBeforeKill.agentSuspension?.reason === 'idle-policy' &&
+        hasExactSessionIdentity(currentBeforeKill) &&
+        currentBeforeKill.agentStatus?.status === 'idle'
+      if (!canCommit) {
+        automaticSuspensionTokens.delete(paneId)
+        automaticSuspensionInFlight.delete(paneId)
+        if (currentBeforeKill?.agentSuspension?.reason === 'idle-policy') get().updatePane(paneId, { agentSuspension: undefined })
+        return
+      }
+      const kill = typeof window !== 'undefined' && window.ipc
+        ? window.ipc.invoke('pty:kill', ptyId)
+        : Promise.reject(new Error('IPC unavailable'))
+      void kill.then(() => {
       automaticSuspensionFailed.delete(paneId)
       const current = get().findPaneInAnyTab(paneId)
       if (current?.agentSuspension?.reason === 'idle-policy' && current.ptyId === ptyId) {
         get().updatePane(paneId, { ptyId: undefined })
       }
-    }).catch(() => {
+      }).catch(() => {
       const current = get().findPaneInAnyTab(paneId)
       // If pty:exit already consumed the live id, the intentional marker is
       // still authoritative even though the kill invoke rejected afterward.
@@ -1630,8 +1711,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         automaticSuspensionFailed.add(paneId)
         get().updatePane(paneId, { agentSuspension: undefined })
       }
-    }).finally(() => {
-      automaticSuspensionInFlight.delete(paneId)
+      }).finally(() => {
+        automaticSuspensionTokens.delete(paneId)
+        automaticSuspensionInFlight.delete(paneId)
+      })
     })
   },
 

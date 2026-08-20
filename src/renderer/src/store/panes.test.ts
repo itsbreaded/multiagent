@@ -291,6 +291,7 @@ describe('usePanesStore — automatic idle suspension lifecycle', () => {
 
     usePanesStore.getState().suspendAgentPane(pane.id)
     expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentSuspension).toEqual({ reason: 'idle-policy', at: expect.any(Number) })
+    await Promise.resolve()
     expect(ipc.invoke).toHaveBeenCalledWith('pty:kill', 'pty-1')
 
     usePanesStore.getState().markPtyExited('pty-1', 0)
@@ -301,6 +302,29 @@ describe('usePanesStore — automatic idle suspension lifecycle', () => {
 
     resolveKill()
     await Promise.resolve()
+  })
+
+  it('cancels the suspension commit when active evidence arrives before the kill microtask', async () => {
+    const pane = makeLeaf('C:\\repo', 'agent', 'claude')
+    pane.sessionId = 'session-1'
+    pane.ptyId = 'pty-1'
+    pane.agentStatus = { status: 'idle', sessionId: 'session-1', turnId: 'turn-1', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+
+    usePanesStore.getState().suspendAgentPane(pane.id)
+    paneAgentEventHandler!('pty-1', 'work_snapshot', undefined, 'turn-1', undefined, {
+      sessionId: 'session-1',
+      evidence: {
+        provider: 'claude', completeness: 'complete', terminalState: 'busy',
+        activeCount: 1, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1',
+      },
+    })
+    await Promise.resolve()
+
+    expect(ipc.invoke).not.toHaveBeenCalledWith('pty:kill', 'pty-1')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('working')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentSuspension).toBeUndefined()
   })
 
   it('deduplicates resume attempts and clears policy intent only after success', async () => {
@@ -868,17 +892,21 @@ describe('usePanesStore — agent status badge (spec 032)', () => {
   it('pane:agent-event listener runs eventToState and stores the result by ptyId', () => {
     const pane = makeLeaf('C:\\work', 'agent', 'claude')
     pane.ptyId = 'pty-evt'
+    pane.sessionId = 'session-1'
     plantTab(pane)
     // The handler was captured at module load (see paneAgentEventHandler below).
     expect(paneAgentEventHandler).toBeDefined()
     const handler = paneAgentEventHandler!
-    handler('pty-evt', 'session_start', undefined, 'turn-1')
+    handler('pty-evt', 'session_start', undefined, 'turn-1', undefined, { sessionId: 'session-1' })
     expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
-    handler('pty-evt', 'pre_tool_use', 'Bash', 'turn-1')
+    handler('pty-evt', 'pre_tool_use', 'Bash', 'turn-1', undefined, { sessionId: 'session-1' })
     const mid = usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus
     expect(mid?.status).toBe('working')
     expect(mid?.detail).toBe('Bash')
-    handler('pty-evt', 'stop', undefined, 'turn-1')
+    handler('pty-evt', 'stop', undefined, 'turn-1', undefined, {
+      sessionId: 'session-1',
+      evidence: { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    })
     expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus?.status).toBe('idle')
     // Unknown ptyId is a no-op (no throw, no state change).
     handler('pty-missing', 'stop', undefined, 'turn-x')
@@ -888,13 +916,18 @@ describe('usePanesStore — agent status badge (spec 032)', () => {
   it('forwards the optional agent identity to background-subagent reducer events', () => {
     const pane = makeLeaf('C:\\work', 'agent', 'claude')
     pane.ptyId = 'pty-bg'
+    pane.sessionId = 'session-1'
     plantTab(pane)
     const handler = paneAgentEventHandler!
-    handler('pty-bg', 'bg_subagent_started', 'background subagent', 'turn-1', 'sub-1')
-    handler('pty-bg', 'stop', undefined, 'turn-1')
+    handler('pty-bg', 'session_start', undefined, undefined, undefined, { sessionId: 'session-1' })
+    handler('pty-bg', 'bg_subagent_started', 'background subagent', 'turn-1', 'sub-1', { sessionId: 'session-1' })
+    handler('pty-bg', 'stop', undefined, 'turn-1', undefined, {
+      sessionId: 'session-1',
+      evidence: { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 1, scheduledCount: 0, activeIds: ['sub-1'], sessionId: 'session-1', turnId: 'turn-1' },
+    })
     const held = usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus
     expect(held).toMatchObject({ status: 'working', activeBackgroundSubagents: 1, activeBackgroundSubagentIds: ['sub-1'] })
-    handler('pty-bg', 'bg_subagent_completed', undefined, 'turn-1', 'sub-1')
+    handler('pty-bg', 'bg_subagent_completed', undefined, 'turn-1', 'sub-1', { sessionId: 'session-1' })
     expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus).toMatchObject({ status: 'idle', event: 'stop' })
   })
 })

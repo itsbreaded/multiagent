@@ -13,6 +13,14 @@ interface CapturedEvent {
   detail?: string
   turnId?: string
   agentId?: string
+  sessionId?: string
+  evidence?: {
+    provider: string
+    completeness: string
+    terminalState: string
+    activeCount: number
+    scheduledCount: number
+  }
 }
 
 function startCapture(events: CapturedEvent[]): Promise<{ server: http.Server; port: number }> {
@@ -36,7 +44,7 @@ function startCapture(events: CapturedEvent[]): Promise<{ server: http.Server; p
   })
 }
 
-async function runHook(event: string, payload: unknown): Promise<CapturedEvent[]> {
+async function runHook(event: string, payload: unknown, raw = false): Promise<CapturedEvent[]> {
   const events: CapturedEvent[] = []
   const capture = await startCapture(events)
   const script = path.resolve(__dirname, 'assets', process.platform === 'win32'
@@ -66,7 +74,7 @@ async function runHook(event: string, payload: unknown): Promise<CapturedEvent[]
         clearTimeout(timer)
         resolve(value ?? -1)
       })
-      child.stdin.end(JSON.stringify(payload))
+      child.stdin.end(raw ? String(payload) : JSON.stringify(payload))
     })
     expect(code).toBe(0)
     return events
@@ -124,5 +132,33 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 30_0
       turnId: 'turn-1',
       agentId: 'sub-1',
     })
+  })
+
+  it('reports complete empty Claude task and cron evidence only for top-level empty arrays', async () => {
+    const events = await runHook('stop', {
+      session_id: 'session-1',
+      prompt_id: 'turn-1',
+      background_tasks: [],
+      session_crons: [],
+    })
+    expect(events[0]).toMatchObject({
+      event: 'stop', sessionId: 'session-1',
+      evidence: { provider: 'claude', completeness: 'complete', activeCount: 0, scheduledCount: 0 },
+    })
+
+    const malformed = await runHook('stop', {
+      session_id: 'session-1',
+      prompt_id: 'turn-1',
+      metadata: { background_tasks: [], session_crons: [] },
+    })
+    expect(malformed[0].evidence).toMatchObject({ completeness: 'incomplete', activeCount: 1, scheduledCount: 1 })
+    const truncated = await runHook('stop', '{"session_id":"session-1","background_tasks":[],"session_crons":[]', true)
+    expect(truncated[0].evidence).toMatchObject({ completeness: 'incomplete', activeCount: 1, scheduledCount: 1 })
+  })
+
+  it('reports Claude idle_prompt only with the provider label and session identity', async () => {
+    const events = await runHook('idle_prompt', { notification_type: 'idle_prompt', session_id: 'session-1', message: 'ignored' })
+    expect(events).toEqual([{ ptyId: 'hook-test-pty', agentKind: 'claude', event: 'idle_prompt', sessionId: 'session-1' }])
+    expect(await runHook('idle_prompt', { notification_type: 'agent_completed', session_id: 'session-1' })).toEqual([])
   })
 })

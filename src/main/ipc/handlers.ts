@@ -14,6 +14,8 @@ import { PtyManager, type PtyHostFailure, type PtyHostRecoveryFailure } from '..
 import { AgentProcessSweeper } from '../pty/agentProcessSweeper'
 import { TerminalStatusScraper } from '../pty/terminalStatusScraper'
 import { AgentSessionReportServer } from '../integration/agentSessionReportServer'
+import { forwardAgentEvent } from '../integration/agentEventForwarder'
+import { CodexAppServerManager } from '../integration/codexAppServer'
 import { ManagedHookController } from '../integration/managedHookController'
 import { installOpencodePlugin } from '../integration/opencodePluginInstall'
 import { openExternalUrl } from '../external'
@@ -65,6 +67,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
   const opencodeScanner = new OpencodeSessionScanner()
+  let spawner: SessionSpawner | null = null
 
   // spec 047 phase 3 / phase 4: managed SessionStart hooks for session linking. Default-ON
   // under phase 4 — app-launched Codex can ONLY link via the managed hook now that the
@@ -87,10 +90,12 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       // the sweeper, then attaches the sessionId. agentKind comes from the hook (claude or
       // codex) so app/CLI Codex sessions now link the same way Claude does (spec 047 p4).
       windowManager.sendToWindowForPty(r.ptyId, 'session:detected', r.ptyId, r.agentKind, r.sessionId)
+      spawner?.bindAgentSession(r.ptyId, r.agentKind, r.sessionId)
     },
     // spec 032: forward each lifecycle event to the owning pane's window. Main does NOT
     // reduce -- the renderer owns per-pane prev state and runs eventToState.
-    onEvent: (e) => windowManager.sendToWindowForPty(e.ptyId, 'pane:agent-event', e.ptyId, e.event, e.detail, e.turnId, e.agentId),
+    onEvent: (e) => forwardAgentEvent(e, (ptyId, event, detail, turnId, agentId, meta) =>
+      windowManager.sendToWindowForPty(ptyId, 'pane:agent-event', ptyId, event, detail, turnId, agentId, meta)),
   })
   const managedHook = new ManagedHookController({
     claudeSettingsPath: ManagedHookController.defaultClaudeSettingsPath(),
@@ -167,15 +172,20 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // not v1 (the spec calls this out explicitly). The map is authoritative for v1 scope.
   const ptyAgentKind = new Map<string, AgentKind>()
 
-  const ptyManager = new PtyManager({
-    getPaneEnv: (ptyId) => {
+  const getPaneEnv = (ptyId: string): Record<string, string | undefined> => {
       if (!cliSessionLinkingEnabled) return {}
       const port = reportServer.port
       const base: Record<string, string> = { MULTIAGENT_PTY_ID: ptyId, MULTIAGENT_ENV: '1' }
       return port ? { ...base, MULTIAGENT_HOOK_PORT: String(port) } : base
-    },
+  }
+  const ptyManager = new PtyManager({ getPaneEnv })
+  const codexAppServer = new CodexAppServerManager({
+    onReport: (report) => forwardAgentEvent(report, (ptyId, event, detail, turnId, agentId, meta) =>
+      windowManager.sendToWindowForPty(ptyId, 'pane:agent-event', ptyId, event, detail, turnId, agentId, meta)),
   })
-  const spawner = new SessionSpawner(ptyManager)
+  spawner = new SessionSpawner(ptyManager, { getPaneEnv, codexAppServer })
+  ptyManager.on('exit', (ptyId: string) => { void spawner?.disposePty(ptyId) })
+  ptyManager.on('error', (ptyId: string) => { void spawner?.disposePty(ptyId) })
   const registeredWindowHandlers = new WeakSet<BrowserWindow>()
   let cleanupPromise: Promise<void> | null = null
   const gitBranchWatcher = new GitBranchWatcher((cwdKeys, branch) => {
@@ -200,12 +210,13 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   let currentTerminalHostStatus: TerminalHostStatus | null = null
-  function releaseHostPtys(failure: Pick<PtyHostFailure, 'affectedPtyIds'>): void {
-    for (const ptyId of failure.affectedPtyIds) {
+  async function releaseHostPtys(failure: Pick<PtyHostFailure, 'affectedPtyIds'>): Promise<void> {
+    await Promise.all(failure.affectedPtyIds.map(async (ptyId) => {
       windowManager.unroutePty(ptyId)
       ptyOutputRouter.releasePty(ptyId)
       ptyAgentKind.delete(ptyId)
-    }
+      await spawner?.disposePty(ptyId)
+    }))
   }
   ptyManager.on('host-failure', (failure: PtyHostFailure) => {
     currentTerminalHostStatus = { state: 'recovering', ...failure }
@@ -213,7 +224,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     // Keep routes alive until the manager's per-PTY error/exit fanout has
     // drained; otherwise a pending-spawn error would create a new buffer after
     // the host cleanup had already released it.
-    queueMicrotask(() => releaseHostPtys(failure))
+    queueMicrotask(() => { void releaseHostPtys(failure) })
   })
   ptyManager.on('host-recovered', ({ incidentId }: { incidentId: string }) => {
     windowManager.broadcastAll('terminal-host:status', { state: 'recovered', incidentId })
@@ -222,7 +233,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   ptyManager.on('host-recovery-failed', (failure: PtyHostRecoveryFailure) => {
     currentTerminalHostStatus = { state: 'failed', ...failure }
     windowManager.broadcastAll('terminal-host:status', currentTerminalHostStatus)
-    queueMicrotask(() => releaseHostPtys(failure))
+    queueMicrotask(() => { void releaseHostPtys(failure) })
   })
 
   // spec 047 phase 1 / phase 4: CLI-launched agent detection. The sweeper promotes a shell
@@ -402,7 +413,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     // app-Codex pane gets MULTIAGENT_HOOK_PORT and links at start (spec 047 p4 race fix).
     await linkingApplyPromise
     await ptyManager.waitForHost()
-    const result = await spawner.spawnNew(agentKind, cwd)
+    const result = await spawner!.spawnNew(agentKind, cwd)
     // spec 050: record the ptyId -> agentKind association so the scraper can gate its
     // detector on agentKind without PtyManager having to track it.
     ptyAgentKind.set(result.ptyId, agentKind)
@@ -415,7 +426,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     await linkingApplyPromise
     await ptyManager.waitForHost()
-    const result = await spawner.spawnResume(agentKind, sessionId, cwd)
+    const result = await spawner!.spawnResume(agentKind, sessionId, cwd)
     ptyAgentKind.set(result.ptyId, agentKind)
     windowManager.routePty(result.ptyId, senderWin.webContents.id)
     ptyOutputRouter.flushDirectOutput(result.ptyId)
@@ -465,7 +476,10 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     return killPtyIfAllowed({
       getOwner: (id) => windowManager.getPtyOwner(id),
       unroute: (id) => windowManager.unroutePty(id),
-      release: (id) => ptyOutputRouter.releasePty(id),
+      release: async (id) => {
+        ptyOutputRouter.releasePty(id)
+        await spawner?.disposePty(id)
+      },
       kill: (id) => ptyManager.kill(id),
     }, ptyId, e.sender.id)
   })
@@ -762,13 +776,13 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       statusScraper.dispose()
       index.close()
       opencodeScanner.dispose()
-      spawner.dispose()
       agentSweeper.dispose()
       reportServer.stop()
-      cleanupPromise = Promise.all([
-        gitBranchWatcher.dispose(),
-        ptyManager.destroy(),
-      ]).then(() => undefined)
+      cleanupPromise = (async () => {
+        await spawner?.dispose()
+        await gitBranchWatcher.dispose()
+        await ptyManager.destroy()
+      })()
       return cleanupPromise
     },
     registerWindowHandlers,

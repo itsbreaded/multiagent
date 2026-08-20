@@ -305,3 +305,27 @@ and never serialized; layout persistence still strips all PTY ids, so restart pe
 known-agent resume and shell recreation paths. A failed replacement shows a global restart action
 and stops pane-level connecting loops. Diagnostics record only the incident id and host code, never
 terminal bytes, transcript content, credentials, environment, or command arguments.
+
+## Agent status recovery boundary (spec 067)
+
+The PTY is only the transport and ownership boundary; `eventToState` remains the single status
+merge point. Provider hooks/plugins send validated session/turn-aware lifecycle events and
+bounded work snapshots through the existing report server and IPC route. The PTY pipeline must
+not classify quiet output, process age, prompt text, or screen state as idle. The existing
+`terminal_error` observer is the only terminal-output exception, and it still feeds the same
+reducer rather than writing status directly.
+
+Active or scheduled provider-reported work always protects a pane. Incomplete or missing
+evidence can preserve protection but cannot establish idle. A complete empty snapshot can clear
+matching work only for the current session/turn. Claude's Escape recovery additionally requires
+the renderer's current interrupt marker and the exact `idle_prompt` notification; it is not a
+timer or watchdog. The renderer's idle-suspension coordinator checks the same pane state again
+in a microtask before invoking `pty:kill`, so work arriving before that commit cancels the kill.
+
+App-launched Codex has one pane-local App Server sidecar/proxy observer using a Unix socket and
+the same pane-scoped environment identity as its PTY. Sidecar setup may fall back to direct CLI
+before PTY creation. Once the live PTY exists, observer loss is incomplete/protected and does
+not kill/recreate the user's pane. Sidecar/proxy/socket cleanup is awaited for kill, PTY
+exit/error, host recovery, replacement, and shutdown. Direct CLI Codex and the independently
+researched OpenCode plugin each retain their own provider evidence rules; no provider semantics
+are copied across adapters.

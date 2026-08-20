@@ -1,4 +1,5 @@
 import type { AgentLifecycleEvent, CwdRepairMapping, FocusTarget, PaneLeaf, Tab, TerminalHostStatus } from '../../../shared/types'
+import { normalizeAgentEventMeta } from '../../../shared/agentStatusEvidence'
 import { collectLeaves, findLeafByPtyId } from '../../../shared/paneTree'
 import { eventToState } from '../../../shared/agentStatus'
 import { PANE_DRAG_MIME } from '../utils/paneDrag'
@@ -110,8 +111,10 @@ export function wirePanesIpc(): void {
   // tab regardless of runtime hydration (spec 001), so findLeafByPtyId resolves and the
   // badge renders when PaneHeader mounts on first focus.
   const safeStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
-  window.ipc.on('pane:agent-event', (ptyId: unknown, event: unknown, detail: unknown, turnId: unknown, agentId: unknown) => {
+  window.ipc.on('pane:agent-event', (ptyId: unknown, event: unknown, detail: unknown, turnId: unknown, agentId: unknown, rawMeta: unknown) => {
     if (typeof ptyId !== 'string' || typeof event !== 'string') return
+    const meta = rawMeta === undefined ? undefined : normalizeAgentEventMeta(rawMeta)
+    if (rawMeta !== undefined && !meta) return
     const store = usePanesStore.getState()
     for (const tab of store.tabs) {
       if (!tab.rootNode) continue
@@ -122,6 +125,8 @@ export function wirePanesIpc(): void {
           detail: safeStr(detail),
           turnId: safeStr(turnId),
           agentId: safeStr(agentId),
+          sessionId: meta?.sessionId,
+          evidence: meta?.evidence,
         }, Date.now())
         store.setPaneAgentStatus(pane.id, next)
         break

@@ -81,27 +81,30 @@ describe('eventToState -- truth table', () => {
   })
 
   it('stop ends the turn to idle and clears the per-tool detail', () => {
-    const prev: AgentStatusState = { status: 'working', detail: 'Bash', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
-    expect(eventToState(prev, { event: 'stop', turnId: 'turn-1' }, NOW)).toEqual({
+    const prev: AgentStatusState = { status: 'working', detail: 'Bash', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(prev, {
+      event: 'stop', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW)).toEqual({
       status: 'idle',
+      sessionId: 'session-1',
       turnId: 'turn-1',
       event: 'stop',
       updatedAt: NOW,
+      activeWorkCount: 0,
+      scheduledWorkCount: 0,
+      workSnapshot: { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+      recoveryProvenance: 'ordinary_completion',
     })
   })
 
   it('stop_failure sets error (Claude only) with detail falling back to "error"', () => {
-    expect(ev('stop_failure', undefined, 'turn-1')).toEqual({
-      status: 'error',
-      detail: 'error',
-      turnId: 'turn-1',
-      event: 'stop_failure',
-      updatedAt: NOW,
-    })
-    const prev: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
-    expect(eventToState(prev, { event: 'stop_failure', detail: 'api_error', turnId: 'turn-1' }, NOW)).toEqual({
+    expect(ev('stop_failure', undefined, 'turn-1')).toBeUndefined()
+    const prev: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(prev, { event: 'stop_failure', detail: 'api_error', sessionId: 'session-1', turnId: 'turn-1' }, NOW)).toEqual({
       status: 'error',
       detail: 'api_error',
+      sessionId: 'session-1',
       turnId: 'turn-1',
       event: 'stop_failure',
       updatedAt: NOW,
@@ -109,10 +112,11 @@ describe('eventToState -- truth table', () => {
   })
 
   it('permission_request sets waiting and inherits the prior turn id when omitted', () => {
-    const prev: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
-    expect(eventToState(prev, { event: 'permission_request', detail: 'Allow Bash?' }, NOW)).toEqual({
+    const prev: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(prev, { event: 'permission_request', detail: 'Allow Bash?', sessionId: 'session-1' }, NOW)).toEqual({
       status: 'waiting',
       detail: 'Allow Bash?',
+      sessionId: 'session-1',
       turnId: 'turn-1',
       event: 'permission_request',
       updatedAt: NOW,
@@ -120,18 +124,12 @@ describe('eventToState -- truth table', () => {
   })
 
   it('permission_request seeds from cold start without a prior turn id', () => {
-    expect(ev('permission_request', 'Allow Bash?', 'turn-1')).toEqual({
-      status: 'waiting',
-      detail: 'Allow Bash?',
-      turnId: 'turn-1',
-      event: 'permission_request',
-      updatedAt: NOW,
-    })
+    expect(ev('permission_request', 'Allow Bash?', 'turn-1')).toBeUndefined()
   })
 })
 
 describe('eventToState -- turn-id guard (out-of-order late tool event after stop)', () => {
-  const idle: AgentStatusState = { status: 'idle', turnId: 'turn-1', event: 'stop', updatedAt: NOW - 10 }
+  const idle: AgentStatusState = { status: 'idle', sessionId: 'session-1', turnId: 'turn-1', event: 'stop', updatedAt: NOW - 10 }
 
   it('drops a late tool event from the SAME turn id (keeps idle)', () => {
     expect(eventToState(idle, { event: 'post_tool_use', detail: 'Bash', turnId: 'turn-1' }, NOW)).toBe(idle)
@@ -146,6 +144,7 @@ describe('eventToState -- turn-id guard (out-of-order late tool event after stop
     expect(eventToState(idle, { event: 'pre_tool_use', detail: 'Bash', turnId: 'turn-2' }, NOW)).toEqual({
       status: 'working',
       detail: 'Bash',
+      sessionId: 'session-1',
       turnId: 'turn-2',
       event: 'pre_tool_use',
       updatedAt: NOW,
@@ -155,6 +154,7 @@ describe('eventToState -- turn-id guard (out-of-order late tool event after stop
   it('a new user_prompt_submit always wins over idle (fresh turn id)', () => {
     expect(eventToState(idle, { event: 'user_prompt_submit', turnId: 'turn-2' }, NOW)).toEqual({
       status: 'working',
+      sessionId: 'session-1',
       turnId: 'turn-2',
       event: 'user_prompt_submit',
       updatedAt: NOW,
@@ -162,10 +162,10 @@ describe('eventToState -- turn-id guard (out-of-order late tool event after stop
   })
 
   it('permission_request and stop_failure always apply even when idle (high-signal)', () => {
-    const waiting = eventToState(idle, { event: 'permission_request', detail: 'Allow?' }, NOW)
+    const waiting = eventToState(idle, { event: 'permission_request', detail: 'Allow?', sessionId: 'session-1' }, NOW)
     expect(waiting?.status).toBe('waiting')
     expect(waiting?.turnId).toBe('turn-1')
-    const errored = eventToState(idle, { event: 'stop_failure', detail: 'boom' }, NOW)
+    const errored = eventToState(idle, { event: 'stop_failure', detail: 'boom', sessionId: 'session-1' }, NOW)
     expect(errored?.status).toBe('error')
   })
 })
@@ -192,7 +192,7 @@ describe('eventToState -- Codex first-message ordering (SessionStart fires on fi
 describe('eventToState -- cold start and forward-compat', () => {
   it('any non-demote event seeds state from prev === undefined', () => {
     expect(ev('pre_tool_use', 'Bash', 'turn-1')?.status).toBe('working')
-    expect(ev('stop', undefined, 'turn-1')?.status).toBe('idle')
+    expect(ev('stop', undefined, 'turn-1')?.status).toBeUndefined()
     expect(ev('post_tool_use', 'Read')?.status).toBe('working')
   })
 
@@ -211,16 +211,18 @@ describe('eventToState -- terminal_error latch + clearing precedence (spec 050)'
   const latched: AgentStatusState = {
     status: 'error',
     detail: 'terminal error (HTTP 404)',
+    sessionId: 'session-1',
     turnId: 'turn-1',
     event: 'terminal_error',
     updatedAt: NOW - 10,
   }
 
   it('terminal_error sets error and inherits the prior turn id for tooltip coherence', () => {
-    const working: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW - 5 }
+    const working: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW - 5 }
     expect(eventToState(working, { event: 'terminal_error', detail: 'terminal error (HTTP 404)' }, NOW)).toEqual({
       status: 'error',
       detail: 'terminal error (HTTP 404)',
+      sessionId: 'session-1',
       turnId: 'turn-1',
       event: 'terminal_error',
       updatedAt: NOW,
@@ -282,10 +284,11 @@ describe('eventToState -- terminal_error latch + clearing precedence (spec 050)'
   })
 
   it('stop_failure still applies its own error path over a non-latched state', () => {
-    const working: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
-    expect(eventToState(working, { event: 'stop_failure', detail: 'api_error', turnId: 'turn-1' }, NOW)).toEqual({
+    const working: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(working, { event: 'stop_failure', detail: 'api_error', sessionId: 'session-1', turnId: 'turn-1' }, NOW)).toEqual({
       status: 'error',
       detail: 'api_error',
+      sessionId: 'session-1',
       turnId: 'turn-1',
       event: 'stop_failure',
       updatedAt: NOW,
@@ -295,26 +298,38 @@ describe('eventToState -- terminal_error latch + clearing precedence (spec 050)'
   it('NON-LATCHED: session_start still preserves a live working state (032 behavior unchanged)', () => {
     // The latch is the ONLY change to the non-latched paths. A normal working turn must
     // still survive an in-flight session_start without flipping to idle.
-    const working: AgentStatusState = { status: 'working', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW - 5 }
+    const working: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW - 5 }
     expect(eventToState(working, { event: 'session_start' }, NOW)).toBe(working)
   })
 })
 
 describe('eventToState -- background subagents (spec 065)', () => {
+  const BG_SESSION = 'session-bg'
+  const BG_TURN = 'turn-bg'
   const launch = (prev: AgentStatusState | undefined, agentId?: string) => eventToState(
     prev,
-    { event: 'bg_subagent_started', detail: 'background subagent', agentId },
+    { event: 'bg_subagent_started', detail: 'background subagent', agentId, sessionId: BG_SESSION, turnId: BG_TURN },
     NOW,
   )
   const complete = (prev: AgentStatusState | undefined, agentId?: string) => eventToState(
     prev,
-    { event: 'bg_subagent_completed', agentId },
+    { event: 'bg_subagent_completed', agentId, sessionId: prev?.sessionId ?? BG_SESSION, turnId: prev?.turnId ?? BG_TURN },
     NOW,
   )
+  const stop = (prev: AgentStatusState) => eventToState(prev, {
+    event: 'stop', sessionId: BG_SESSION, turnId: BG_TURN,
+    evidence: {
+      provider: 'claude', completeness: 'complete', terminalState: 'completed',
+      activeCount: prev.activeBackgroundSubagents ?? 0,
+      scheduledCount: 0,
+      ...(prev.activeBackgroundSubagentIds ? { activeIds: prev.activeBackgroundSubagentIds } : {}),
+      sessionId: BG_SESSION, turnId: BG_TURN,
+    },
+  }, NOW)!
 
   it('holds working through Stop and returns idle after the matching completion', () => {
     const started = launch(undefined, 'sub-a')!
-    const held = eventToState(started, { event: 'stop' }, NOW)!
+    const held = stop(started)
     expect(held).toMatchObject({
       status: 'working',
       event: 'stop',
@@ -323,6 +338,8 @@ describe('eventToState -- background subagents (spec 065)', () => {
     })
     expect(complete(held, 'sub-a')).toEqual({
       status: 'idle',
+      sessionId: BG_SESSION,
+      turnId: BG_TURN,
       event: 'stop',
       updatedAt: NOW,
     })
@@ -330,7 +347,7 @@ describe('eventToState -- background subagents (spec 065)', () => {
 
   it('keeps multiple subagents active until the final distinct completion', () => {
     const two = launch(launch(undefined, 'sub-a'), 'sub-b')!
-    const held = eventToState(two, { event: 'stop' }, NOW)!
+    const held = stop(two)
     const one = complete(held, 'sub-a')!
     expect(one).toMatchObject({
       status: 'working',
@@ -340,6 +357,8 @@ describe('eventToState -- background subagents (spec 065)', () => {
     expect(complete(one, 'sub-a')).toBe(one)
     expect(complete(one, 'sub-b')).toEqual({
       status: 'idle',
+      sessionId: BG_SESSION,
+      turnId: BG_TURN,
       event: 'stop',
       updatedAt: NOW,
     })
@@ -350,17 +369,20 @@ describe('eventToState -- background subagents (spec 065)', () => {
     const finished = complete(started, 'sub-a')!
     expect(finished).toMatchObject({ status: 'working' })
     expect(finished.activeBackgroundSubagents).toBeUndefined()
-    expect(eventToState(finished, { event: 'stop' }, NOW)?.status).toBe('idle')
+    expect(stop(finished).status).toBe('idle')
   })
 
   it('allows a background completion during a new parent turn without false idle', () => {
     const started = launch(undefined, 'sub-a')!
-    const held = eventToState(started, { event: 'stop' }, NOW)!
+    const held = stop(started)
     const newTurn = eventToState(held, { event: 'user_prompt_submit', turnId: 'turn-2' }, NOW)!
     const after = complete(newTurn, 'sub-a')!
     expect(after).toMatchObject({ status: 'working', event: 'user_prompt_submit', turnId: 'turn-2' })
     expect(after.activeBackgroundSubagents).toBeUndefined()
-    expect(eventToState(after, { event: 'stop', turnId: 'turn-2' }, NOW)?.status).toBe('idle')
+    expect(eventToState(after, {
+      event: 'stop', sessionId: BG_SESSION, turnId: 'turn-2',
+      evidence: { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: BG_SESSION, turnId: 'turn-2' },
+    }, NOW)?.status).toBe('idle')
   })
 
   it('ignores missing, unknown, and foreground completion identities', () => {
@@ -379,9 +401,11 @@ describe('eventToState -- background subagents (spec 065)', () => {
   })
 
   it('preserves waiting and stop_failure precedence while a known subagent completes', () => {
-    const waiting = eventToState(eventToState(launch(undefined, 'sub-a'), { event: 'stop' }, NOW), {
+    const waiting = eventToState(stop(launch(undefined, 'sub-a')!), {
       event: 'permission_request',
       detail: 'Allow?',
+      sessionId: BG_SESSION,
+      turnId: BG_TURN,
     }, NOW)!
     const clearedWaiting = complete(waiting, 'sub-a')!
     expect(clearedWaiting).toMatchObject({
@@ -390,9 +414,11 @@ describe('eventToState -- background subagents (spec 065)', () => {
     })
     expect(clearedWaiting.activeBackgroundSubagents).toBeUndefined()
 
-    const errored = eventToState(eventToState(launch(undefined, 'sub-b'), { event: 'stop' }, NOW), {
+    const errored = eventToState(stop(launch(undefined, 'sub-b')!), {
       event: 'stop_failure',
       detail: 'boom',
+      sessionId: BG_SESSION,
+      turnId: BG_TURN,
     }, NOW)!
     const clearedError = complete(errored, 'sub-b')!
     expect(clearedError).toMatchObject({ status: 'error', event: 'stop_failure' })
@@ -413,12 +439,83 @@ describe('eventToState -- background subagents (spec 065)', () => {
     const started = launch(undefined, 'sub-a')!
     const prompted = eventToState(started, { event: 'user_prompt_submit', turnId: 'turn-2' }, NOW)!
     expect(prompted).toMatchObject({ status: 'working', activeBackgroundSubagentIds: ['sub-a'] })
-    expect(eventToState(prompted, { event: 'session_start' }, NOW)).toEqual({
+    const replaced = eventToState(prompted, { event: 'user_prompt_submit', sessionId: 'session-new', turnId: 'turn-new' }, NOW)!
+    expect(replaced).toMatchObject({ status: 'working', sessionId: 'session-new', turnId: 'turn-new' })
+    expect(replaced.activeBackgroundSubagents).toBeUndefined()
+    expect(eventToState(prompted, { event: 'session_start', sessionId: 'session-new' }, NOW)).toEqual({
       status: 'idle',
-      turnId: 'turn-2',
+      sessionId: 'session-new',
       event: 'session_start',
       updatedAt: NOW,
     })
     expect(eventToState(started, { event: 'demote' }, NOW)).toBeUndefined()
+  })
+})
+
+describe('eventToState -- interrupt recovery evidence', () => {
+  const current: AgentStatusState = {
+    status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW,
+  }
+  const idlePrompt = { event: 'idle_prompt' as const, sessionId: 'session-1' }
+
+  it('accepts exactly one matching Claude idle_prompt after Escape', () => {
+    const marked = eventToState(current, { event: 'interrupt_requested', sessionId: 'session-1', turnId: 'turn-1' }, NOW + 1)!
+    const recovered = eventToState(marked, idlePrompt, NOW + 2)!
+    expect(recovered).toMatchObject({ status: 'idle', event: 'idle_prompt', recoveryProvenance: 'idle_prompt_recovery' })
+    expect(eventToState(recovered, idlePrompt, NOW + 3)).toBe(recovered)
+  })
+
+  it('rejects a stale session, missing marker, newer turn, and active evidence', () => {
+    expect(eventToState(current, idlePrompt, NOW + 1)).toBe(current)
+    const marked = eventToState(current, { event: 'interrupt_requested', sessionId: 'session-1', turnId: 'turn-1' }, NOW + 1)!
+    expect(eventToState(marked, { event: 'idle_prompt', sessionId: 'session-2' }, NOW + 2)).toBe(marked)
+    const newer = eventToState(marked, { event: 'user_prompt_submit', sessionId: 'session-1', turnId: 'turn-2' }, NOW + 2)!
+    expect(eventToState(newer, idlePrompt, NOW + 3)).toBe(newer)
+    const active = eventToState(marked, {
+      event: 'work_snapshot', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'claude', completeness: 'incomplete', terminalState: 'busy', activeCount: 1, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW + 2)!
+    expect(active.status).toBe('working')
+    expect(active.pendingInterrupt).toBeUndefined()
+    expect(eventToState(active, idlePrompt, NOW + 3)).toBe(active)
+  })
+
+  it('rejects an outer/evidence identity conflict for every event', () => {
+    const conflict = eventToState(current, {
+      event: 'user_prompt_submit', sessionId: 'session-1', turnId: 'turn-2',
+      evidence: { provider: 'claude', completeness: 'complete', terminalState: 'busy', activeCount: 1, scheduledCount: 0, sessionId: 'session-2', turnId: 'turn-2' },
+    }, NOW + 1)
+    expect(conflict).toBe(current)
+  })
+
+  it('keeps an incomplete zero-work snapshot protected even when the prior badge was idle', () => {
+    const idle: AgentStatusState = { status: 'idle', sessionId: 'session-1', turnId: 'turn-1', event: 'stop', updatedAt: NOW }
+    const uncertain = eventToState(idle, {
+      event: 'work_snapshot', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'opencode', completeness: 'incomplete', terminalState: 'idle', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW + 1)!
+    expect(uncertain).toMatchObject({ status: 'working', event: 'work_snapshot', recoveryProvenance: 'stale_work_reconciliation' })
+  })
+
+  it.each(['busy', 'retry'] as const)('keeps a complete %s snapshot working even when counts are zero', (terminalState) => {
+    const idle: AgentStatusState = { status: 'idle', sessionId: 'session-1', turnId: 'turn-1', event: 'stop', updatedAt: NOW }
+    const active = eventToState(idle, {
+      event: 'work_snapshot', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'opencode', completeness: 'complete', terminalState, activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW + 1)!
+    expect(active).toMatchObject({ status: 'working', event: 'work_snapshot', detail: terminalState })
+  })
+
+  it('does not discard scheduled work when ordinary lifecycle events or one child completion arrive', () => {
+    const working: AgentStatusState = {
+      status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'work_snapshot', updatedAt: NOW,
+      activeBackgroundSubagents: 1, activeBackgroundSubagentIds: ['child-1'],
+      activeWorkCount: 1, scheduledWorkCount: 1, activeWorkIds: ['child-1'], scheduledWorkIds: ['cron-1'],
+      workSnapshot: { provider: 'claude', completeness: 'complete', terminalState: 'busy', activeCount: 1, scheduledCount: 1, activeIds: ['child-1'], scheduledIds: ['cron-1'], sessionId: 'session-1', turnId: 'turn-1' },
+    }
+    const prompted = eventToState(working, { event: 'pre_tool_use', sessionId: 'session-1', turnId: 'turn-1', detail: 'Bash' }, NOW + 1)!
+    expect(prompted).toMatchObject({ activeWorkCount: 1, scheduledWorkCount: 1 })
+    const afterChild = eventToState(prompted, { event: 'bg_subagent_completed', sessionId: 'session-1', turnId: 'turn-1', agentId: 'child-1' }, NOW + 2)!
+    expect(afterChild).toMatchObject({ status: 'working', scheduledWorkCount: 1 })
   })
 })

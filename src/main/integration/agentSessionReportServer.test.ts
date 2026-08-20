@@ -114,6 +114,32 @@ describe('AgentSessionReportServer -- /agent-event (spec 032)', () => {
     expect(events).toEqual([{ ptyId: 'p2', agentKind: 'codex', event: 'stop', detail: undefined, turnId: undefined }])
   })
 
+  it('preserves validated session and work evidence and rejects conflicts', async () => {
+    const events: AgentEventReport[] = []
+    server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })
+    server.start()
+    const port = await server.ready()
+    const evidence = { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' }
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-evidence', agentKind: 'claude', event: 'stop', sessionId: 'session-1', turnId: 'turn-1', evidence,
+    })).toBe(204)
+    expect(events[0]).toMatchObject({ sessionId: 'session-1', turnId: 'turn-1', evidence })
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-evidence', agentKind: 'claude', event: 'stop', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { ...evidence, sessionId: 'session-2' },
+    })).toBe(400)
+    expect(events).toHaveLength(1)
+  })
+
+  it('rejects an oversized report body before forwarding', async () => {
+    const events: unknown[] = []
+    server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })
+    server.start()
+    const port = await server.ready()
+    expect(await post(port!, '/agent-event', { ptyId: 'p-large', agentKind: 'claude', event: 'pre_tool_use', detail: 'x'.repeat(132 * 1024) })).toBe(413)
+    expect(events).toHaveLength(0)
+  })
+
   it('accepts Claude background-subagent events and preserves agentId', async () => {
     const events: AgentEventReport[] = []
     server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })

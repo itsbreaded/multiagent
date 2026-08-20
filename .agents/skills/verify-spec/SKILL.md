@@ -1,5 +1,5 @@
 ---
-name: verify-spec
+name: 006-verify-spec
 description: Independently verify a spec against its requirements and scenarios, autonomously repair unambiguous implementation gaps, record durable evidence, and archive a passing spec. Use for requests to verify, check, accept, sign off, finish, or close a spec, and for /verify-spec.
 ---
 

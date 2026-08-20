@@ -1,5 +1,5 @@
 ---
-name: draft-spec
+name: 001-draft-spec
 description: Turn a simple or complex product idea into a researched pending spec draft through collaborative discovery. Use when asked to create, explore, scope, or draft a new feature spec from an idea, and for /draft-spec.
 ---
 

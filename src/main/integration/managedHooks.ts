@@ -77,6 +77,11 @@ function isOurHook(entry: unknown): boolean {
     (entry as HookEntry).command.includes(HOOK_SENTINEL)
 }
 
+function groupMatchesMatcher(group: MatcherGroup, matcher: string | null): boolean {
+  if (matcher === null) return !Object.prototype.hasOwnProperty.call(group, 'matcher')
+  return group.matcher === matcher
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
@@ -107,24 +112,40 @@ export function injectManagedHook(
   let groups = cfg.hooks[eventName]
   if (!Array.isArray(groups)) groups = []
   let updated = false
+  const nextGroups: MatcherGroup[] = []
   for (const group of groups) {
-    if (!isMatcherGroup(group)) continue
-    for (const entry of group.hooks) {
-      if (isOurHook(entry)) {
-        entry.command = command
-        // Reconcile the group matcher to the desired policy, but only when the group holds
-        // ONLY our hook -- never clobber the matcher of a group sharing unrelated hooks.
-        // (Our install always creates a solo group, so this is the norm.)
-        if (group.hooks.every(isOurHook)) {
-          if (matcher === null) delete (group as MatcherGroup).matcher
-          else (group as MatcherGroup).matcher = matcher
-        }
-        updated = true
-        break
-      }
+    if (!isMatcherGroup(group)) { nextGroups.push(group); continue }
+    const ourEntries = group.hooks.filter(isOurHook)
+    if (ourEntries.length === 0) { nextGroups.push(group); continue }
+
+    if (!updated && groupMatchesMatcher(group, matcher)) {
+      // Update one managed entry in the exact matcher group and remove duplicate
+      // managed entries from that group. Foreign hooks and their matcher remain
+      // byte-for-byte represented in the cloned config.
+      const kept = group.hooks.filter((entry, index) => !isOurHook(entry) || entry === ourEntries[0] || index === group.hooks.indexOf(ourEntries[0]))
+      const managed = kept.find(isOurHook) as HookEntry
+      managed.command = command
+      nextGroups.push({ ...group, hooks: kept })
+      updated = true
+      continue
     }
-    if (updated) break
+
+    if (groupMatchesMatcher(group, matcher)) {
+      // A second managed group with the same matcher is a duplicate. Keep any
+      // foreign handlers in that group, but retain only the first managed entry.
+      const foreign = group.hooks.filter((entry) => !isOurHook(entry))
+      if (foreign.length > 0) nextGroups.push({ ...group, hooks: foreign })
+      continue
+    }
+
+    // A managed entry under a different matcher must not be rewritten into the
+    // desired group. Preserve it here because the same event key may legitimately
+    // have multiple managed matcher pairs (Claude Notification is one example);
+    // the controller's desired-set reconciliation removes only pairs that are no
+    // longer wanted.
+    nextGroups.push(group)
   }
+  groups = nextGroups
   if (!updated) {
     const group: MatcherGroup = matcher === null
       ? { hooks: [{ type: 'command', command }] }
@@ -156,6 +177,43 @@ export function removeManagedHook(config: unknown): unknown {
  */
 export function pruneManagedHooks(config: unknown, allowedEventKeys: Set<string>): unknown {
   return pruneManagedHooksImpl(config, (eventName) => allowedEventKeys.has(eventName))
+}
+
+/** Remove stale managed entries when an allowed event's matcher changed, preserving foreign hooks. */
+export function reconcileManagedHooks(
+  config: unknown,
+  desired: ReadonlyArray<{ configKey: string; matcher: string | null }>,
+): unknown {
+  if (!config || typeof config !== 'object') return config
+  const cfg = clone(config as AgentConfig)
+  if (!cfg.hooks || typeof cfg.hooks !== 'object') return cfg
+  const desiredByEvent = new Map<string, Set<string | null>>()
+  for (const item of desired) {
+    const matchers = desiredByEvent.get(item.configKey) ?? new Set<string | null>()
+    matchers.add(item.matcher)
+    desiredByEvent.set(item.configKey, matchers)
+  }
+  for (const eventName of Object.keys(cfg.hooks)) {
+    const groups = cfg.hooks[eventName]
+    if (!Array.isArray(groups)) continue
+    const allowed = desiredByEvent.has(eventName)
+    const keptGroups: MatcherGroup[] = []
+    for (const group of groups) {
+      if (!isMatcherGroup(group)) { keptGroups.push(group); continue }
+      const groupMatcher: string | null = Object.prototype.hasOwnProperty.call(group, 'matcher')
+        ? (typeof group.matcher === 'string' ? group.matcher : '__invalid_matcher__')
+        : null
+      const matcherAllowed = desiredByEvent.get(eventName)?.has(groupMatcher) ?? false
+      const keptHooks = allowed && matcherAllowed
+        ? group.hooks
+        : group.hooks.filter((hook) => !isOurHook(hook))
+      if (keptHooks.length > 0) keptGroups.push({ ...group, hooks: keptHooks })
+    }
+    if (keptGroups.length > 0) cfg.hooks[eventName] = keptGroups
+    else delete cfg.hooks[eventName]
+  }
+  if (Object.keys(cfg.hooks).length === 0) delete cfg.hooks
+  return cfg
 }
 
 function pruneManagedHooksImpl(config: unknown, keepKey: (eventName: string) => boolean): unknown {

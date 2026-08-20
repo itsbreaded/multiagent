@@ -4,6 +4,7 @@ import {
   injectManagedHook,
   removeManagedHook,
   pruneManagedHooks,
+  reconcileManagedHooks,
   hasManagedHook,
   generateHookCommand,
 } from './managedHooks'
@@ -87,6 +88,28 @@ describe('injectManagedHook', () => {
     expect(codex.hooks.PreToolUse[0].matcher).toBe('.*')
   })
 
+  it('keeps distinct managed matcher pairs and deduplicates only the matching pair', () => {
+    const permission = injectManagedHook({}, 'Notification', 'permission-' + HOOK_SENTINEL, 'permission_prompt')
+    const both = injectManagedHook(permission, 'Notification', 'idle-' + HOOK_SENTINEL, 'idle_prompt') as {
+      hooks: { Notification: Array<{ matcher: string; hooks: Array<{ command: string }> }> }
+    }
+    expect(both.hooks.Notification).toHaveLength(2)
+    const duplicate = {
+      hooks: {
+        Notification: [
+          ...both.hooks.Notification,
+          { matcher: 'idle_prompt', hooks: [{ type: 'command', command: 'old-' + HOOK_SENTINEL }] },
+        ],
+      },
+    }
+    const deduped = injectManagedHook(duplicate, 'Notification', 'new-idle-' + HOOK_SENTINEL, 'idle_prompt') as {
+      hooks: { Notification: Array<{ matcher: string; hooks: Array<{ command: string }> }> }
+    }
+    expect(deduped.hooks.Notification.filter((group) => group.matcher === 'idle_prompt')).toHaveLength(1)
+    expect(deduped.hooks.Notification.find((group) => group.matcher === 'idle_prompt')!.hooks[0].command).toBe('new-idle-' + HOOK_SENTINEL)
+    expect(deduped.hooks.Notification.find((group) => group.matcher === 'permission_prompt')!.hooks[0].command).toBe('permission-' + HOOK_SENTINEL)
+  })
+
   it('updates an existing managed entry in place under the same event (idempotent)', () => {
     const once = injectManagedHook({}, 'SessionStart', CMD)
     const newCmd = generateHookCommand(`C:\\elsewhere\\${HOOK_SENTINEL}`, 'codex', undefined, 'win32')
@@ -102,10 +125,28 @@ describe('injectManagedHook', () => {
       hooks: { SessionStart: Array<{ matcher?: string }> } }
     expect(prior.hooks.SessionStart[0].matcher).toBe('')
     const codexCmd = generateHookCommand(`C:\\app\\${HOOK_SENTINEL}`, 'codex', undefined, 'win32')
-    const out = injectManagedHook(prior, 'SessionStart', codexCmd, null) as {
+    const reconciled = reconcileManagedHooks(prior, [{ configKey: 'SessionStart', matcher: null }])
+    const out = injectManagedHook(reconciled, 'SessionStart', codexCmd, null) as {
       hooks: { SessionStart: Array<{ matcher?: string }> } }
     expect(out.hooks.SessionStart).toHaveLength(1)
     expect(out.hooks.SessionStart[0].matcher).toBeUndefined()
+  })
+
+  it('does not treat an omitted matcher as the empty-string matcher during reconciliation', () => {
+    const config = {
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: 'command', command: 'omitted-' + HOOK_SENTINEL }] },
+          { matcher: '', hooks: [{ type: 'command', command: 'empty-' + HOOK_SENTINEL }] },
+        ],
+      },
+    }
+    const out = reconcileManagedHooks(config, [{ configKey: 'SessionStart', matcher: '' }]) as {
+      hooks: { SessionStart: Array<{ matcher?: string; hooks: Array<{ command: string }> }> }
+    }
+    expect(out.hooks.SessionStart).toHaveLength(1)
+    expect(out.hooks.SessionStart[0].matcher).toBe('')
+    expect(out.hooks.SessionStart[0].hooks[0].command).toBe('empty-' + HOOK_SENTINEL)
   })
 
   it('preserves unrelated top-level keys and unrelated events', () => {

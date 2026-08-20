@@ -1,5 +1,5 @@
 ---
-name: brainstorm-spec
+name: 002-brainstorm-spec
 description: Turn a draft or in-progress spec into a ready, verifiable implementation contract. Use for requests to brainstorm, flesh out, tighten, resolve open questions in, or prepare a spec for implementation, and for /brainstorm-spec.
 ---
 

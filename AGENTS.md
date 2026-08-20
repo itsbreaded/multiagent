@@ -132,7 +132,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   `user_prompt_submit`/`session_start`/`demote`. Codex-only at launch, agent-agnostic
   plumbing; canonical signatures only from a rolling fresh-output buffer (never scrollback,
   never keywords like `Error:`/`panic` — that's the rolled-back spec 048). No second status
-  write path, no new managed hooks.
+  write path, no new managed hooks. Provider-authoritative empty work evidence is the only
+  additional idle-recovery source; incomplete/missing evidence and active/scheduled work
+  remain protected.
   → [`docs/pty-and-terminals.md`](docs/pty-and-terminals.md)
 
 ### Layout & multi-window → [`docs/multi-window-and-layout.md`](docs/multi-window-and-layout.md)

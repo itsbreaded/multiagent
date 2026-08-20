@@ -1,5 +1,5 @@
 ---
-name: execute-spec
+name: 005-execute-spec
 description: Implement a ready spec with a durable adjacent plan, incremental checks, and a review-ready handoff. Use for requests to implement, build, execute, or work on a spec, and for /execute-spec.
 ---
 

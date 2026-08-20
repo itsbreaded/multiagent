@@ -227,4 +227,29 @@ describe('PtyManager — worker crash fanout (spec 034)', () => {
     manager.write(id2, 'x')
     expect(worker.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'write', id: id2 }))
   })
+
+  it('rolls back a caller-owned requested id when pane-env preparation fails and rejects collisions', async () => {
+    let fail = true
+    const custom = new PtyManager({
+      getPaneEnv: () => {
+        if (fail) throw new Error('pane env unavailable')
+        return { MULTIAGENT_PTY_ID: 'requested-1' }
+      },
+    })
+    const customWorker = lastWorker.current!
+    customWorker.emit('message', { type: 'host-ready' })
+    const requestedId = 'requested-1'
+
+    expect(() => custom.createDeferred(REAL_CWD, ['codex'], undefined, undefined, false, true, 'new-agent', requestedId))
+      .toThrow('pane env unavailable')
+    fail = false
+    expect(custom.createDeferred(REAL_CWD, ['codex'], undefined, undefined, false, true, 'new-agent', requestedId)).toBe(requestedId)
+    expect(() => custom.createDeferred(REAL_CWD, ['codex'], undefined, undefined, false, true, 'new-agent', requestedId))
+      .toThrow('already reserved')
+
+    const destroy = custom.destroy()
+    customWorker.exitCode = 0
+    customWorker.emit('exit', 0)
+    await destroy
+  })
 })

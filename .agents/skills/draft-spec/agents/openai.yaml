@@ -1,4 +1,4 @@
 interface:
-  display_name: "Draft Spec"
+  display_name: "001. Draft Spec"
   short_description: "Research an idea into a pending spec draft"
   default_prompt: "Use $draft-spec to turn this idea into a pending draft spec: $ARGUMENTS"

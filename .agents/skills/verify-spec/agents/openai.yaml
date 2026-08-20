@@ -1,4 +1,4 @@
 interface:
-  display_name: "Verify Spec"
+  display_name: "006. Verify Spec"
   short_description: "Verify a spec and archive passing work"
   default_prompt: "Use $verify-spec to independently verify this spec: $ARGUMENTS"

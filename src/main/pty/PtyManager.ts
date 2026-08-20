@@ -326,16 +326,33 @@ export class PtyManager extends EventEmitter {
     allowCwdFallback = false,
     deferSpawn = false,
     purpose: PtyPurpose = 'shell',
+    requestedId?: string,
   ): string {
     if (this.hostState === 'recovering' || this.hostState === 'failed' || this.destroying) {
       throw new Error('Terminal host process is not running')
     }
-    const id = randomUUID()
+    const id = requestedId ?? randomUUID()
+    if (this.reservedIds.has(id) || this.pendingSpawns.has(id) || this.spawnedIds.has(id)) {
+      throw new Error(`PTY id is already reserved: ${id}`)
+    }
     this.reservedIds.add(id)
     this.purposes.set(id, purpose)
-    // Merge per-pane identity env (spec 047 phase 3) before buildEnv scrubs+applies.
-    const paneEnv = this.getPaneEnv?.(id) ?? {}
-    const mergedExtraEnv = { ...extraEnv, ...paneEnv }
+    let mergedExtraEnv: Record<string, string | undefined>
+    try {
+      // Merge per-pane identity env (spec 047 phase 3) before buildEnv scrubs+applies.
+      const paneEnv = this.getPaneEnv?.(id) ?? {}
+      mergedExtraEnv = { ...extraEnv, ...paneEnv }
+    } catch (error) {
+      this._forgetId(id)
+      throw error
+    }
+    let builtEnv: Record<string, string>
+    try {
+      builtEnv = buildEnv(mergedExtraEnv)
+    } catch (error) {
+      this._forgetId(id)
+      throw error
+    }
 
     if (deferSpawn) {
       // Register synchronously so a first resize arriving before setImmediate is
@@ -343,7 +360,7 @@ export class PtyManager extends EventEmitter {
       const entry: PendingSpawn = {
         cwd,
         cmd,
-        env: buildEnv(mergedExtraEnv),
+        env: builtEnv,
         allowCwdFallback,
         size: initialSize,
         resized: false,
@@ -383,7 +400,7 @@ export class PtyManager extends EventEmitter {
         this.emit('error', id, new Error(`Working directory does not exist: ${cwd}`))
         return
       }
-      this._spawn(id, cwdExists ? cwd : homedir(), cmd, buildEnv(mergedExtraEnv), initialSize.cols, initialSize.rows, allowCwdFallback)
+      this._spawn(id, cwdExists ? cwd : homedir(), cmd, builtEnv, initialSize.cols, initialSize.rows, allowCwdFallback)
     })
     return id
   }
