@@ -704,6 +704,62 @@ test.describe('cold-start layout restore', () => {
     expect(typeof ready?.pid).toBe('number')
   })
 
+  test('opens a complete wrapped URL only on a left click', async () => {
+    const url = 'https://example.com/api/v2/resources/a1b2c3d4e5f6/items?filter=status%3Aactive&sort=created_at&order=desc&page=1&per_page=50&fields=id,name,description,tags,metadata'
+    await page.evaluate(() => {
+      localStorage.setItem('multiagent:settings', JSON.stringify({
+        optimizedTerminalRenderer: true,
+        terminalGpuAcceleration: 'off',
+      }))
+    })
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText('Alpha', { exact: true }).first()).toBeVisible()
+    const { ptyId } = await spawnShell(page, userDataDir)
+    await page.evaluate(({ id, value }) => {
+      window.ipc.send('pty:write', id, `Write-Output '${value}'\r`)
+    }, { id: ptyId, value: url })
+    await expect(page.locator('.xterm').first()).toContainText('https://example.com')
+
+    const point = await page.locator('.xterm').first().evaluate((root, target) => {
+      const needle = target.slice(0, 12)
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      let node: Node | null
+      while ((node = walker.nextNode())) {
+        const text = node.textContent ?? ''
+        const index = text.indexOf(needle)
+        if (index < 0) continue
+        const range = document.createRange()
+        range.setStart(node, index + Math.min(6, needle.length - 1))
+        range.setEnd(node, index + Math.min(7, needle.length))
+        const rect = range.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+      }
+      return null
+    }, url) as { x: number; y: number } | null
+    expect(point).toBeTruthy()
+
+    await page.evaluate(() => window.e2ePtyTrace?.reset())
+    await page.mouse.move(point!.x, point!.y)
+    await page.waitForTimeout(100)
+    await page.mouse.click(point!.x, point!.y, { button: 'right' })
+    await expect(page.getByRole('button', { name: /Paste/ })).toBeVisible()
+    const rightClickTrace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
+    expect(rightClickTrace?.invokes.some((entry) => entry.channel === 'shell:open-external')).toBe(false)
+
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => window.e2ePtyTrace?.reset())
+    await page.mouse.move(point!.x, point!.y)
+    await page.waitForTimeout(100)
+    await page.mouse.click(point!.x, point!.y, { button: 'left' })
+    await expect.poll(async () => {
+      const trace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
+      return trace?.invokes.filter((entry) => entry.channel === 'shell:open-external').length ?? 0
+    }).toBe(1)
+    const leftClickTrace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
+    expect(leftClickTrace?.invokes.find((entry) => entry.channel === 'shell:open-external')?.args[0]).toBe(url)
+  })
+
   test('suspends and automatically resumes an idle Claude session in a returned tab', async () => {
     test.setTimeout(120_000)
     await page.getByTitle('Settings').click()

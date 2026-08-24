@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf, PtyReadyMetadata } from '../../../../shared/types'
@@ -13,6 +12,7 @@ import { getTerminalKeyMap, bindingEventKey, bindingDisplay } from '../../utils/
 import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
 import { createDirectPtyDataHandler } from '../../terminal/ptyData'
+import { createPrimaryLinkActivator, installTerminalLinkHandling } from '../../terminal/links'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
@@ -180,6 +180,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         : XTERM_THEME
 
       const storeState = useSettingsStore.getState()
+      const openExternalLink = createPrimaryLinkActivator((_event, uri) => {
+        window.ipc.invoke('shell:open-external', uri).catch(() => {})
+      })
       const xterm = new XTerm({
         allowProposedApi: true,
         theme,
@@ -199,17 +202,12 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           getWinSizeChars: true,
         },
         linkHandler: {
-          activate(_event, uri) {
-            window.ipc.invoke('shell:open-external', uri).catch(() => {})
-          },
+          activate: openExternalLink,
         },
       })
-
       const fitAddon = new FitAddon()
       xterm.loadAddon(fitAddon)
-      xterm.loadAddon(new WebLinksAddon((_event, uri) => {
-        window.ipc.invoke('shell:open-external', uri).catch(() => {})
-      }))
+      installTerminalLinkHandling(xterm, openExternalLink)
 
       const backendHandle = (() => {
         if (storeState.optimizedTerminalRenderer) {
