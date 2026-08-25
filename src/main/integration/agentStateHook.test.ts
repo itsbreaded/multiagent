@@ -23,6 +23,11 @@ interface CapturedEvent {
   }
 }
 
+// Windows PowerShell startup is slow enough on hosted runners to exceed the
+// local 10-second fixture budget. Keep the timeout tight on Unix while allowing
+// the Windows child process time to start and post its event.
+const HOOK_FIXTURE_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 10_000
+
 function startCapture(events: CapturedEvent[]): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -68,9 +73,12 @@ async function runHook(event: string, payload: unknown, raw = false): Promise<Ca
       const timer = setTimeout(() => {
         child.kill()
         reject(new Error('hook fixture timed out'))
-      }, 10_000)
-      child.on('error', reject)
-      child.on('exit', (value) => {
+      }, HOOK_FIXTURE_TIMEOUT_MS)
+      child.once('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+      child.once('close', (value) => {
         clearTimeout(timer)
         resolve(value ?? -1)
       })
@@ -83,7 +91,7 @@ async function runHook(event: string, payload: unknown, raw = false): Promise<Ca
   }
 }
 
-describe('managed agent-state hook payload contract (spec 065)', { timeout: 30_000 }, () => {
+describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_000 }, () => {
   it('reports async_launched Agent launches with their identity', async () => {
     const events = await runHook('post_tool_use', {
       tool_name: 'Agent',
