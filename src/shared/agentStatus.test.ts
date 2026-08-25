@@ -345,6 +345,26 @@ describe('eventToState -- background subagents (spec 065)', () => {
     })
   })
 
+  it('a bare Codex stop ends the turn to idle without fabricated work evidence', () => {
+    const prev: AgentStatusState = { status: 'working', detail: 'Bash', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(prev, {
+      event: 'stop', agentKind: 'codex', sessionId: 'session-1', turnId: 'turn-1',
+    }, NOW)).toEqual({
+      status: 'idle',
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      event: 'stop',
+      updatedAt: NOW,
+    })
+  })
+
+  it('keeps Claude bare stop fail-closed', () => {
+    const prev: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
+    expect(eventToState(prev, {
+      event: 'stop', agentKind: 'claude', sessionId: 'session-1', turnId: 'turn-1',
+    }, NOW)).toBe(prev)
+  })
+
   it('keeps multiple subagents active until the final distinct completion', () => {
     const two = launch(launch(undefined, 'sub-a'), 'sub-b')!
     const held = stop(two)

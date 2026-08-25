@@ -49,7 +49,7 @@ function startCapture(events: CapturedEvent[]): Promise<{ server: http.Server; p
   })
 }
 
-async function runHook(event: string, payload: unknown, raw = false): Promise<CapturedEvent[]> {
+async function runHook(event: string, payload: unknown, raw = false, agentKind = 'claude'): Promise<CapturedEvent[]> {
   const events: CapturedEvent[] = []
   const capture = await startCapture(events)
   const script = path.resolve(__dirname, 'assets', process.platform === 'win32'
@@ -57,8 +57,8 @@ async function runHook(event: string, payload: unknown, raw = false): Promise<Ca
     : 'multiagent-agent-state.sh')
   const command = process.platform === 'win32' ? 'powershell.exe' : 'bash'
   const args = process.platform === 'win32'
-    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'claude', event]
-    : [script, 'claude', event]
+    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, agentKind, event]
+    : [script, agentKind, event]
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     MULTIAGENT_ENV: '1',
@@ -162,6 +162,14 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
     expect(malformed[0].evidence).toMatchObject({ completeness: 'incomplete', activeCount: 1, scheduledCount: 1 })
     const truncated = await runHook('stop', '{"session_id":"session-1","background_tasks":[],"session_crons":[]', true)
     expect(truncated[0].evidence).toMatchObject({ completeness: 'incomplete', activeCount: 1, scheduledCount: 1 })
+  })
+
+  it('reports a Codex stop with lifecycle identity but no fabricated work evidence', async () => {
+    const events = await runHook('stop', { session_id: 'session-1', turn_id: 'turn-1' }, false, 'codex')
+    expect(events).toEqual([{
+      ptyId: 'hook-test-pty', agentKind: 'codex', event: 'stop',
+      turnId: 'turn-1', sessionId: 'session-1',
+    }])
   })
 
   it('reports Claude idle_prompt only with the provider label and session identity', async () => {

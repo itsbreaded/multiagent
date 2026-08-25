@@ -242,7 +242,16 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
 
     case 'stop':
       if (latched) return prev
-      return input.evidence ? reconcileSnapshot(prev as AgentStatusState, input, now, 'ordinary_completion') : prev
+      if (input.evidence) return reconcileSnapshot(prev as AgentStatusState, input, now, 'ordinary_completion')
+      // Codex's managed Stop hook has no provider work snapshot. Its lifecycle
+      // completion is still authoritative for the normal turn, while Claude and
+      // OpenCode must retain the evidence-required fail-closed behavior.
+      if (input.agentKind === 'codex') {
+        const next = { ...prev, status: 'idle' as const, event: 'stop' as const, updatedAt: now }
+        delete next.detail
+        return next
+      }
+      return prev
 
     case 'stop_failure':
       return withBackgroundTracking({

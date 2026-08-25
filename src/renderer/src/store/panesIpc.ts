@@ -122,6 +122,7 @@ export function wirePanesIpc(): void {
       if (pane) {
         const next = eventToState(pane.agentStatus, {
           event: event as AgentLifecycleEvent,
+          agentKind: pane.agentKind,
           detail: safeStr(detail),
           turnId: safeStr(turnId),
           agentId: safeStr(agentId),

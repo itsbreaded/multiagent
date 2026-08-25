@@ -244,6 +244,7 @@ export type AgentLifecycleEvent =
 // What main forwards on pane:agent-event, and what the reducer consumes.
 export interface AgentStatusInput {
   event: AgentLifecycleEvent
+  agentKind?: AgentKind
   detail?: string
   sessionId?: string
   turnId?: string
