@@ -240,8 +240,19 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
     const server = new AgentSessionReportServer({ onReport: () => {}, onEvent: rendererListener })
     server.start()
     const port = await server.ready()
-    const script = path.resolve(__dirname, 'assets', 'multiagent-agent-state.ps1')
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'claude', 'idle_prompt'], {
+    const useUnix = process.platform !== 'win32'
+    const script = path.resolve(__dirname, 'assets', useUnix
+      ? 'multiagent-agent-state.sh'
+      : 'multiagent-agent-state.ps1')
+    const command = useUnix ? UNIX_BASH_COMMAND : 'powershell.exe'
+    if (!command) {
+      server.stop()
+      throw new Error('Unix hook fixture requires bash or Git Bash')
+    }
+    const args = useUnix
+      ? [script, 'claude', 'idle_prompt']
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'claude', 'idle_prompt']
+    const child = spawn(command, args, {
       cwd: path.resolve(__dirname, '../../..'),
       env: { ...process.env, MULTIAGENT_ENV: '1', MULTIAGENT_PTY_ID: 'hook-compose', MULTIAGENT_HOOK_PORT: String(port) },
       windowsHide: true,
