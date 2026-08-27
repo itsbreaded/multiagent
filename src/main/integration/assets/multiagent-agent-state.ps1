@@ -5,7 +5,7 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<path>" <agentKind> [<event>]
 # where <agentKind> is "claude" or "codex" and <event> is one of:
 #   session_start | user_prompt_submit | pre_tool_use | post_tool_use |
-#   stop | permission_request | stop_failure | bg_subagent_completed
+#   stop | permission_request | stop_failure | idle_prompt | bg_subagent_completed
 # An absent <event> (legacy 047 SessionStart install) is treated as session_start for
 # back-compat -- it still seeds the badge AND posts the linking report.
 #
@@ -77,6 +77,17 @@ function Get-TurnId {
   return $null
 }
 
+function Get-ClaudeStopTerminalState {
+  # Stop can be invoked while a stop hook is continuing the turn. Only an explicit
+  # boolean false means the foreground turn completed; missing or drifted fields stay
+  # busy so the reducer cannot fabricate idle from an ambiguous Stop payload.
+  if (-not $payload) { return 'busy' }
+  $property = $payload.PSObject.Properties['stop_hook_active']
+  if ($null -eq $property -or $property.Value -isnot [bool]) { return 'busy' }
+  if ($property.Value) { return 'busy' }
+  return 'completed'
+}
+
 function Get-SessionId {
   if ($payload) { return $payload.session_id }
   return $null
@@ -105,6 +116,10 @@ function New-ClaudeSnapshot {
     activeCount = $(if ($complete) { $active.Count } else { [Math]::Max(1, $active.Count) })
     scheduledCount = $(if ($complete) { $scheduled.Count } else { [Math]::Max(1, $scheduled.Count) })
   }
+  $snapshotSessionId = Get-SessionId
+  $snapshotTurnId = Get-TurnId
+  if ($snapshotSessionId) { $result['sessionId'] = $snapshotSessionId }
+  if ($snapshotTurnId) { $result['turnId'] = $snapshotTurnId }
   if ($complete) {
     $activeIds = @($active | ForEach-Object { if ($_.id) { $_.id } else { $_.task_id } } | Where-Object { $_ -is [string] -and $_.Length -le 256 })
     $scheduledIds = @($scheduled | ForEach-Object { $_.id } | Where-Object { $_ -is [string] -and $_.Length -le 256 })
@@ -156,13 +171,14 @@ switch ($event) {
     Post-Event -EventName 'bg_subagent_completed' -TurnId (Get-TurnId) -AgentId (Get-AgentId) -SessionId (Get-SessionId) -Evidence $evidence
   }
   'stop' {
-    $evidence = if ($agentKind -eq 'claude') { New-ClaudeSnapshot -TerminalState 'completed' } else { $null }
+    $terminalState = if ($agentKind -eq 'claude') { Get-ClaudeStopTerminalState } else { 'completed' }
+    $evidence = if ($agentKind -eq 'claude') { New-ClaudeSnapshot -TerminalState $terminalState } else { $null }
     Post-Event -EventName 'stop' -TurnId (Get-TurnId) -SessionId (Get-SessionId) -Evidence $evidence
   }
   'idle_prompt' {
     $sid = Get-SessionId
     if ($payload.notification_type -eq 'idle_prompt' -and $sid) {
-      Post-Event -EventName 'idle_prompt' -SessionId $sid
+      Post-Event -EventName 'idle_prompt' -TurnId (Get-TurnId) -SessionId $sid
     }
   }
   'permission_request' {
@@ -173,9 +189,14 @@ switch ($event) {
     Post-Event -EventName 'permission_request' -Detail $detail -TurnId (Get-TurnId) -SessionId (Get-SessionId)
   }
   'stop_failure' {
-    # Claude only. The payload may carry an error type/message; send whatever is present.
-    $detail = $payload.error_type
+    # Claude only. Prefer the current hook fields, with legacy fields as a compatibility
+    # fallback. Keep the report bounded even when the provider supplies verbose details.
+    $detail = $payload.error
+    if (-not $detail) { $detail = $payload.error_details }
+    if (-not $detail) { $detail = $payload.error_type }
     if (-not $detail) { $detail = $payload.message }
+    if ($detail -isnot [string]) { $detail = $null }
+    if ($detail -and $detail.Length -gt 256) { $detail = $detail.Substring(0, 256) }
     Post-Event -EventName 'stop_failure' -Detail $detail -TurnId (Get-TurnId) -SessionId (Get-SessionId)
   }
   default {

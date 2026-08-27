@@ -469,12 +469,15 @@ and validates an optional session/turn-aware work snapshot; main preserves it ac
 the renderer's single `eventToState` reducer owns the result. Runtime status, work counts,
 session/turn identity, and recovery provenance remain in memory and are never persisted.
 
-An idle transition requires provider-authoritative complete empty evidence for the current
-session/turn. A bare `stop`, missing or stale identity, malformed report, or incomplete
-zero-work snapshot cannot establish idle. Any active or scheduled work keeps the pane
-protected. Escape records one renderer-side interrupt marker; Claude's exact
-`Notification` `idle_prompt` can recover only that matching marker while no work is active.
-New prompts, session replacement, PTY exit, demotion, and active-work evidence invalidate it.
+An authoritative idle transition normally requires complete empty work evidence for the
+current session/turn. A bare `stop`, missing or stale identity, malformed report, or
+incomplete zero-work snapshot cannot authorize automatic suspension. Claude's delayed
+`Notification` `idle_prompt` is also allowed to recover the visible foreground badge when
+its session and `prompt_id` match the current working turn and no active/scheduled work is
+known; it sets an in-memory suspension block because Notification does not carry complete
+work coverage. A later complete empty snapshot clears that block. Missing or stale
+`prompt_id`, active work, waiting/error state, newer prompts, session replacement, PTY
+exit, and demotion remain protected. Escape uses the same exact session/turn identity rule.
 There is no quiet-time timer, process-age rule, terminal-text classifier, or second status
 writer. Automatic suspension performs a microtask commit check so active work arriving before
 the kill commit cancels the kill.
@@ -497,6 +500,7 @@ Event -> state mapping (the reducer in `src/shared/agentStatus.ts`; completion i
 | `pre_tool_use` / `post_tool_use` | `working` (detail = tool name) |
 | `permission_request` | `waiting` (permission prompt — needs you) |
 | `stop` | `idle` only with complete empty current-session evidence; otherwise remains protected |
+| `idle_prompt` | visible `idle` only with matching current session/turn and no known work; suspension remains blocked until complete empty evidence |
 | `stop_failure` | `error` (Claude only) |
 | `promote` / `demote` (synthetic, from the process sweeper) | `working` / clears the badge |
 
@@ -504,8 +508,12 @@ The legacy event table above describes the visible vocabulary; completion semant
 evidence-gated as described above. Provider-specific recovery remains independent:
 
 - **Claude** installs separate `Notification` matchers for `permission_prompt` and
-  `idle_prompt`. `Stop` and `SubagentStop` include bounded task/schedule evidence when the
-  hook payload exposes it; missing or non-empty/unparseable arrays remain incomplete.
+  `idle_prompt`. `idle_prompt` forwards the provider `prompt_id`; recovery requires that
+  exact current turn. `Stop` and `SubagentStop` include bounded task/schedule evidence when
+  the hook payload exposes it, and `stop_hook_active` must be explicitly `false` before a
+  Stop can carry a completed terminal state; missing/true/malformed values remain busy or
+  incomplete. StopFailure prefers the current `error`/`error_details` fields with bounded
+  legacy fallbacks.
 - **Codex** direct-CLI panes retain hook-only reporting. App-launched Codex uses a pane-local
   Unix-socket App Server sidecar and `codex --remote`; its observer reconciles turn completion
   with background-terminal and descendant-thread queries. Preparation can fall back to direct

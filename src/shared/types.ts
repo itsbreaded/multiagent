@@ -199,6 +199,14 @@ export interface AgentStatusState {
   activeWorkIds?: string[]
   scheduledWorkIds?: string[]
   workSnapshot?: AgentWorkSnapshot
+  // In-memory only: a delayed provider idle notification may prove the
+  // foreground is idle without proving that all background-work coverage is
+  // complete. Keep automatic suspension blocked until a complete empty-work
+  // snapshot arrives.
+  suspensionBlocked?: boolean
+  // In-memory only: bounded tombstones make background lifecycle delivery
+  // idempotent when a completion and a delayed duplicate start cross in flight.
+  completedBackgroundSubagentIds?: string[]
   recoveryProvenance?: 'ordinary_completion' | 'interrupt_recovery' | 'idle_prompt_recovery' | 'stale_work_reconciliation'
   recoveryGeneration?: number
   pendingInterrupt?: {

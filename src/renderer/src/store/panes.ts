@@ -1687,7 +1687,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         currentBeforeKill?.ptyId === ptyId &&
         currentBeforeKill.agentSuspension?.reason === 'idle-policy' &&
         hasExactSessionIdentity(currentBeforeKill) &&
-        currentBeforeKill.agentStatus?.status === 'idle'
+        currentBeforeKill.agentStatus?.status === 'idle' &&
+        currentBeforeKill.agentStatus?.suspensionBlocked !== true
       if (!canCommit) {
         automaticSuspensionTokens.delete(paneId)
         automaticSuspensionInFlight.delete(paneId)

@@ -49,6 +49,16 @@ turn_id() {
   fi
 }
 
+jsonbool() {
+  printf '%s' "$raw" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" | head -n1
+}
+
+claude_stop_terminal_state() {
+  # Only an explicit boolean false means the foreground turn completed. Missing or
+  # drifted stop_hook_active stays busy so Stop cannot fabricate idle.
+  [ "$(jsonbool stop_hook_active)" = false ] && printf '%s' completed || printf '%s' busy
+}
+
 session_id() {
   jsonstr session_id
 }
@@ -123,10 +133,16 @@ top_level_empty_array() {
 
 claude_evidence() {
   local terminalState="$1"
+  local sid tid identity
+  sid=$(session_id)
+  tid=$(turn_id)
+  identity=""
+  [ -n "$sid" ] && identity="$identity,\"sessionId\":\"$(jsonesc "$sid")\""
+  [ -n "$tid" ] && identity="$identity,\"turnId\":\"$(jsonesc "$tid")\""
   if [ "$(top_level_empty_array background_tasks)" = yes ] && [ "$(top_level_empty_array session_crons)" = yes ]; then
-    printf '%s' "{\"provider\":\"claude\",\"completeness\":\"complete\",\"terminalState\":\"$terminalState\",\"activeCount\":0,\"scheduledCount\":0}"
+    printf '%s' "{\"provider\":\"claude\",\"completeness\":\"complete\",\"terminalState\":\"$terminalState\",\"activeCount\":0,\"scheduledCount\":0$identity}"
   else
-    printf '%s' "{\"provider\":\"claude\",\"completeness\":\"incomplete\",\"terminalState\":\"$terminalState\",\"activeCount\":1,\"scheduledCount\":1}"
+    printf '%s' "{\"provider\":\"claude\",\"completeness\":\"incomplete\",\"terminalState\":\"$terminalState\",\"activeCount\":1,\"scheduledCount\":1$identity}"
   fi
 }
 
@@ -198,13 +214,15 @@ case "$event" in
     ;;
   stop)
     evidence=""
-    [ "$agentKind" = "claude" ] && evidence=$(claude_evidence completed)
+    terminalState=completed
+    [ "$agentKind" = "claude" ] && terminalState=$(claude_stop_terminal_state)
+    [ "$agentKind" = "claude" ] && evidence=$(claude_evidence "$terminalState")
     post_event stop "" "$(turn_id)" "" "$(session_id)" "$evidence"
     ;;
   idle_prompt)
     sid=$(session_id)
     if printf '%s' "$raw" | grep -Eq '\"notification_type\"[[:space:]]*:[[:space:]]*\"idle_prompt\"' && [ -n "$sid" ]; then
-      post_event idle_prompt "" "" "" "$sid" ""
+      post_event idle_prompt "" "$(turn_id)" "" "$sid" ""
     fi
     ;;
   permission_request)
@@ -213,8 +231,11 @@ case "$event" in
     post_event permission_request "$detail" "$(turn_id)" "" "$(session_id)" ""
     ;;
   stop_failure)
-    detail=$(jsonstr error_type)
+    detail=$(jsonstr error)
+    [ -n "$detail" ] || detail=$(jsonstr error_details)
+    [ -n "$detail" ] || detail=$(jsonstr error_type)
     [ -n "$detail" ] || detail=$(jsonstr message)
+    [ "${#detail}" -le 256 ] || detail=${detail:0:256}
     post_event stop_failure "$detail" "$(turn_id)" "" "$(session_id)" ""
     ;;
   *)

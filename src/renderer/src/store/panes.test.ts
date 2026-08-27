@@ -327,6 +327,23 @@ describe('usePanesStore — automatic idle suspension lifecycle', () => {
     expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentSuspension).toBeUndefined()
   })
 
+  it('does not suspend an idle_prompt recovery until complete empty work evidence arrives', async () => {
+    const pane = makeLeaf('C:\\repo', 'agent', 'claude')
+    pane.sessionId = 'session-1'
+    pane.ptyId = 'pty-1'
+    pane.agentStatus = { status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: 1 }
+    plantTab(pane)
+    const ipc = installMockIpc()
+
+    paneAgentEventHandler!('pty-1', 'idle_prompt', undefined, 'turn-1', undefined, { sessionId: 'session-1' })
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentStatus).toMatchObject({ status: 'idle', suspensionBlocked: true })
+    usePanesStore.getState().suspendAgentPane(pane.id)
+    await Promise.resolve()
+
+    expect(ipc.invoke).not.toHaveBeenCalledWith('pty:kill', 'pty-1')
+    expect(usePanesStore.getState().findPaneInAnyTab(pane.id)?.agentSuspension).toBeUndefined()
+  })
+
   it('deduplicates resume attempts and clears policy intent only after success', async () => {
     const pane = makeLeaf('C:\\repo', 'agent', 'codex')
     pane.sessionId = 'session-1'

@@ -1,7 +1,7 @@
 /** Pure lifecycle/evidence reducer. Main forwards; renderer state owns status. */
 
 import type { AgentStatusState, AgentStatusInput, AgentWorkSnapshot } from './types'
-import { hasAgentEvidenceIdentityMismatch } from './agentStatusEvidence'
+import { hasAgentEvidenceIdentityMismatch, MAX_AGENT_TRACKED_IDENTITIES } from './agentStatusEvidence'
 
 type RecoveryProvenance = NonNullable<AgentStatusState['recoveryProvenance']>
 
@@ -11,6 +11,9 @@ const TERMINAL_EVENTS = new Set<AgentStatusInput['event']>([
 ])
 const IDENTITY_REQUIRED_TERMINAL_EVENTS = new Set<AgentStatusInput['event']>([
   'stop', 'turn_interrupted', 'work_snapshot', 'bg_subagent_completed',
+])
+const FOREGROUND_TURN_EVENTS = new Set<AgentStatusInput['event']>([
+  'pre_tool_use', 'post_tool_use', 'permission_request', 'stop_failure', 'terminal_error',
 ])
 
 function clearWork(state: AgentStatusState): AgentStatusState {
@@ -40,6 +43,26 @@ function copyWorkTracking(target: AgentStatusState, source: AgentStatusState | u
   if (source.activeWorkIds) target.activeWorkIds = [...source.activeWorkIds]
   if (source.scheduledWorkIds) target.scheduledWorkIds = [...source.scheduledWorkIds]
   if (source.workSnapshot) target.workSnapshot = source.workSnapshot
+  if (source.completedBackgroundSubagentIds) {
+    target.completedBackgroundSubagentIds = [...source.completedBackgroundSubagentIds]
+  }
+}
+
+function copyProtection(target: AgentStatusState, source: AgentStatusState | undefined): void {
+  if (!source) return
+  if (source.suspensionBlocked) target.suspensionBlocked = true
+  if (source.completedBackgroundSubagentIds) {
+    target.completedBackgroundSubagentIds = [...source.completedBackgroundSubagentIds]
+  }
+}
+
+function rememberCompletedBackgroundId(state: AgentStatusState, agentId: string | undefined): AgentStatusState {
+  if (!agentId) return state
+  const existing = state.completedBackgroundSubagentIds ?? []
+  if (existing.includes(agentId)) return state
+  const next = { ...state }
+  next.completedBackgroundSubagentIds = [...existing, agentId].slice(-MAX_AGENT_TRACKED_IDENTITIES)
+  return next
 }
 
 function withBackgroundTracking(state: AgentStatusState, count: number, ids: readonly string[]): AgentStatusState {
@@ -59,7 +82,9 @@ function activeWork(state: AgentStatusState | undefined): boolean {
   return Boolean(
     (state?.activeBackgroundSubagents ?? 0) > 0 ||
     (state?.activeWorkCount ?? 0) > 0 ||
-    (state?.scheduledWorkCount ?? 0) > 0,
+    (state?.scheduledWorkCount ?? 0) > 0 ||
+    (state?.workSnapshot?.activeCount ?? 0) > 0 ||
+    (state?.workSnapshot?.scheduledCount ?? 0) > 0,
   )
 }
 
@@ -80,14 +105,49 @@ function terminalIdentityMissing(prev: AgentStatusState, input: AgentStatusInput
 }
 
 function idlePromptCanRecover(prev: AgentStatusState, input: AgentStatusInput): boolean {
-  const pending = prev.pendingInterrupt
-  const incomingSession = input.sessionId ?? input.evidence?.sessionId
+  const incoming = identityFromInput(input)
+  if (input.agentKind && input.agentKind !== 'claude') return false
   return Boolean(
-    pending && prev.sessionId && prev.turnId && incomingSession === prev.sessionId &&
-    pending.sessionId === prev.sessionId && pending.turnId === prev.turnId &&
-    pending.generation === prev.recoveryGeneration && !activeWork(prev) &&
-    prev.status !== 'waiting' && prev.status !== 'error' && prev.event !== 'terminal_error',
+    prev.status === 'working' && prev.sessionId && prev.turnId &&
+    incoming.sessionId === prev.sessionId && incoming.turnId === prev.turnId && !activeWork(prev) &&
+    !hasCurrentBusyWorkSnapshot(prev) &&
+    prev.event !== 'terminal_error',
   )
+}
+
+function staleForegroundTurn(prev: AgentStatusState | undefined, input: AgentStatusInput): boolean {
+  // A different turn id while the pane is working is an old in-flight hook from a
+  // previous turn. When the pane is idle, a different id is instead the first signal
+  // of a new turn (there is no UserPromptSubmit ordering guarantee across providers).
+  if (input.agentKind && input.agentKind !== 'claude') return false
+  if (!prev || !FOREGROUND_TURN_EVENTS.has(input.event) || !prev.turnId || prev.status === 'idle') return false
+  const incomingTurn = identityFromInput(input).turnId
+  return incomingTurn !== undefined && incomingTurn !== prev.turnId
+}
+
+function hasCompleteEmptyWorkSnapshot(state: AgentStatusState): boolean {
+  const snapshot = state.workSnapshot
+  return snapshot?.completeness === 'complete' &&
+    snapshot.activeCount === 0 && snapshot.scheduledCount === 0 &&
+    Boolean(state.sessionId && state.turnId && snapshot.sessionId === state.sessionId && snapshot.turnId === state.turnId)
+}
+
+function hasCurrentBusyWorkSnapshot(state: AgentStatusState): boolean {
+  const snapshot = state.workSnapshot
+  return (snapshot?.terminalState === 'busy' || snapshot?.terminalState === 'retry') &&
+    Boolean(state.sessionId && state.turnId && snapshot.sessionId === state.sessionId && snapshot.turnId === state.turnId)
+}
+
+function isCrossTurnBackgroundEvent(prev: AgentStatusState, input: AgentStatusInput): boolean {
+  if (input.event !== 'bg_subagent_started' && input.event !== 'bg_subagent_completed') return false
+  const incoming = identityFromInput(input)
+  return Boolean(prev.sessionId && prev.turnId && incoming.sessionId === prev.sessionId &&
+    incoming.turnId && incoming.turnId !== prev.turnId)
+}
+
+function backgroundSessionMatches(prev: AgentStatusState, input: AgentStatusInput): boolean {
+  const incomingSession = identityFromInput(input).sessionId
+  return Boolean(incomingSession && (!prev.sessionId || incomingSession === prev.sessionId))
 }
 
 function withSnapshot(state: AgentStatusState, snapshot: AgentWorkSnapshot, provenance: RecoveryProvenance, now: number): AgentStatusState {
@@ -120,6 +180,7 @@ function reconcileSnapshot(prev: AgentStatusState, input: AgentStatusInput, now:
     protective.sessionId = prev.sessionId ?? snapshot.sessionId ?? input.sessionId
     protective.turnId = prev.turnId ?? snapshot.turnId ?? input.turnId
     protective.event = input.event
+    copyProtection(protective, prev)
     delete protective.pendingInterrupt
     delete protective.recoveryGeneration
     if (prev.status !== 'waiting' && prev.status !== 'error' && prev.event !== 'terminal_error') {
@@ -154,6 +215,7 @@ function reconcileSnapshot(prev: AgentStatusState, input: AgentStatusInput, now:
   }
   next.status = 'idle'
   delete next.detail
+  delete next.suspensionBlocked
   return next
 }
 
@@ -168,7 +230,10 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
 
   if (isStaleSession(prev, input) && input.event !== 'session_start' && input.event !== 'user_prompt_submit') return prev
   if (TERMINAL_EVENTS.has(input.event) && !prev) return prev
-  if (prev && IDENTITY_REQUIRED_TERMINAL_EVENTS.has(input.event) && terminalIdentityMissing(prev, input)) return prev
+  if (prev && IDENTITY_REQUIRED_TERMINAL_EVENTS.has(input.event) && input.event !== 'bg_subagent_completed' && terminalIdentityMissing(prev, input)) return prev
+  if (staleForegroundTurn(prev, input)) return prev
+  if (prev && (input.event === 'bg_subagent_started' || input.event === 'bg_subagent_completed') &&
+    !backgroundSessionMatches(prev, input)) return prev
   if (prev && input.event === 'idle_prompt' && !idlePromptCanRecover(prev, input)) return prev
 
   switch (input.event) {
@@ -183,8 +248,11 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
       const changed = Boolean(prev?.sessionId && sessionId && prev.sessionId !== sessionId)
       if (changed || !prev) return { status: 'idle', ...(sessionId ? { sessionId } : {}), event: 'session_start', updatedAt: now }
       if (latched) return { status: 'idle', ...(sessionId ? { sessionId } : {}), event: 'session_start', updatedAt: now }
-      if (!reportedSessionId && !prev.pendingInterrupt && !prev.recoveryGeneration && !prev.recoveryProvenance) return prev
+      if (!reportedSessionId && !prev.pendingInterrupt && !prev.recoveryGeneration && !prev.recoveryProvenance &&
+        !prev.suspensionBlocked && !prev.completedBackgroundSubagentIds) return prev
       const next = clearRecovery(prev)
+      delete next.suspensionBlocked
+      delete next.completedBackgroundSubagentIds
       next.sessionId = sessionId
       if (activeWork(next)) next.status = 'working'
       next.event = prev.event ?? 'session_start'
@@ -219,6 +287,8 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
       delete next.detail
       delete next.pendingInterrupt
       next.updatedAt = now
+      if (!hasCompleteEmptyWorkSnapshot(prev as AgentStatusState)) next.suspensionBlocked = true
+      else delete next.suspensionBlocked
       return next
     }
 
@@ -236,7 +306,8 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
           ? { sessionId: input.sessionId ?? input.evidence?.sessionId ?? prev?.sessionId } : {}),
         detail: input.detail, turnId: input.turnId ?? prev?.turnId, event: input.event, updatedAt: now,
         ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
-          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot,
+          suspensionBlocked: prev.suspensionBlocked, completedBackgroundSubagentIds: prev.completedBackgroundSubagentIds } : {}),
       }, activeCount, activeIds)
     }
 
@@ -258,7 +329,8 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
         status: 'error', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail ?? 'error',
         turnId: input.turnId ?? prev?.turnId, event: 'stop_failure', updatedAt: now,
         ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
-          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot,
+          suspensionBlocked: prev.suspensionBlocked, completedBackgroundSubagentIds: prev.completedBackgroundSubagentIds } : {}),
       }, activeCount, activeIds)
 
     case 'permission_request':
@@ -267,7 +339,8 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
         status: 'waiting', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail,
         turnId: input.turnId ?? prev?.turnId, event: 'permission_request', updatedAt: now,
         ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
-          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot,
+          suspensionBlocked: prev.suspensionBlocked, completedBackgroundSubagentIds: prev.completedBackgroundSubagentIds } : {}),
       }, activeCount, activeIds)
 
     case 'terminal_error':
@@ -275,18 +348,26 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
         status: 'error', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail ?? 'terminal error',
         turnId: prev?.turnId, event: 'terminal_error', updatedAt: now,
         ...(prev ? { activeWorkCount: prev.activeWorkCount, scheduledWorkCount: prev.scheduledWorkCount,
-          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot } : {}),
+          activeWorkIds: prev.activeWorkIds, scheduledWorkIds: prev.scheduledWorkIds, workSnapshot: prev.workSnapshot,
+          suspensionBlocked: prev.suspensionBlocked, completedBackgroundSubagentIds: prev.completedBackgroundSubagentIds } : {}),
       }, activeCount, activeIds)
 
     case 'bg_subagent_started': {
       const agentId = input.agentId?.trim() || undefined
+      if (agentId && prev?.completedBackgroundSubagentIds?.includes(agentId)) return prev
       if (agentId && activeIds.includes(agentId)) return prev
       const nextCount = Math.max(0, activeCount) + 1
       const nextIds = agentId ? [...activeIds, agentId] : activeIds
       if (prev && (latched || prev.status === 'waiting' || prev.status === 'error')) return withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
+      const preserveForeground = Boolean(prev && isCrossTurnBackgroundEvent(prev, input) && prev.status !== 'idle')
       return withBackgroundTracking({
-        status: 'working', sessionId: prev?.sessionId ?? input.sessionId, detail: input.detail ?? 'background subagent',
-        turnId: input.turnId ?? prev?.turnId, event: input.event, updatedAt: now,
+        status: preserveForeground ? prev!.status : 'working',
+        sessionId: prev?.sessionId ?? input.sessionId,
+        detail: preserveForeground ? prev?.detail : input.detail ?? 'background subagent',
+        turnId: preserveForeground ? prev!.turnId : input.turnId ?? prev?.turnId,
+        event: preserveForeground ? prev!.event : input.event,
+        ...(prev ? { suspensionBlocked: prev.suspensionBlocked, completedBackgroundSubagentIds: prev.completedBackgroundSubagentIds } : {}),
+        updatedAt: now,
       }, nextCount, nextIds)
     }
 
@@ -295,14 +376,35 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
       // snapshot. Prefer that authoritative reconciliation over the legacy
       // single-identity counter; one child completion must not hide siblings or
       // scheduled work.
-      if (input.evidence) return reconcileSnapshot(prev as AgentStatusState, input, now, 'ordinary_completion')
+      if (input.evidence) {
+        const current = prev as AgentStatusState
+        const crossTurn = isCrossTurnBackgroundEvent(current, input)
+        const reconciled = reconcileSnapshot(current, input, now, 'ordinary_completion')
+        const agentId = input.agentId?.trim() || undefined
+        const next = agentId ? rememberCompletedBackgroundId(reconciled, agentId) : reconciled
+        if (crossTurn) {
+          next.event = current.event
+          next.turnId = current.turnId
+          if (current.status === 'working' && !activeWork(next)) {
+            next.status = 'working'
+            if (current.detail) next.detail = current.detail
+            else delete next.detail
+          }
+        }
+        return next
+      }
       const agentId = input.agentId?.trim() || undefined
-      if (!agentId || !prev) return prev
+      if (!prev) return prev
+      if (!agentId) return prev
       const index = activeIds.indexOf(agentId)
-      if (index < 0) return prev
+      // An unknown id while another known child is active is not enough to infer
+      // completion-before-start; it may be a stale or foreign child notification.
+      // Tombstone only an otherwise-untracked completion so a later duplicate start
+      // cannot resurrect a child that already finished.
+      if (index < 0) return activeIds.length === 0 ? rememberCompletedBackgroundId(prev, agentId) : prev
       const nextIds = activeIds.filter((id) => id !== agentId)
       const nextCount = Math.max(0, activeCount - 1)
-      const reconciled = withBackgroundTracking({ ...prev, updatedAt: now }, nextCount, nextIds)
+      const reconciled = withBackgroundTracking(rememberCompletedBackgroundId({ ...prev, updatedAt: now }, agentId), nextCount, nextIds)
       // A provider-authorized completion may release its own known aggregate
       // identity, but it cannot decrement an aggregate count whose identities
       // were not supplied.
@@ -326,7 +428,14 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
       const remainingUnknownWork = reconciled.workSnapshot?.completeness === 'incomplete'
       if (activeWork(reconciled) || remainingUnknownWork) return reconciled
       const cleared = clearWork(reconciled)
-      if (prev.status === 'working' && prev.event === 'stop') return { status: 'idle', sessionId: prev.sessionId, turnId: prev.turnId, event: 'stop', updatedAt: now }
+      if (reconciled.workSnapshot?.completeness === 'complete' &&
+        reconciled.workSnapshot.activeCount === 0 && reconciled.workSnapshot.scheduledCount === 0) {
+        delete cleared.suspensionBlocked
+      }
+      if (prev.status === 'working' && prev.event === 'stop') {
+        delete cleared.detail
+        return { ...cleared, status: 'idle', sessionId: prev.sessionId, turnId: prev.turnId, event: 'stop', updatedAt: now }
+      }
       return { ...cleared, updatedAt: now }
     }
 

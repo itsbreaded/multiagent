@@ -104,6 +104,23 @@ describe('AgentSessionReportServer -- /agent-event (spec 032)', () => {
     expect(events).toEqual([{ ptyId: 'p1', agentKind: 'claude', event: 'pre_tool_use', detail: 'Bash', turnId: 'turn-1' }])
   })
 
+  it('forwards Claude idle_prompt identity but rejects the Claude-only event for other providers', async () => {
+    const events: AgentEventReport[] = []
+    server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })
+    server.start()
+    const port = await server.ready()
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-idle', agentKind: 'claude', event: 'idle_prompt', sessionId: 'session-1', turnId: 'turn-1',
+    })).toBe(204)
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-idle', agentKind: 'codex', event: 'idle_prompt', sessionId: 'session-1', turnId: 'turn-1',
+    })).toBe(400)
+    expect(events).toEqual([{
+      ptyId: 'p-idle', agentKind: 'claude', event: 'idle_prompt', detail: undefined,
+      sessionId: 'session-1', turnId: 'turn-1', agentId: undefined,
+    }])
+  })
+
   it('accepts an event with optional fields omitted (detail/turnId undefined)', async () => {
     const events: AgentEventReport[] = []
     server = new AgentSessionReportServer({ onReport: () => {}, onEvent: (e) => events.push(e) })

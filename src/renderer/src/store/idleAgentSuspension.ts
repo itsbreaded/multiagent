@@ -16,6 +16,7 @@ export function isIdleAgentSuspensionEligible(pane: PaneLeaf): boolean {
     hasExactSessionIdentity(pane) &&
     typeof pane.ptyId === 'string' && pane.ptyId.length > 0 &&
     pane.agentStatus?.status === 'idle' &&
+    pane.agentStatus?.suspensionBlocked !== true &&
     pane.agentSuspension === undefined
   )
 }

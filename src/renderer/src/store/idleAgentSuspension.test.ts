@@ -25,6 +25,8 @@ describe('idle suspension eligibility', () => {
     pane.agentKind = agentKind
     expect(hasExactSessionIdentity(pane)).toBe(true)
     expect(isIdleAgentSuspensionEligible(pane)).toBe(true)
+    pane.agentStatus = { status: 'idle', suspensionBlocked: true, updatedAt: 2 }
+    expect(isIdleAgentSuspensionEligible(pane)).toBe(false)
     pane.agentStatus = { status: 'working', updatedAt: 2 }
     expect(isIdleAgentSuspensionEligible(pane)).toBe(false)
     pane.agentStatus = {

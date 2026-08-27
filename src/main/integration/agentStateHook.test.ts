@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import * as http from 'http'
 import { spawn } from 'child_process'
+import { existsSync } from 'fs'
 import * as path from 'path'
+import { AgentSessionReportServer, type AgentEventReport } from './agentSessionReportServer'
+import { eventToState } from '../../shared/agentStatus'
+import type { AgentStatusState } from '../../shared/types'
 
 // Spec 065: offline hook contract tests. These feed canned JSON directly to the host
 // hook asset and capture localhost POSTs. They never launch Claude or a real subagent.
@@ -27,6 +31,9 @@ interface CapturedEvent {
 // local 10-second fixture budget. Keep the timeout tight on Unix while allowing
 // the Windows child process time to start and post its event.
 const HOOK_FIXTURE_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 10_000
+const UNIX_BASH_COMMAND = process.platform === 'win32'
+  ? (existsSync('C:\\Program Files\\Git\\bin\\bash.exe') ? 'C:\\Program Files\\Git\\bin\\bash.exe' : undefined)
+  : 'bash'
 
 function startCapture(events: CapturedEvent[]): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve) => {
@@ -49,16 +56,21 @@ function startCapture(events: CapturedEvent[]): Promise<{ server: http.Server; p
   })
 }
 
-async function runHook(event: string, payload: unknown, raw = false, agentKind = 'claude'): Promise<CapturedEvent[]> {
+async function runHook(event: string, payload: unknown, raw = false, agentKind = 'claude', platform: 'host' | 'unix' = 'host'): Promise<CapturedEvent[]> {
   const events: CapturedEvent[] = []
   const capture = await startCapture(events)
-  const script = path.resolve(__dirname, 'assets', process.platform === 'win32'
-    ? 'multiagent-agent-state.ps1'
-    : 'multiagent-agent-state.sh')
-  const command = process.platform === 'win32' ? 'powershell.exe' : 'bash'
-  const args = process.platform === 'win32'
-    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, agentKind, event]
-    : [script, agentKind, event]
+  const useUnix = platform === 'unix' || (platform === 'host' && process.platform !== 'win32')
+  const script = path.resolve(__dirname, 'assets', useUnix
+    ? 'multiagent-agent-state.sh'
+    : 'multiagent-agent-state.ps1')
+  const command = useUnix ? UNIX_BASH_COMMAND : 'powershell.exe'
+  if (!command) {
+    capture.server.close()
+    throw new Error('Unix hook fixture requires bash or Git Bash')
+  }
+  const args = useUnix
+    ? [script, agentKind, event]
+    : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, agentKind, event]
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     MULTIAGENT_ENV: '1',
@@ -146,12 +158,16 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
     const events = await runHook('stop', {
       session_id: 'session-1',
       prompt_id: 'turn-1',
+      stop_hook_active: false,
       background_tasks: [],
       session_crons: [],
     })
     expect(events[0]).toMatchObject({
       event: 'stop', sessionId: 'session-1',
-      evidence: { provider: 'claude', completeness: 'complete', activeCount: 0, scheduledCount: 0 },
+      evidence: {
+        provider: 'claude', completeness: 'complete', activeCount: 0, scheduledCount: 0,
+        sessionId: 'session-1', turnId: 'turn-1',
+      },
     })
 
     const malformed = await runHook('stop', {
@@ -172,9 +188,75 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
     }])
   })
 
-  it('reports Claude idle_prompt only with the provider label and session identity', async () => {
-    const events = await runHook('idle_prompt', { notification_type: 'idle_prompt', session_id: 'session-1', message: 'ignored' })
-    expect(events).toEqual([{ ptyId: 'hook-test-pty', agentKind: 'claude', event: 'idle_prompt', sessionId: 'session-1' }])
+  it('reports Claude idle_prompt with session and current turn identity', async () => {
+    const events = await runHook('idle_prompt', { notification_type: 'idle_prompt', session_id: 'session-1', prompt_id: 'turn-1', message: 'ignored' })
+    expect(events).toEqual([{ ptyId: 'hook-test-pty', agentKind: 'claude', event: 'idle_prompt', turnId: 'turn-1', sessionId: 'session-1' }])
     expect(await runHook('idle_prompt', { notification_type: 'agent_completed', session_id: 'session-1' })).toEqual([])
   })
+
+  it('keeps Stop busy when stop_hook_active is true, missing, or malformed', async () => {
+    for (const stop_hook_active of [true, undefined, 'false']) {
+      const payload = { session_id: 'session-1', prompt_id: 'turn-1', background_tasks: [], session_crons: [], ...(stop_hook_active === undefined ? {} : { stop_hook_active }) }
+      const events = await runHook('stop', payload)
+      expect(events[0].evidence).toMatchObject({ terminalState: 'busy' })
+    }
+  })
+
+  it('prefers current StopFailure error fields and bounds verbose details', async () => {
+    const current = await runHook('stop_failure', { session_id: 'session-1', prompt_id: 'turn-1', error: 'api_error', error_details: 'ignored details' })
+    expect(current[0]).toMatchObject({ event: 'stop_failure', detail: 'api_error' })
+    const verbose = 'x'.repeat(400)
+    const bounded = await runHook('stop_failure', { session_id: 'session-1', prompt_id: 'turn-1', error_details: verbose })
+    expect(bounded[0].detail).toHaveLength(256)
+  })
+
+  it.skipIf(!UNIX_BASH_COMMAND)('keeps the Unix hook asset in parity for idle recovery and Stop continuation', async () => {
+    const idle = await runHook('idle_prompt', {
+      notification_type: 'idle_prompt', session_id: 'session-1', prompt_id: 'turn-1',
+    }, false, 'claude', 'unix')
+    expect(idle[0]).toMatchObject({ event: 'idle_prompt', sessionId: 'session-1', turnId: 'turn-1' })
+    const continuing = await runHook('stop', {
+      session_id: 'session-1', prompt_id: 'turn-1', stop_hook_active: true,
+      background_tasks: [], session_crons: [],
+    }, false, 'claude', 'unix')
+    expect(continuing[0].evidence).toMatchObject({ terminalState: 'busy', sessionId: 'session-1', turnId: 'turn-1' })
+  })
+
+  it('composes the Claude hook process, report server, renderer listener shape, and reducer', async () => {
+    let state: AgentStatusState = {
+      status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: 1,
+    }
+    const rendererListener = (report: AgentEventReport): void => {
+      state = eventToState(state, {
+        event: report.event,
+        agentKind: report.agentKind,
+        detail: report.detail,
+        sessionId: report.sessionId,
+        turnId: report.turnId,
+        agentId: report.agentId,
+        evidence: report.evidence,
+      }, 2)!
+    }
+    const server = new AgentSessionReportServer({ onReport: () => {}, onEvent: rendererListener })
+    server.start()
+    const port = await server.ready()
+    const script = path.resolve(__dirname, 'assets', 'multiagent-agent-state.ps1')
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'claude', 'idle_prompt'], {
+      cwd: path.resolve(__dirname, '../../..'),
+      env: { ...process.env, MULTIAGENT_ENV: '1', MULTIAGENT_PTY_ID: 'hook-compose', MULTIAGENT_HOOK_PORT: String(port) },
+      windowsHide: true,
+    })
+    try {
+      const exitCode = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => { child.kill(); reject(new Error('composed hook fixture timed out')) }, 30_000)
+        child.once('error', (error) => { clearTimeout(timer); reject(error) })
+        child.once('close', (code) => { clearTimeout(timer); resolve(code ?? -1) })
+        child.stdin.end(JSON.stringify({ notification_type: 'idle_prompt', session_id: 'session-1', prompt_id: 'turn-1' }))
+      })
+      expect(exitCode).toBe(0)
+      expect(state).toMatchObject({ status: 'idle', event: 'idle_prompt', sessionId: 'session-1', turnId: 'turn-1', suspensionBlocked: true })
+    } finally {
+      server.stop()
+    }
+  }, 60_000)
 })

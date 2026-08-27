@@ -168,6 +168,28 @@ describe('eventToState -- turn-id guard (out-of-order late tool event after stop
     const errored = eventToState(idle, { event: 'stop_failure', detail: 'boom', sessionId: 'session-1' }, NOW)
     expect(errored?.status).toBe('error')
   })
+
+  it('drops permission and StopFailure hooks from an older turn while a newer turn is working', () => {
+    const current: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-2', event: 'user_prompt_submit', updatedAt: NOW }
+    expect(eventToState(current, {
+      event: 'permission_request', detail: 'old permission', sessionId: 'session-1', turnId: 'turn-1',
+    }, NOW + 1)).toBe(current)
+    expect(eventToState(current, {
+      event: 'stop_failure', detail: 'old failure', sessionId: 'session-1', turnId: 'turn-1',
+    }, NOW + 1)).toBe(current)
+  })
+
+  it('does not apply the Claude-only stale-turn guard to explicit Codex or OpenCode events', () => {
+    const current: AgentStatusState = { status: 'working', sessionId: 'session-1', turnId: 'turn-2', event: 'user_prompt_submit', updatedAt: NOW }
+    const codex = eventToState(current, {
+      event: 'post_tool_use', agentKind: 'codex', detail: 'Bash', sessionId: 'session-1', turnId: 'turn-1',
+    }, NOW + 1)
+    expect(codex).toMatchObject({ status: 'working', event: 'post_tool_use', turnId: 'turn-1' })
+    const opencode = eventToState(current, {
+      event: 'post_tool_use', agentKind: 'opencode', detail: 'Read', sessionId: 'session-1', turnId: 'turn-1',
+    }, NOW + 1)
+    expect(opencode).toMatchObject({ status: 'working', event: 'post_tool_use', turnId: 'turn-1' })
+  })
 })
 
 describe('eventToState -- Codex first-message ordering (SessionStart fires on first message)', () => {
@@ -342,6 +364,8 @@ describe('eventToState -- background subagents (spec 065)', () => {
       turnId: BG_TURN,
       event: 'stop',
       updatedAt: NOW,
+      recoveryProvenance: 'ordinary_completion',
+      completedBackgroundSubagentIds: ['sub-a'],
     })
   })
 
@@ -381,6 +405,8 @@ describe('eventToState -- background subagents (spec 065)', () => {
       turnId: BG_TURN,
       event: 'stop',
       updatedAt: NOW,
+      recoveryProvenance: 'ordinary_completion',
+      completedBackgroundSubagentIds: ['sub-a', 'sub-b'],
     })
   })
 
@@ -405,8 +431,58 @@ describe('eventToState -- background subagents (spec 065)', () => {
     }, NOW)?.status).toBe('idle')
   })
 
+  it('accepts a same-session child completion from a different parent turn without replacing foreground metadata', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = stop(started)
+    const newTurn = eventToState(held, { event: 'user_prompt_submit', sessionId: BG_SESSION, turnId: 'turn-2' }, NOW)!
+    const after = eventToState(newTurn, {
+      event: 'bg_subagent_completed', sessionId: BG_SESSION, turnId: BG_TURN, agentId: 'sub-a',
+    }, NOW + 1)!
+    expect(after).toMatchObject({ status: 'working', event: 'user_prompt_submit', turnId: 'turn-2' })
+    expect(after.completedBackgroundSubagentIds).toEqual(['sub-a'])
+  })
+
+  it('accepts a same-session child start from an older parent turn without replacing foreground metadata', () => {
+    const current: AgentStatusState = {
+      status: 'working', sessionId: BG_SESSION, turnId: 'turn-2', event: 'user_prompt_submit', detail: 'foreground', updatedAt: NOW,
+    }
+    const after = eventToState(current, {
+      event: 'bg_subagent_started', sessionId: BG_SESSION, turnId: BG_TURN, agentId: 'sub-a', detail: 'background',
+    }, NOW + 1)!
+    expect(after).toMatchObject({
+      status: 'working', sessionId: BG_SESSION, turnId: 'turn-2', event: 'user_prompt_submit', detail: 'foreground',
+      activeBackgroundSubagents: 1, activeBackgroundSubagentIds: ['sub-a'],
+    })
+  })
+
+  it('keeps a current foreground turn working when a cross-turn child completion carries empty evidence', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = stop(started)
+    const newTurn = eventToState(held, { event: 'user_prompt_submit', sessionId: BG_SESSION, turnId: 'turn-2' }, NOW)!
+    const after = eventToState(newTurn, {
+      event: 'bg_subagent_completed', sessionId: BG_SESSION, turnId: BG_TURN, agentId: 'sub-a',
+      evidence: {
+        provider: 'claude', completeness: 'complete', terminalState: 'completed',
+        activeCount: 0, scheduledCount: 0, sessionId: BG_SESSION, turnId: BG_TURN,
+      },
+    }, NOW + 1)!
+    expect(after).toMatchObject({ status: 'working', event: 'user_prompt_submit', turnId: 'turn-2' })
+  })
+
+  it('tombstones completion-before-start and ignores a delayed duplicate start', () => {
+    const current: AgentStatusState = { status: 'working', sessionId: BG_SESSION, turnId: BG_TURN, event: 'user_prompt_submit', updatedAt: NOW }
+    const completed = eventToState(current, {
+      event: 'bg_subagent_completed', sessionId: BG_SESSION, turnId: BG_TURN, agentId: 'sub-a',
+    }, NOW + 1)!
+    expect(completed.completedBackgroundSubagentIds).toEqual(['sub-a'])
+    expect(eventToState(completed, {
+      event: 'bg_subagent_started', sessionId: BG_SESSION, turnId: BG_TURN, agentId: 'sub-a',
+    }, NOW + 2)).toBe(completed)
+  })
+
   it('ignores missing, unknown, and foreground completion identities', () => {
     const started = launch(undefined, 'sub-a')!
+    expect(eventToState(started, { event: 'bg_subagent_completed', turnId: BG_TURN, agentId: 'sub-a' }, NOW)).toBe(started)
     expect(complete(started)).toBe(started)
     expect(complete(started, 'foreground-a')).toBe(started)
     expect(started.activeBackgroundSubagents).toBe(1)
@@ -470,13 +546,23 @@ describe('eventToState -- background subagents (spec 065)', () => {
     })
     expect(eventToState(started, { event: 'demote' }, NOW)).toBeUndefined()
   })
+
+  it('clears the suspension marker and completed-child tombstones on a fresh same-session start', () => {
+    const marked: AgentStatusState = {
+      status: 'idle', sessionId: BG_SESSION, turnId: BG_TURN, event: 'idle_prompt',
+      suspensionBlocked: true, completedBackgroundSubagentIds: ['sub-a'], updatedAt: NOW,
+    }
+    const reset = eventToState(marked, { event: 'session_start', sessionId: BG_SESSION }, NOW + 1)!
+    expect(reset.suspensionBlocked).toBeUndefined()
+    expect(reset.completedBackgroundSubagentIds).toBeUndefined()
+  })
 })
 
 describe('eventToState -- interrupt recovery evidence', () => {
   const current: AgentStatusState = {
     status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: NOW,
   }
-  const idlePrompt = { event: 'idle_prompt' as const, sessionId: 'session-1' }
+  const idlePrompt = { event: 'idle_prompt' as const, sessionId: 'session-1', turnId: 'turn-1' }
 
   it('accepts exactly one matching Claude idle_prompt after Escape', () => {
     const marked = eventToState(current, { event: 'interrupt_requested', sessionId: 'session-1', turnId: 'turn-1' }, NOW + 1)!
@@ -485,8 +571,58 @@ describe('eventToState -- interrupt recovery evidence', () => {
     expect(eventToState(recovered, idlePrompt, NOW + 3)).toBe(recovered)
   })
 
-  it('rejects a stale session, missing marker, newer turn, and active evidence', () => {
-    expect(eventToState(current, idlePrompt, NOW + 1)).toBe(current)
+  it('recovers an ordinary missed completion without an interrupt marker, but blocks suspension', () => {
+    const recovered = eventToState(current, idlePrompt, NOW + 1)!
+    expect(recovered).toMatchObject({
+      status: 'idle', event: 'idle_prompt', recoveryProvenance: 'idle_prompt_recovery', suspensionBlocked: true,
+    })
+  })
+
+  it('requires the current session and turn for every idle_prompt recovery', () => {
+    expect(eventToState(current, { event: 'idle_prompt', sessionId: 'session-1' }, NOW + 1)).toBe(current)
+    expect(eventToState(current, { event: 'idle_prompt', sessionId: 'session-1', turnId: 'turn-2' }, NOW + 1)).toBe(current)
+  })
+
+  it('does not let idle_prompt erase an explicit Stop continuation state', () => {
+    const continuing: AgentStatusState = {
+      ...current,
+      event: 'stop',
+      workSnapshot: {
+        provider: 'claude', completeness: 'complete', terminalState: 'busy',
+        activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1',
+      },
+    }
+    expect(eventToState(continuing, idlePrompt, NOW + 1)).toBe(continuing)
+  })
+
+  it('makes a recovered idle state suspension-eligible only after complete empty evidence', () => {
+    const recovered = eventToState(current, idlePrompt, NOW + 1)!
+    expect(recovered.suspensionBlocked).toBe(true)
+    const confirmed = eventToState(recovered, {
+      event: 'work_snapshot', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'claude', completeness: 'complete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW + 2)!
+    expect(confirmed).toMatchObject({ status: 'idle', event: 'work_snapshot' })
+    expect(confirmed.suspensionBlocked).toBeUndefined()
+  })
+
+  it('does not reuse a complete empty snapshot from an older turn to authorize recovery', () => {
+    const oldEvidence: AgentStatusState = {
+      ...current,
+      workSnapshot: {
+        provider: 'claude', completeness: 'complete', terminalState: 'completed',
+        activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1',
+      },
+    }
+    const newTurn = eventToState(oldEvidence, { event: 'user_prompt_submit', sessionId: 'session-1', turnId: 'turn-2' }, NOW + 1)!
+    const recovered = eventToState(newTurn, {
+      event: 'idle_prompt', sessionId: 'session-1', turnId: 'turn-2',
+    }, NOW + 2)!
+    expect(recovered).toMatchObject({ status: 'idle', suspensionBlocked: true })
+  })
+
+  it('rejects a stale session, missing turn identity, newer turn, and active evidence', () => {
+    expect(eventToState(current, { event: 'idle_prompt', sessionId: 'session-1' }, NOW + 1)).toBe(current)
     const marked = eventToState(current, { event: 'interrupt_requested', sessionId: 'session-1', turnId: 'turn-1' }, NOW + 1)!
     expect(eventToState(marked, { event: 'idle_prompt', sessionId: 'session-2' }, NOW + 2)).toBe(marked)
     const newer = eventToState(marked, { event: 'user_prompt_submit', sessionId: 'session-1', turnId: 'turn-2' }, NOW + 2)!
