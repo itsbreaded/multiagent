@@ -1,4 +1,4 @@
-import { createServer } from 'http'
+import { createServer, type Server as HttpServer } from 'http'
 import type { AddressInfo } from 'net'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -19,6 +19,9 @@ import {
   requireString,
 } from './toolArgs'
 export class BrowserMcpServer {
+  private httpServer: HttpServer | null = null
+  private sseTransports = new Map<string, SSEServerTransport>()
+
   constructor(private browser: BrowserViewManager) {}
 
   private _makeServer(): Server {
@@ -497,7 +500,7 @@ export class BrowserMcpServer {
   // Start an HTTP server exposing SSE at /sse and message handling at /message.
   // Returns the port the server is actually listening on (OS assigns when port=0).
   async startHttp(port = 0): Promise<number> {
-    const transports = new Map<string, SSEServerTransport>()
+    if (this.httpServer) throw new Error('Browser MCP server is already running')
 
     const httpServer = createServer(async (req, res) => {
       try {
@@ -506,12 +509,12 @@ export class BrowserMcpServer {
         if (req.method === 'GET' && url.pathname === '/sse') {
           const server = this._makeServer()
           const transport = new SSEServerTransport('/message', res)
-          transports.set(transport.sessionId, transport)
-          transport.onclose = () => transports.delete(transport.sessionId)
+          this.sseTransports.set(transport.sessionId, transport)
+          transport.onclose = () => this.sseTransports.delete(transport.sessionId)
           await server.connect(transport)
         } else if (req.method === 'POST' && url.pathname === '/message') {
           const sid = url.searchParams.get('sessionId') ?? ''
-          const transport = transports.get(sid)
+          const transport = this.sseTransports.get(sid)
           if (!transport) { res.writeHead(404).end(); return }
           await transport.handlePostMessage(req, res)
         } else if (url.pathname === '/mcp') {
@@ -550,12 +553,31 @@ export class BrowserMcpServer {
         }
       }
     })
+    this.httpServer = httpServer
 
     return new Promise<number>((resolve, reject) => {
       httpServer.listen(port, '127.0.0.1', () => {
         resolve((httpServer.address() as AddressInfo).port)
       })
-      httpServer.on('error', reject)
+      httpServer.once('error', (error) => {
+        if (this.httpServer === httpServer) this.httpServer = null
+        reject(error)
+      })
+    })
+  }
+
+  async close(): Promise<void> {
+    const httpServer = this.httpServer
+    this.httpServer = null
+    if (!httpServer) return
+
+    await Promise.allSettled([...this.sseTransports.values()].map((transport) => transport.close()))
+    this.sseTransports.clear()
+    await new Promise<void>((resolve) => {
+      httpServer.close(() => resolve())
+      // Do not let an idle keep-alive or an abandoned MCP connection hold the
+      // Electron process open during application shutdown.
+      httpServer.closeAllConnections()
     })
   }
 

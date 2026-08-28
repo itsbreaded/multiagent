@@ -1,4 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { spawnSync } from 'child_process'
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
@@ -85,7 +86,13 @@ async function closeApp(target: ElectronApplication): Promise<void> {
   }
   const hardKill = new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
-      try { proc!.kill('SIGKILL') } catch { /* already exited */ }
+      try {
+        if (process.platform === 'win32') {
+          spawnSync(`taskkill /pid ${proc!.pid} /T /F`, { shell: true, stdio: 'ignore' })
+        } else if (proc!.pid) {
+          process.kill(-proc!.pid, 'SIGKILL')
+        }
+      } catch { /* already exited */ }
       resolve()
     }, 5_000)
     timer.unref?.()

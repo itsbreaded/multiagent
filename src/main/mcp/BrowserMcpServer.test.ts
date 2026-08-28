@@ -127,3 +127,15 @@ describe('BrowserMcpServer — argument validation + closed-window guard', () =>
     })
   })
 })
+
+describe('BrowserMcpServer HTTP lifecycle', () => {
+  it('closes its listener during application shutdown', async () => {
+    const server = new BrowserMcpServer({} as BrowserViewManager)
+    const port = await server.startHttp()
+    const url = `http://127.0.0.1:${port}/not-found`
+
+    await expect(fetch(url)).resolves.toMatchObject({ status: 404 })
+    await server.close()
+    await expect(fetch(url)).rejects.toThrow()
+  })
+})

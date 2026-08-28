@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS: McpSettings = {
 
 export class McpManager {
   private _injector = new McpInjector()
+  private _browserServer: BrowserMcpServer | null = null
   private _port: number | null = null
   private _browserPort: number | null = null
   private _running = false
@@ -108,6 +109,7 @@ export class McpManager {
   async start(browser: BrowserViewManager): Promise<void> {
     this.loadSettings()
     const server = new BrowserMcpServer(browser)
+    this._browserServer = server
     const port = await server.startHttp()
     this._browserPort = port
     this._port = port
@@ -133,11 +135,19 @@ export class McpManager {
     return this._settings
   }
 
-  cleanup(): void {
+  async cleanup(): Promise<void> {
     this._injector.cleanup()
-    void this._uiServer?.close()
+    const uiServer = this._uiServer
+    const browserServer = this._browserServer
     this._uiServer = null
+    this._browserServer = null
+    await Promise.all([
+      uiServer?.close().catch((error) => { this._uiError = (error as Error).message }),
+      browserServer?.close(),
+    ])
     this._uiPort = null
+    this._browserPort = null
+    this._port = null
     this._running = false
   }
 }

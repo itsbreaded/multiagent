@@ -1,7 +1,9 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
+import { spawnSync } from 'child_process'
 import { createServer } from 'http'
-import { readFile } from 'fs/promises'
+import { mkdtemp, readFile, rm } from 'fs/promises'
 import { join, resolve } from 'path'
+import { tmpdir } from 'os'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
@@ -115,7 +117,13 @@ async function closeApp(target: ElectronApplication): Promise<void> {
   }
   const hardKill = new Promise<void>((resolveKill) => {
     const timer = setTimeout(() => {
-      try { proc!.kill('SIGKILL') } catch { /* application already exited */ }
+      try {
+        if (process.platform === 'win32') {
+          spawnSync(`taskkill /pid ${proc!.pid} /T /F`, { shell: true, stdio: 'ignore' })
+        } else if (proc!.pid) {
+          process.kill(-proc!.pid, 'SIGKILL')
+        }
+      } catch { /* application already exited */ }
       resolveKill()
     }, 5_000)
     timer.unref?.()
@@ -128,8 +136,10 @@ async function closeApp(target: ElectronApplication): Promise<void> {
 
 test.describe('browser MCP Electron runtime', () => {
   let app: ElectronApplication
+  let userDataDir: string
 
   test.beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'multiagent-browser-e2e-'))
     app = await electron.launch({
       executablePath: electronPath,
       args: ['.'],
@@ -137,6 +147,7 @@ test.describe('browser MCP Electron runtime', () => {
       env: {
         ...process.env,
         MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
+        MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
         MULTIAGENT_E2E_BROWSER_MCP_TRACE: '1',
         MULTIAGENT_UI_AUTOMATION_PORT: '48127',
       },
@@ -148,6 +159,7 @@ test.describe('browser MCP Electron runtime', () => {
 
   test.afterEach(async () => {
     await closeApp(app)
+    await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })
 
   test('executeJavaScript supports expressions, statements, synchronous functions, and async functions', async () => {
@@ -298,11 +310,17 @@ test.describe('browser MCP Electron runtime', () => {
       await diagnostics.close()
     }
 
+    const secondUserDataDir = await mkdtemp(join(tmpdir(), 'multiagent-browser-e2e-attached-'))
     const second = await electron.launch({
       executablePath: electronPath,
       args: ['.'],
       cwd: repoRoot,
-      env: { ...process.env, MULTIAGENT_ALLOW_MULTI_INSTANCE: '1', MULTIAGENT_UI_AUTOMATION_PORT: '48128' },
+      env: {
+        ...process.env,
+        MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
+        MULTIAGENT_E2E_USER_DATA_DIR: secondUserDataDir,
+        MULTIAGENT_UI_AUTOMATION_PORT: '48128',
+      },
     })
     try {
       await (await second.firstWindow()).waitForLoadState('load')
@@ -314,6 +332,7 @@ test.describe('browser MCP Electron runtime', () => {
       expect(JSON.parse(remote.text)).toEqual(expect.arrayContaining([expect.objectContaining({ id: expect.any(Number) })]))
     } finally {
       await closeApp(second)
+      await rm(secondUserDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
     }
   })
 

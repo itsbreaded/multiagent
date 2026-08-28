@@ -229,9 +229,11 @@ if (!gotTheLock) {
     if (shutdownComplete) return
     event.preventDefault()
     if (shutdownPromise) return
-    try { mcpManager.cleanup() } catch (error) { console.error('[MultiAgent] MCP cleanup failed:', error) }
-    try { browserViewManager?.destroy() } catch (error) { console.error('[MultiAgent] browser cleanup failed:', error) }
-    shutdownPromise = (cleanupFn?.() ?? Promise.resolve())
+    shutdownPromise = (async () => {
+      try { await mcpManager.cleanup() } catch (error) { console.error('[MultiAgent] MCP cleanup failed:', error) }
+      try { browserViewManager?.destroy() } catch (error) { console.error('[MultiAgent] browser cleanup failed:', error) }
+      await (cleanupFn?.() ?? Promise.resolve())
+    })()
       .catch((error) => console.error('[MultiAgent] shutdown cleanup failed:', error))
       .then(() => {
         shutdownComplete = true
