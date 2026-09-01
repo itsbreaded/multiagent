@@ -141,7 +141,7 @@ export function TabSections(): JSX.Element {
           e.stopPropagation()
           try {
             const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-            reorderTab(sourceTabId, reorderInsertBeforeId)
+            reorderTab(sourceTabId, reorderInsertBeforeId, 'all')
           } catch {}
           setReorderInsertBeforeId(undefined)
         }}
@@ -159,6 +159,8 @@ export function TabSections(): JSX.Element {
         const sectionId = tabSidebarSectionId(tab.id)
         const open = sidebarSectionOpen[sectionId] ?? sidebarSectionOpen[tab.id] ?? isActive
         const isDetached = !!tab.detached
+        const tabIdx = tabs.findIndex((candidate) => candidate.id === tab.id)
+        const isLastTab = tabIdx === tabs.length - 1
 
         // Detached tabs: same visual treatment as local tabs.
         // Header/pane clicks focus the external window.
@@ -203,8 +205,31 @@ export function TabSections(): JSX.Element {
               titleSuffix={
                 <span title="In separate window — click to focus" style={{ fontSize: 11, color: '#5a6050', marginLeft: 4, flexShrink: 0 }}>↗</span>
               }
+              headerDraggable={!isRenaming}
+              onHeaderDragStart={(e) => {
+                e.dataTransfer.setData(TAB_REORDER_MIME, JSON.stringify({ tabId: tab.id }))
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onHeaderDragEnd={() => {
+                setReorderInsertBeforeId(undefined)
+              }}
               headerDropActive={dropTabId === tab.id}
+              headerInsertTop={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === tab.id}
+              sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastTab}
               onHeaderDragOver={(e) => {
+                // Project reorder — MIME-type check prevents collision with pane drops.
+                if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  if (e.clientY - rect.top < rect.height / 2) {
+                    setReorderInsertBeforeId(tab.id)
+                  } else {
+                    setReorderInsertBeforeId(tabs[tabIdx + 1]?.id ?? null)
+                  }
+                  return
+                }
+                // Pane drop
                 if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
                 e.preventDefault()
                 e.stopPropagation()
@@ -214,6 +239,17 @@ export function TabSections(): JSX.Element {
                 if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
               }}
               onHeaderDrop={(e) => {
+                // Project reorder
+                if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  try {
+                    const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
+                    reorderTab(sourceTabId, reorderInsertBeforeId ?? null, 'all')
+                  } catch {}
+                  setReorderInsertBeforeId(undefined)
+                  return
+                }
                 const payload = decodePaneDragPayload(e.dataTransfer)
                 if (!draggedPaneId && !payload) return
                 e.preventDefault()
@@ -252,9 +288,6 @@ export function TabSections(): JSX.Element {
           )
         }
 
-        const localTabs = tabs.filter((t) => !t.detached)
-        const localTabIdx = localTabs.findIndex((t) => t.id === tab.id)
-        const isLastLocalTab = localTabIdx === localTabs.length - 1
         return (
           <SidebarSection
             key={tab.id}
@@ -296,7 +329,7 @@ export function TabSections(): JSX.Element {
             }
             headerDropActive={dropTabId === tab.id}
             headerInsertTop={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === tab.id}
-            sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastLocalTab}
+            sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastTab}
             onHeaderDragOver={(e) => {
               // Project reorder — MIME-type check prevents collision with pane drops
               if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
@@ -306,7 +339,7 @@ export function TabSections(): JSX.Element {
                 if (e.clientY - rect.top < rect.height / 2) {
                   setReorderInsertBeforeId(tab.id)
                 } else {
-                  setReorderInsertBeforeId(localTabs[localTabIdx + 1]?.id ?? null)
+                  setReorderInsertBeforeId(tabs[tabIdx + 1]?.id ?? null)
                 }
                 return
               }
@@ -326,7 +359,7 @@ export function TabSections(): JSX.Element {
                 e.stopPropagation()
                 try {
                   const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-                  reorderTab(sourceTabId, reorderInsertBeforeId ?? null)
+                  reorderTab(sourceTabId, reorderInsertBeforeId ?? null, 'all')
                 } catch {}
                 setReorderInsertBeforeId(undefined)
                 return

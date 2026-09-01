@@ -173,7 +173,9 @@ function reconcileSnapshot(prev: AgentStatusState, input: AgentStatusInput, now:
     // Incomplete active evidence is still protective. Incomplete zero evidence cannot
     // erase an earlier work record because the provider did not prove coverage. It
     // also cannot leave an already-idle pane suspension-eligible: unknown coverage
-    // is represented as protected working until a complete snapshot arrives.
+    // remains suspension-blocked until a complete snapshot arrives. A current,
+    // completed Stop may nevertheless clear the visible foreground badge when no
+    // work is positively observed; this is the same split as idle_prompt recovery.
     const protective = snapshot.activeCount > 0 || snapshot.scheduledCount > 0
       ? withSnapshot(prev, snapshot, provenance, now)
       : { ...prev, workSnapshot: snapshot, recoveryProvenance: provenance, updatedAt: now }
@@ -183,7 +185,14 @@ function reconcileSnapshot(prev: AgentStatusState, input: AgentStatusInput, now:
     copyProtection(protective, prev)
     delete protective.pendingInterrupt
     delete protective.recoveryGeneration
-    if (prev.status !== 'waiting' && prev.status !== 'error' && prev.event !== 'terminal_error') {
+    const preserveTerminalState = prev.status === 'waiting' || prev.status === 'error' || prev.event === 'terminal_error'
+    const completedStopWithoutKnownWork = input.event === 'stop' && snapshot.terminalState === 'completed' &&
+      snapshot.activeCount === 0 && snapshot.scheduledCount === 0
+    if (completedStopWithoutKnownWork && !preserveTerminalState) {
+      protective.status = 'idle'
+      protective.suspensionBlocked = true
+      delete protective.detail
+    } else if (!preserveTerminalState) {
       protective.status = 'working'
       protective.detail = 'background work'
     }

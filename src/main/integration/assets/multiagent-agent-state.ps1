@@ -95,7 +95,7 @@ function Get-SessionId {
 
 function New-ClaudeSnapshot {
   param([string]$TerminalState)
-  if (-not $payload) { return [pscustomobject]@{ provider = 'claude'; completeness = 'incomplete'; terminalState = $TerminalState; activeCount = 1; scheduledCount = 1 } }
+  if (-not $payload) { return [pscustomobject]@{ provider = 'claude'; completeness = 'incomplete'; terminalState = $TerminalState; activeCount = 0; scheduledCount = 0 } }
   $complete = $true
   $active = @()
   $scheduled = @()
@@ -113,8 +113,12 @@ function New-ClaudeSnapshot {
     provider = 'claude'
     completeness = $(if ($complete) { 'complete' } else { 'incomplete' })
     terminalState = $TerminalState
-    activeCount = $(if ($complete) { $active.Count } else { [Math]::Max(1, $active.Count) })
-    scheduledCount = $(if ($complete) { $scheduled.Count } else { [Math]::Max(1, $scheduled.Count) })
+    # Incomplete coverage is still suspension-protective, but a missing or
+    # malformed category is not proof that work exists. Preserve only the
+    # positively observed items so idle_prompt can recover the visible
+    # foreground badge when no known work remains.
+    activeCount = $active.Count
+    scheduledCount = $scheduled.Count
   }
   $snapshotSessionId = Get-SessionId
   $snapshotTurnId = Get-TurnId

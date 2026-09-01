@@ -636,6 +636,24 @@ describe('eventToState -- interrupt recovery evidence', () => {
     expect(eventToState(active, idlePrompt, NOW + 3)).toBe(active)
   })
 
+  it('rejects idle_prompt while incomplete evidence positively reports background work', () => {
+    const active = eventToState(current, {
+      event: 'work_snapshot', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'claude', completeness: 'incomplete', terminalState: 'completed', activeCount: 1, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW + 1)!
+    expect(active).toMatchObject({ status: 'working', detail: 'background work', activeWorkCount: 1 })
+    expect(eventToState(active, idlePrompt, NOW + 2)).toBe(active)
+  })
+
+  it('shows protected idle immediately for a completed Stop with no positively observed work', () => {
+    const stopped = eventToState(current, {
+      event: 'stop', sessionId: 'session-1', turnId: 'turn-1',
+      evidence: { provider: 'claude', completeness: 'incomplete', terminalState: 'completed', activeCount: 0, scheduledCount: 0, sessionId: 'session-1', turnId: 'turn-1' },
+    }, NOW + 1)!
+    expect(stopped).toMatchObject({ status: 'idle', event: 'stop', suspensionBlocked: true })
+    expect(stopped.detail).toBeUndefined()
+  })
+
   it('rejects an outer/evidence identity conflict for every event', () => {
     const conflict = eventToState(current, {
       event: 'user_prompt_submit', sessionId: 'session-1', turnId: 'turn-2',

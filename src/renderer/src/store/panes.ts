@@ -484,7 +484,9 @@ interface PanesStore {
   clearSwapDrag: () => void
   movePaneToTab: (sourcePaneId: string, targetTabId: string) => void
   movePaneToNewTab: (paneId: string) => void
-  reorderTab: (tabId: string, beforeTabId: string | null) => void
+  // `scope` defaults to the tab-bar behavior, where null appends among local tabs.
+  // The sidebar can pass `all` because detached tabs are part of its visible order.
+  reorderTab: (tabId: string, beforeTabId: string | null, scope?: 'local' | 'all') => void
   removePaneById: (paneId: string) => void
   // Return true only if the pane was actually inserted/replaced. Cross-window transfer relies on
   // this: the source pane is removed only after a confirmed insert, so a no-op (self-drop, or a
@@ -2168,7 +2170,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  reorderTab: (tabId, beforeTabId) => {
+  reorderTab: (tabId, beforeTabId, scope = 'local') => {
     if (tabId === beforeTabId) return
     set((s) => {
       const from = s.tabs.findIndex((t) => t.id === tabId)
@@ -2176,10 +2178,14 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const next = [...s.tabs]
       const [moved] = next.splice(from, 1)
       if (beforeTabId === null) {
-        // Insert after the last local (non-detached) tab, not at absolute end —
-        // otherwise a local tab could land after detached entries in the array.
-        const lastLocalIdx = next.reduce((last, t, i) => (!t.detached ? i : last), -1)
-        next.splice(lastLocalIdx + 1, 0, moved)
+        if (scope === 'all') {
+          next.push(moved)
+        } else {
+          // Insert after the last local (non-detached) tab, not at absolute end —
+          // otherwise a local tab could land after detached entries in the array.
+          const lastLocalIdx = next.reduce((last, t, i) => (!t.detached ? i : last), -1)
+          next.splice(lastLocalIdx + 1, 0, moved)
+        }
       } else {
         const toIdx = next.findIndex((t) => t.id === beforeTabId)
         next.splice(toIdx === -1 ? next.length : toIdx, 0, moved)

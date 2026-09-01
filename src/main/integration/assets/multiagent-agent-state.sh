@@ -63,12 +63,12 @@ session_id() {
   jsonstr session_id
 }
 
-# Only an explicitly empty Claude list proves that there is no work in that category.
-# Non-empty, malformed, or missing lists produce bounded incomplete evidence so a stale
-# idle badge cannot be trusted. The awk scanner checks the key at object depth one and
-# the array's first token; regexes over raw JSON would mistake nested/quoted examples for
-# top-level empty arrays.
-top_level_empty_array() {
+# Only explicitly present Claude lists contribute known work counts. Missing or
+# malformed lists produce incomplete evidence, which remains suspension-protective,
+# but they do not fabricate active work and block a matching idle_prompt forever.
+# The awk scanner checks the key at object depth one and the array's first token;
+# regexes over raw JSON would mistake nested/quoted examples for top-level arrays.
+top_level_array_state() {
   local key="$1"
   awk -v wanted="$key" '
     function ws(c) { return c ~ /[ \t\r\n]/ }
@@ -104,7 +104,10 @@ top_level_empty_array() {
             k = skip(j + 1)
             if (substr(s, k, 1) == ":") {
               k = skip(k + 1)
-              if (substr(s, k, 1) == "[" && substr(s, skip(k + 1), 1) == "]") found = 1
+              if (substr(s, k, 1) == "[") {
+                first_array_value = skip(k + 1)
+                found = substr(s, first_array_value, 1) == "]" ? "empty" : "nonempty"
+              }
             }
           }
           i = j
@@ -126,9 +129,9 @@ top_level_empty_array() {
         }
       }
       if (!valid || in_string || depth != 0 || brackets != 0 || !root_closed) exit
-      if (found) print "yes"
+      if (found) print found
     }
-  ' <<< "$raw"
+  ' <<< "$raw" || true
 }
 
 claude_evidence() {
@@ -139,11 +142,16 @@ claude_evidence() {
   identity=""
   [ -n "$sid" ] && identity="$identity,\"sessionId\":\"$(jsonesc "$sid")\""
   [ -n "$tid" ] && identity="$identity,\"turnId\":\"$(jsonesc "$tid")\""
-  if [ "$(top_level_empty_array background_tasks)" = yes ] && [ "$(top_level_empty_array session_crons)" = yes ]; then
-    printf '%s' "{\"provider\":\"claude\",\"completeness\":\"complete\",\"terminalState\":\"$terminalState\",\"activeCount\":0,\"scheduledCount\":0$identity}"
-  else
-    printf '%s' "{\"provider\":\"claude\",\"completeness\":\"incomplete\",\"terminalState\":\"$terminalState\",\"activeCount\":1,\"scheduledCount\":1$identity}"
-  fi
+  local activeState scheduledState completeness activeCount scheduledCount
+  activeState=$(top_level_array_state background_tasks)
+  scheduledState=$(top_level_array_state session_crons)
+  completeness=incomplete
+  activeCount=0
+  scheduledCount=0
+  [ "$activeState" = nonempty ] && activeCount=1
+  [ "$scheduledState" = nonempty ] && scheduledCount=1
+  if [ "$activeState" = empty ] && [ "$scheduledState" = empty ]; then completeness=complete; fi
+  printf '%s' "{\"provider\":\"claude\",\"completeness\":\"$completeness\",\"terminalState\":\"$terminalState\",\"activeCount\":$activeCount,\"scheduledCount\":$scheduledCount$identity}"
 }
 
 post_event() {

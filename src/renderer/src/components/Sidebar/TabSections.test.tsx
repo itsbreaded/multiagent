@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { makeLeaf } from '../../../../shared/paneTree'
 import type { PaneLeaf, Tab } from '../../../../shared/types'
 import { installMockIpc } from '../../../../../tests/mockIpc'
@@ -26,6 +26,46 @@ function plantPane(pane: PaneLeaf): Tab {
   }
   usePanesStore.setState({ tabs: [tab], activeTabId: tab.id })
   return tab
+}
+
+function tabWithLabel(id: string, label: string, detached = false): Tab {
+  const pane = makeLeaf(`C:\\${id}`)
+  return {
+    id,
+    customLabel: label,
+    rootNode: pane,
+    focusedPaneId: pane.id,
+    detached,
+  }
+}
+
+function tabHeader(label: string): HTMLElement {
+  return screen.getByRole('button', { name: label }).parentElement!
+}
+
+function tabDataTransfer(): DataTransfer {
+  const values = new Map<string, string>()
+  const types: string[] = []
+  return {
+    types,
+    setData: (type: string, value: string) => {
+      values.set(type, value)
+      if (!types.includes(type)) types.push(type)
+    },
+    getData: (type: string) => values.get(type) ?? '',
+    effectAllowed: 'none',
+    dropEffect: 'none',
+  } as unknown as DataTransfer
+}
+
+function dispatchTabDrag(element: HTMLElement, type: 'dragover' | 'drop', dataTransfer: DataTransfer, clientY: number): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperties(event, {
+    dataTransfer: { value: dataTransfer },
+    clientY: { value: clientY },
+  })
+  element.dispatchEvent(event)
+  return event
 }
 
 describe('TabSections - agent status dot (spec 032)', () => {
@@ -124,5 +164,58 @@ describe('TabSections - agent status dot (spec 032)', () => {
 
     expect(screen.queryByTitle('Status unknown')).not.toBeInTheDocument()
     expect(screen.queryByTitle('Working (includes thinking)')).not.toBeInTheDocument()
+  })
+})
+
+describe('TabSections - detached tab reorder', () => {
+  it('allows local and detached tabs to reorder through the same sidebar flow', () => {
+    const localBefore = tabWithLabel('local-before', 'Local before')
+    const detached = tabWithLabel('detached', 'Detached', true)
+    const localAfter = tabWithLabel('local-after', 'Local after')
+    usePanesStore.setState({
+      tabs: [localBefore, detached, localAfter],
+      activeTabId: localBefore.id,
+      detachedWindowTabIds: {},
+      detachedWindowActiveTabIds: {},
+    })
+
+    render(<TabSections />)
+
+    const detachedHeader = tabHeader('Detached')
+    expect(detachedHeader).toHaveAttribute('draggable', 'true')
+
+    const localAfterTransfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('Local after'), { dataTransfer: localAfterTransfer })
+    expect(localAfterTransfer.types).toContain('application/x-multiagent-tab-reorder')
+    expect(localAfterTransfer.getData('application/x-multiagent-tab-reorder')).toBe(JSON.stringify({ tabId: localAfter.id }))
+    let dragOverEvent!: Event
+    act(() => {
+      dragOverEvent = dispatchTabDrag(detachedHeader, 'dragover', localAfterTransfer, -1)
+    })
+    expect(dragOverEvent.defaultPrevented).toBe(true)
+    expect(detachedHeader.style.boxShadow).not.toBe('none')
+    act(() => {
+      dispatchTabDrag(detachedHeader, 'drop', localAfterTransfer, -1)
+    })
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
+      localBefore.id,
+      localAfter.id,
+      detached.id,
+    ])
+
+    const detachedTransfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('Detached'), { dataTransfer: detachedTransfer })
+    const localBeforeHeader = tabHeader('Local before')
+    act(() => {
+      dispatchTabDrag(localBeforeHeader, 'dragover', detachedTransfer, -1)
+    })
+    act(() => {
+      dispatchTabDrag(localBeforeHeader, 'drop', detachedTransfer, -1)
+    })
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
+      detached.id,
+      localBefore.id,
+      localAfter.id,
+    ])
   })
 })

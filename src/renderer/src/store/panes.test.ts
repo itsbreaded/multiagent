@@ -588,6 +588,21 @@ describe('usePanesStore — tree stays well-formed under edits', () => {
     expect(ids.indexOf(t3)).toBeLessThan(ids.indexOf(t1))
     expect(new Set(ids)).toEqual(new Set([t1, t2, t3]))
   })
+
+  it('reorderTab can place detached tabs in the full sidebar order', () => {
+    const localBefore = plantTab(makeLeaf('C:\\before'))
+    const detached = plantTab(makeLeaf('C:\\detached'))
+    const localAfter = plantTab(makeLeaf('C:\\after'))
+    usePanesStore.setState((s) => ({
+      tabs: s.tabs.map((tab) => tab.id === detached ? { ...tab, detached: true } : tab),
+    }))
+
+    usePanesStore.getState().reorderTab(localAfter, detached, 'all')
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([localBefore, localAfter, detached])
+
+    usePanesStore.getState().reorderTab(localBefore, null, 'all')
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([localAfter, detached, localBefore])
+  })
 })
 
 describe('usePanesStore — cwd-repair mapping (spec 009/015)', () => {

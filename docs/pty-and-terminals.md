@@ -316,7 +316,10 @@ not classify quiet output, process age, prompt text, or screen state as idle. Th
 reducer rather than writing status directly.
 
 Active or scheduled provider-reported work always protects a pane. Incomplete or missing
-evidence can preserve protection but cannot establish idle. A complete empty snapshot can clear
+evidence preserves suspension protection, but does not by itself establish visible idle. A
+current-session/current-turn Claude `idle_prompt`, or a completed current Stop with no positively
+observed work, may recover the visible foreground badge when no known work is present; it remains
+suspension-blocked until a complete empty snapshot arrives. A complete empty snapshot can clear
 matching work only for the current session/turn. Claude's Escape recovery additionally requires
 the renderer's current interrupt marker and the exact `idle_prompt` notification; it is not a
 timer or watchdog. The renderer's idle-suspension coordinator checks the same pane state again
