@@ -192,8 +192,12 @@ Claude's managed PostToolUse hook recognizes an Agent or Task launch carrying
 async_launched or run_in_background. It reports bg_subagent_started with the
 launch-side agentId. Claude's managed SubagentStop hook reports
 bg_subagent_completed with the completed subagent's agent_id as agentId.
-Both events use the same localhost report server and parent-pane pty
-attribution as the ordinary lifecycle events.
+Claude's Notification hook also reports the agent_completed notification as
+bg_agent_completed. That notification has no task identity, so the reducer
+uses it only to consume one unambiguous tracked background session; multiple
+or otherwise ambiguous work remains protected. All events use the same
+localhost report server and parent-pane pty attribution as ordinary lifecycle
+events.
 
 Claude's `background_tasks` snapshot may retain a task row while its result is
 being linked into the conversation. The hook counts only rows without an
@@ -202,12 +206,13 @@ explicit terminal status as active; `completed`, `failed`, `killed`, `stopped`,
 working. A missing or unknown status remains active for fail-safe compatibility
 with older or changed payloads.
 
-The report server accepts these two events only for Claude. The renderer keeps
+The report server accepts these three events only for Claude. The renderer keeps
 the active count and known identities on the in-memory agent status; identity
-tracking is not persisted or displayed. A completion with no matching identity
-is ignored so a missing or malformed signal leaves the pane protected rather
-than falsely idle. The shell and PowerShell assets remain self-contained and
-must never block the agent.
+tracking is not persisted or displayed. An identity-correlated completion or
+an unambiguous anonymous completion clears only the completed background work;
+an ambiguous or malformed signal is ignored so it leaves the pane protected
+rather than falsely idle. The shell and PowerShell assets remain self-contained
+and must never block the agent.
 
 ### 5. Main links the id to the pane
 
@@ -311,7 +316,7 @@ from the toggle. With the toggle **on** (default), `ManagedHookController`
 
 | File | What | Surgery |
 |---|---|---|
-| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matchers `permission_prompt` + `idle_prompt`), `Stop`, `StopFailure`, `SubagentStop` | `managedHooks.ts` (JSON) |
+| `~/.claude/settings.json` | Claude `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification` (matchers `permission_prompt` + `idle_prompt` + `agent_completed`), `Stop`, `StopFailure`, `SubagentStop` | `managedHooks.ts` (JSON) |
 | `~/.codex/hooks.json` | Codex `SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PermissionRequest` (matcher `.*`), `Stop` | `managedHooks.ts` (same JSON shape) |
 | `~/.codex/config.toml` | `[features] hooks = true` | `codexConfigFeatures.ts` (line-based TOML) |
 
@@ -508,19 +513,21 @@ Event -> state mapping (the reducer in `src/shared/agentStatus.ts`; completion i
 | `permission_request` | `waiting` (permission prompt — needs you) |
 | `stop` | `idle` only with complete empty current-session evidence; otherwise remains protected |
 | `idle_prompt` | visible `idle` only with matching current session/turn and no known work; suspension remains blocked until complete empty evidence |
+| `bg_agent_completed` | consumes one unambiguous Claude background session; keeps suspension blocked unless the retained complete snapshot is empty |
 | `stop_failure` | `error` (Claude only) |
 | `promote` / `demote` (synthetic, from the process sweeper) | `working` / clears the badge |
 
 The legacy event table above describes the visible vocabulary; completion semantics are now
 evidence-gated as described above. Provider-specific recovery remains independent:
 
-- **Claude** installs separate `Notification` matchers for `permission_prompt` and
-  `idle_prompt`. `idle_prompt` forwards the provider `prompt_id`; recovery requires that
-  exact current turn. `Stop` and `SubagentStop` include bounded task/schedule evidence when
-  the hook payload exposes it, and `stop_hook_active` must be explicitly `false` before a
-  Stop can carry a completed terminal state; missing/true/malformed values remain busy or
-  incomplete. StopFailure prefers the current `error`/`error_details` fields with bounded
-  legacy fallbacks.
+- **Claude** installs separate `Notification` matchers for `permission_prompt`, `idle_prompt`,
+  and `agent_completed`. `idle_prompt` forwards the provider `prompt_id`; recovery requires
+  that exact current turn. `agent_completed` forwards the current session id but no task id,
+  so it is only an anonymous single-background-session fallback. `Stop` and `SubagentStop`
+  include bounded task/schedule evidence when the hook payload exposes it, and
+  `stop_hook_active` must be explicitly `false` before a Stop can carry a completed terminal
+  state; missing/true/malformed values remain busy or incomplete. StopFailure prefers the
+  current `error`/`error_details` fields with bounded legacy fallbacks.
 - **Codex** direct-CLI panes retain hook-only reporting. App-launched Codex uses a pane-local
   Unix-socket App Server sidecar and `codex --remote`; its observer reconciles turn completion
   with background-terminal and descendant-thread queries. Preparation can fall back to direct

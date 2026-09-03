@@ -7,7 +7,7 @@ type RecoveryProvenance = NonNullable<AgentStatusState['recoveryProvenance']>
 
 const TERMINAL_EVENTS = new Set<AgentStatusInput['event']>([
   'stop', 'stop_failure', 'permission_request', 'turn_interrupted', 'work_snapshot',
-  'idle_prompt', 'bg_subagent_completed',
+  'idle_prompt', 'bg_subagent_completed', 'bg_agent_completed',
 ])
 const IDENTITY_REQUIRED_TERMINAL_EVENTS = new Set<AgentStatusInput['event']>([
   'stop', 'turn_interrupted', 'work_snapshot', 'bg_subagent_completed',
@@ -145,6 +145,64 @@ function isCrossTurnBackgroundEvent(prev: AgentStatusState, input: AgentStatusIn
     incoming.turnId && incoming.turnId !== prev.turnId)
 }
 
+function hasSingleTrackedBackgroundAgent(state: AgentStatusState): boolean {
+  const snapshot = state.workSnapshot
+  const singleSnapshotAgent = snapshot?.provider === 'claude' && snapshot.activeCount === 1
+  const hasSingleBackgroundCount = state.activeBackgroundSubagents === 1
+  if (!singleSnapshotAgent && !hasSingleBackgroundCount) return false
+
+  // Notification(agent_completed) has no task identity. It is safe to consume only
+  // when every known active category contains at most that one background agent.
+  if ((state.activeBackgroundSubagents ?? 0) > 1 || (state.activeWorkCount ?? 0) > 1 ||
+    (state.scheduledWorkCount ?? 0) > 0 ||
+    (state.activeBackgroundSubagentIds?.length ?? 0) > 1 ||
+    (state.activeWorkIds?.length ?? 0) > 1 ||
+    (state.scheduledWorkIds?.length ?? 0) > 0) return false
+  if (snapshot && snapshot.provider === 'claude' &&
+    (snapshot.activeCount > 1 || snapshot.scheduledCount > 0 ||
+      (snapshot.activeIds?.length ?? 0) > 1 || (snapshot.scheduledIds?.length ?? 0) > 0)) return false
+  return true
+}
+
+function reconcileAnonymousBackgroundAgentCompletion(prev: AgentStatusState, now: number): AgentStatusState {
+  const next = { ...prev, updatedAt: now }
+  const snapshot = next.workSnapshot
+
+  delete next.activeBackgroundSubagents
+  delete next.activeBackgroundSubagentIds
+  if (next.activeWorkIds?.length === 1) delete next.activeWorkIds
+
+  if (snapshot?.provider === 'claude' && snapshot.activeCount === 1) {
+    next.workSnapshot = { ...snapshot, activeCount: 0 }
+    delete next.workSnapshot.activeIds
+    if (next.activeWorkCount === 1) next.activeWorkCount = 0
+  } else if (next.activeWorkCount === 1) {
+    delete next.activeWorkCount
+  }
+
+  const remainingSnapshotWork = next.workSnapshot && (
+    next.workSnapshot.activeCount > 0 || next.workSnapshot.scheduledCount > 0
+  )
+  const remainingKnownWork = (next.activeWorkCount ?? 0) > 0 ||
+    (next.scheduledWorkCount ?? 0) > 0 || remainingSnapshotWork
+  if (!remainingKnownWork && next.status === 'working' && prev.event === 'stop') {
+    next.status = 'idle'
+    delete next.detail
+  }
+
+  // Notification(agent_completed) proves one background session ended, not that all
+  // work categories were observed. Preserve the suspension gate unless an existing
+  // complete snapshot became empty after removing that one session.
+  if (next.workSnapshot?.completeness === 'complete' &&
+    next.workSnapshot.activeCount === 0 && next.workSnapshot.scheduledCount === 0) {
+    delete next.suspensionBlocked
+  } else {
+    next.suspensionBlocked = true
+  }
+  next.recoveryProvenance = 'ordinary_completion'
+  return next
+}
+
 function backgroundSessionMatches(prev: AgentStatusState, input: AgentStatusInput): boolean {
   const incomingSession = identityFromInput(input).sessionId
   return Boolean(incomingSession && (!prev.sessionId || incomingSession === prev.sessionId))
@@ -243,6 +301,7 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
   if (staleForegroundTurn(prev, input)) return prev
   if (prev && (input.event === 'bg_subagent_started' || input.event === 'bg_subagent_completed') &&
     !backgroundSessionMatches(prev, input)) return prev
+  if (prev && input.event === 'bg_agent_completed' && !backgroundSessionMatches(prev, input)) return prev
   if (prev && input.event === 'idle_prompt' && !idlePromptCanRecover(prev, input)) return prev
 
   switch (input.event) {
@@ -446,6 +505,11 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
         return { ...cleared, status: 'idle', sessionId: prev.sessionId, turnId: prev.turnId, event: 'stop', updatedAt: now }
       }
       return { ...cleared, updatedAt: now }
+    }
+
+    case 'bg_agent_completed': {
+      if (input.agentKind !== 'claude' || !hasSingleTrackedBackgroundAgent(prev as AgentStatusState)) return prev
+      return reconcileAnonymousBackgroundAgentCompletion(prev as AgentStatusState, now)
     }
 
     default: return prev

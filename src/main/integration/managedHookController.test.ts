@@ -139,10 +139,10 @@ describe('ManagedHookController (IO)', () => {
       }
       return out
     }
-    // Claude: 9 events (Notification has permission_prompt + idle_prompt); Codex: 5 events (no Notification/StopFailure/PostToolUse -- the
+    // Claude: 10 events (Notification has permission_prompt + idle_prompt + agent_completed); Codex: 5 events (no Notification/StopFailure/PostToolUse -- the
     // last is intentionally omitted: pre/post tool use are reducer-identical, so PostToolUse
     // changes no badge state and only adds Codex TUI "running" noise; see spec 032).
-    expect(ourCmds(claude)).toHaveLength(9)
+    expect(ourCmds(claude)).toHaveLength(10)
     expect(ourCmds(codex)).toHaveLength(5)
     // SessionStart stays arg-less (byte-identical to 047, preserves Codex trust). Build the
     // expected command via the same helper the controller uses (defaults to process.platform),
@@ -159,6 +159,8 @@ describe('ManagedHookController (IO)', () => {
     // Claude Notification uses the permission_prompt matcher; Codex PermissionRequest exists.
     expect(claude.hooks.Notification[0].matcher).toBe('permission_prompt')
     expect(claude.hooks.Notification[1].matcher).toBe('idle_prompt')
+    expect(claude.hooks.Notification[2].matcher).toBe('agent_completed')
+    expect(claude.hooks.Notification[2].hooks[0].command).toContain(' claude bg_agent_completed')
     expect(codex.hooks.PermissionRequest).toBeDefined()
     expect(codex.hooks.PermissionRequest[0].matcher).toBe('.*')
     // Codex has no Notification / StopFailure.

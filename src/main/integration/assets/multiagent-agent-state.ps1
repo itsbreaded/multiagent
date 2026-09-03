@@ -5,7 +5,8 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<path>" <agentKind> [<event>]
 # where <agentKind> is "claude" or "codex" and <event> is one of:
 #   session_start | user_prompt_submit | pre_tool_use | post_tool_use |
-#   stop | permission_request | stop_failure | idle_prompt | bg_subagent_completed
+#   stop | permission_request | stop_failure | idle_prompt | bg_subagent_completed |
+#   bg_agent_completed
 # An absent <event> (legacy 047 SessionStart install) is treated as session_start for
 # back-compat -- it still seeds the badge AND posts the linking report.
 #
@@ -186,6 +187,11 @@ switch ($event) {
   'bg_subagent_completed' {
     $evidence = if ($agentKind -eq 'claude') { New-ClaudeSnapshot -TerminalState 'completed' } else { $null }
     Post-Event -EventName 'bg_subagent_completed' -TurnId (Get-TurnId) -AgentId (Get-AgentId) -SessionId (Get-SessionId) -Evidence $evidence
+  }
+  'bg_agent_completed' {
+    if ($payload.notification_type -eq 'agent_completed') {
+      Post-Event -EventName 'bg_agent_completed' -SessionId (Get-SessionId)
+    }
   }
   'stop' {
     $terminalState = if ($agentKind -eq 'claude') { Get-ClaudeStopTerminalState } else { 'completed' }

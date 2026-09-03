@@ -7,7 +7,7 @@
 #   <agentKind> = "claude" | "codex"
 #   <event> = session_start | user_prompt_submit | pre_tool_use | post_tool_use |
 #             stop | permission_request | stop_failure | idle_prompt |
-#             bg_subagent_completed
+#             bg_subagent_completed | bg_agent_completed
 #   An absent <event> (legacy 047 SessionStart install) is treated as session_start.
 #
 # Self-contained: bash + curl only (no Python/Node/jq). JSON parsing is sed-based and
@@ -275,6 +275,11 @@ case "$event" in
     evidence=""
     [ "$agentKind" = "claude" ] && evidence=$(claude_evidence completed)
     post_event bg_subagent_completed "" "$(turn_id)" "$(get_agent_id)" "$(session_id)" "$evidence"
+    ;;
+  bg_agent_completed)
+    if printf '%s' "$raw" | grep -Eq '"notification_type"[[:space:]]*:[[:space:]]*"agent_completed"'; then
+      post_event bg_agent_completed "" "" "" "$(session_id)" ""
+    fi
     ;;
   stop)
     evidence=""

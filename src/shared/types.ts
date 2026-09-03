@@ -247,7 +247,7 @@ export type AgentLifecycleEvent =
   | 'session_start' | 'user_prompt_submit' | 'pre_tool_use' | 'post_tool_use'
   | 'stop' | 'permission_request' | 'stop_failure' | 'promote' | 'demote'
   | 'terminal_error' | 'bg_subagent_started' | 'bg_subagent_completed'
-  | 'work_snapshot' | 'turn_interrupted' | 'idle_prompt' | 'interrupt_requested'
+  | 'bg_agent_completed' | 'work_snapshot' | 'turn_interrupted' | 'idle_prompt' | 'interrupt_requested'
 
 // What main forwards on pane:agent-event, and what the reducer consumes.
 export interface AgentStatusInput {

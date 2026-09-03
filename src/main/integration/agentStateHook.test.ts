@@ -148,6 +148,29 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
     })
   })
 
+  it('reports Claude agent_completed notifications as background completion events', async () => {
+    const platforms = UNIX_BASH_COMMAND ? (['host', 'unix'] as const) : (['host'] as const)
+    for (const platform of platforms) {
+      const events = await runHook('bg_agent_completed', {
+        notification_type: 'agent_completed', session_id: 'session-1',
+      }, false, 'claude', platform)
+      expect(events).toEqual([{
+        ptyId: 'hook-test-pty', agentKind: 'claude', event: 'bg_agent_completed',
+        sessionId: 'session-1',
+      }])
+    }
+  })
+
+  it('does not treat another notification type as agent completion', async () => {
+    const platforms = UNIX_BASH_COMMAND ? (['host', 'unix'] as const) : (['host'] as const)
+    for (const platform of platforms) {
+      const events = await runHook('bg_agent_completed', {
+        notification_type: 'idle_prompt', session_id: 'session-1', prompt_id: 'turn-1',
+      }, false, 'claude', platform)
+      expect(events).toEqual([])
+    }
+  })
+
   it('reports complete empty Claude task and cron evidence only for top-level empty arrays', async () => {
     const events = await runHook('stop', {
       session_id: 'session-1',

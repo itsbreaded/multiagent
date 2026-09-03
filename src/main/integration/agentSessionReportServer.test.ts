@@ -170,9 +170,14 @@ describe('AgentSessionReportServer -- /agent-event (spec 032)', () => {
       ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_completed',
       agentId: 'sub-1',
     })).toBe(204)
+    expect(await post(port!, '/agent-event', {
+      ptyId: 'p-bg', agentKind: 'claude', event: 'bg_agent_completed',
+      sessionId: 'session-1',
+    })).toBe(204)
     expect(events).toEqual([
       { ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_started', detail: undefined, turnId: 'turn-1', agentId: 'sub-1' },
       { ptyId: 'p-bg', agentKind: 'claude', event: 'bg_subagent_completed', detail: undefined, turnId: undefined, agentId: 'sub-1' },
+      { ptyId: 'p-bg', agentKind: 'claude', event: 'bg_agent_completed', detail: undefined, sessionId: 'session-1', turnId: undefined },
     ])
   })
 

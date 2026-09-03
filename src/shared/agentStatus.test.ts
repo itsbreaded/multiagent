@@ -369,6 +369,28 @@ describe('eventToState -- background subagents (spec 065)', () => {
     })
   })
 
+  it('uses Claude agent_completed notification to finish one tracked background session', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = stop(started)
+    const completed = eventToState(held, {
+      event: 'bg_agent_completed', agentKind: 'claude', sessionId: BG_SESSION,
+    }, NOW + 1)!
+    expect(completed).toMatchObject({
+      status: 'idle', event: 'stop',
+      workSnapshot: { completeness: 'complete', activeCount: 0, scheduledCount: 0 },
+    })
+    expect(completed.activeBackgroundSubagents).toBeUndefined()
+    expect(completed.suspensionBlocked).toBeUndefined()
+  })
+
+  it('does not consume an agent_completed notification when multiple background sessions are known', () => {
+    const held = stop(launch(launch(undefined, 'sub-a'), 'sub-b')!)
+    const unchanged = eventToState(held, {
+      event: 'bg_agent_completed', agentKind: 'claude', sessionId: BG_SESSION,
+    }, NOW + 1)
+    expect(unchanged).toBe(held)
+  })
+
   it('a bare Codex stop ends the turn to idle without fabricated work evidence', () => {
     const prev: AgentStatusState = { status: 'working', detail: 'Bash', sessionId: 'session-1', turnId: 'turn-1', event: 'pre_tool_use', updatedAt: NOW - 5 }
     expect(eventToState(prev, {

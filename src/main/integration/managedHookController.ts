@@ -58,7 +58,8 @@ interface ManagedEvent {
 }
 
 // Claude: '' matcher = match-all (sources/tools); Notification uses the literal
-// 'permission_prompt' matcher. No Codex-only events (Notification/StopFailure are Claude).
+// 'permission_prompt' + 'idle_prompt' + 'agent_completed' matchers. No Codex-only events
+// (Notification/StopFailure are Claude).
 const CLAUDE_EVENTS: readonly ManagedEvent[] = [
   { configKey: 'SessionStart', matcher: '' },
   { configKey: 'UserPromptSubmit', matcher: '', scriptArg: 'user_prompt_submit' },
@@ -66,6 +67,7 @@ const CLAUDE_EVENTS: readonly ManagedEvent[] = [
   { configKey: 'PostToolUse', matcher: '', scriptArg: 'post_tool_use' },
   { configKey: 'Notification', matcher: 'permission_prompt', scriptArg: 'permission_request' },
   { configKey: 'Notification', matcher: 'idle_prompt', scriptArg: 'idle_prompt' },
+  { configKey: 'Notification', matcher: 'agent_completed', scriptArg: 'bg_agent_completed' },
   { configKey: 'Stop', matcher: '', scriptArg: 'stop' },
   { configKey: 'StopFailure', matcher: '', scriptArg: 'stop_failure' },
   { configKey: 'SubagentStop', matcher: '', scriptArg: 'bg_subagent_completed' },

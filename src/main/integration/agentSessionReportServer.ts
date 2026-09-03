@@ -25,10 +25,10 @@ const VALID_AGENT_KINDS: readonly AgentKind[] = ['claude', 'codex', 'opencode']
 const VALID_EVENTS: readonly AgentLifecycleEvent[] = [
   'session_start', 'user_prompt_submit', 'pre_tool_use', 'post_tool_use',
   'stop', 'permission_request', 'stop_failure',
-  'bg_subagent_started', 'bg_subagent_completed', 'work_snapshot', 'turn_interrupted', 'idle_prompt',
+  'bg_subagent_started', 'bg_subagent_completed', 'bg_agent_completed', 'work_snapshot', 'turn_interrupted', 'idle_prompt',
 ] as const
 const CLAUDE_ONLY_EVENTS: readonly AgentLifecycleEvent[] = [
-  'bg_subagent_started', 'bg_subagent_completed', 'idle_prompt',
+  'bg_subagent_started', 'bg_subagent_completed', 'bg_agent_completed', 'idle_prompt',
 ] as const
 
 export interface AgentSessionReport {

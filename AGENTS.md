@@ -137,8 +137,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   background-task rows (linked/completed results) but keep missing/unknown task status
   protective; Claude's current-session/current-turn `idle_prompt`
   may recover the visible foreground badge but remains suspension-blocked until complete
-  empty work evidence arrives. Incomplete/missing evidence and active/scheduled work remain
-  protected.
+  empty work evidence arrives. The no-ID Claude `agent_completed` notification may consume
+  only one unambiguous tracked background session; multiple/ambiguous work remains
+  protected. Incomplete/missing evidence and active/scheduled work remain protected.
   → [`docs/pty-and-terminals.md`](docs/pty-and-terminals.md)
 
 ### Layout & multi-window → [`docs/multi-window-and-layout.md`](docs/multi-window-and-layout.md)
