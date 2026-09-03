@@ -66,13 +66,19 @@ session_id() {
 # Only explicitly present Claude lists contribute known work counts. Missing or
 # malformed lists produce incomplete evidence, which remains suspension-protective,
 # but they do not fabricate active work and block a matching idle_prompt forever.
-# The awk scanner checks the key at object depth one and the array's first token;
-# regexes over raw JSON would mistake nested/quoted examples for top-level arrays.
+# The awk scanner checks the key at object depth one and each array item's own
+# top-level status; regexes over raw JSON would mistake nested/quoted examples
+# for top-level arrays or task fields.
 top_level_array_state() {
   local key="$1"
   awk -v wanted="$key" '
     function ws(c) { return c ~ /[ \t\r\n]/ }
     function skip(i) { while (i <= n && ws(substr(s, i, 1))) i++; return i }
+    function terminal(v) {
+      return v == "completed" || v == "failed" || v == "killed" ||
+        v == "stopped" || v == "canceled" || v == "cancelled" ||
+        v == "done" || v == "success" || v == "idle"
+    }
     {
       s = s $0
     }
@@ -81,6 +87,8 @@ top_level_array_state() {
       while (last > 0 && ws(substr(s, last, 1))) last--
       if (substr(s, first, 1) != "{" || substr(s, last, 1) != "}") exit
       depth = 0; brackets = 0; in_string = 0; escaped = 0; root_closed = 0; valid = 1
+      target = 0; target_level = 0; target_closed = 0; item_root = 0
+      item_status = ""; item_status_seen = 0; active = 0
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
         if (in_string) {
@@ -105,13 +113,59 @@ top_level_array_state() {
             if (substr(s, k, 1) == ":") {
               k = skip(k + 1)
               if (substr(s, k, 1) == "[") {
-                first_array_value = skip(k + 1)
-                found = substr(s, first_array_value, 1) == "]" ? "empty" : "nonempty"
+                if (target) { valid = 0; break }
+                target = 1
+                target_level = brackets + 1
+              }
+            }
+          }
+          # Only a background task item status field can release its
+          # active-work protection. Missing/unknown status remains active.
+          if (target && !target_closed && wanted == "background_tasks" && item_root > 0 &&
+              start_depth == item_root && value == "status") {
+            k = skip(j + 1)
+            if (substr(s, k, 1) == ":") {
+              k = skip(k + 1)
+              if (substr(s, k, 1) == "\"") {
+                l = k + 1; status_escaped = 0
+                while (l <= n) {
+                  d = substr(s, l, 1)
+                  if (status_escaped) { status_escaped = 0; l++; continue }
+                  if (d == "\\") { status_escaped = 1; l++; continue }
+                  if (d == "\"") break
+                  l++
+                }
+                if (l > n) { valid = 0; break }
+                item_status = substr(s, k + 1, l - k - 1)
+                item_status_seen = 1
+              } else {
+                l = k
+                while (l <= n && substr(s, l, 1) !~ /[ \t\r\n,}\]]/) l++
+                item_status = substr(s, k, l - k)
+                item_status_seen = 1
               }
             }
           }
           i = j
           continue
+        }
+        if (target && !target_closed) {
+          if (c == "]" && brackets == target_level) {
+            target_closed = 1
+          } else if (brackets == target_level && item_root == 0 && !ws(c) && c != ",") {
+            if (c == "{") {
+              item_root = depth + 1
+              item_status = ""
+              item_status_seen = 0
+            } else {
+              # Preserve the old fail-safe behavior for malformed array items.
+              active = 1
+            }
+          }
+          if (item_root > 0 && c == "}" && depth == item_root) {
+            if (wanted != "background_tasks" || !item_status_seen || !terminal(item_status)) active = 1
+            item_root = 0
+          }
         }
         if (c == "{") {
           if (root_closed) { valid = 0; break }
@@ -129,7 +183,7 @@ top_level_array_state() {
         }
       }
       if (!valid || in_string || depth != 0 || brackets != 0 || !root_closed) exit
-      if (found) print found
+      if (target) print active ? "nonempty" : "empty"
     }
   ' <<< "$raw" || true
 }

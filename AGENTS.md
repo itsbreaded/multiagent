@@ -133,7 +133,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   plumbing; canonical signatures only from a rolling fresh-output buffer (never scrollback,
   never keywords like `Error:`/`panic` — that's the rolled-back spec 048). No second status
   write path, no new managed hooks. Provider-authoritative empty work evidence is the only
-  automatic-suspension authorization; Claude's current-session/current-turn `idle_prompt`
+  automatic-suspension authorization; Claude work snapshots ignore explicitly terminal
+  background-task rows (linked/completed results) but keep missing/unknown task status
+  protective; Claude's current-session/current-turn `idle_prompt`
   may recover the visible foreground badge but remains suspension-blocked until complete
   empty work evidence arrives. Incomplete/missing evidence and active/scheduled work remain
   protected.

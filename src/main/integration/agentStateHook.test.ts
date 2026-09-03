@@ -174,6 +174,32 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
     expect(truncated[0].evidence).toMatchObject({ completeness: 'incomplete', activeCount: 0, scheduledCount: 0 })
   })
 
+  it('does not keep a completed background task active when its result is linked in the conversation', async () => {
+    const payload = {
+      session_id: 'session-1',
+      prompt_id: 'turn-1',
+      agent_id: 'sub-1',
+      background_tasks: [{
+        id: 'task-1',
+        type: 'subagent',
+        status: 'completed',
+        description: 'linked artifact with an embedded "status":"running" example',
+      }],
+      session_crons: [],
+    }
+    const platforms = UNIX_BASH_COMMAND ? (['host', 'unix'] as const) : (['host'] as const)
+    for (const platform of platforms) {
+      const events = await runHook('bg_subagent_completed', payload, false, 'claude', platform)
+      expect(events[0]).toMatchObject({
+        event: 'bg_subagent_completed', agentId: 'sub-1',
+        evidence: {
+          provider: 'claude', completeness: 'complete', activeCount: 0, scheduledCount: 0,
+          sessionId: 'session-1', turnId: 'turn-1',
+        },
+      })
+    }
+  })
+
   it('preserves positively observed work counts when the other Claude list is missing', async () => {
     const events = await runHook('stop', {
       session_id: 'session-1',

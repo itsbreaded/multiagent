@@ -93,6 +93,17 @@ function Get-SessionId {
   return $null
 }
 
+function Test-ClaudeBackgroundTaskActive {
+  param([object]$Item)
+  $statusProperty = $Item.PSObject.Properties['status']
+  # Older Claude payloads did not include status. Keep those rows active so a
+  # schema downgrade cannot make a live task look idle. Only an explicit
+  # terminal status releases the protection.
+  if ($null -eq $statusProperty -or $statusProperty.Value -isnot [string]) { return $true }
+  $status = $statusProperty.Value.Trim().ToLowerInvariant()
+  return @('completed', 'failed', 'killed', 'stopped', 'canceled', 'cancelled', 'done', 'success', 'idle') -notcontains $status
+}
+
 function New-ClaudeSnapshot {
   param([string]$TerminalState)
   if (-not $payload) { return [pscustomobject]@{ provider = 'claude'; completeness = 'incomplete'; terminalState = $TerminalState; activeCount = 0; scheduledCount = 0 } }
@@ -106,7 +117,9 @@ function New-ClaudeSnapshot {
     if ($value.Count -gt 64) { $complete = $false; continue }
     foreach ($item in $value) {
       if ($null -eq $item -or $item -is [string] -or $item -is [ValueType]) { $complete = $false; continue }
-      if ($name -eq 'background_tasks') { $active += $item } else { $scheduled += $item }
+      if ($name -eq 'background_tasks') {
+        if (Test-ClaudeBackgroundTaskActive $item) { $active += $item }
+      } else { $scheduled += $item }
     }
   }
   $result = [ordered]@{

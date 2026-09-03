@@ -195,6 +195,13 @@ bg_subagent_completed with the completed subagent's agent_id as agentId.
 Both events use the same localhost report server and parent-pane pty
 attribution as the ordinary lifecycle events.
 
+Claude's `background_tasks` snapshot may retain a task row while its result is
+being linked into the conversation. The hook counts only rows without an
+explicit terminal status as active; `completed`, `failed`, `killed`, `stopped`,
+`canceled`/`cancelled`, `done`, `success`, and `idle` rows do not keep the pane
+working. A missing or unknown status remains active for fail-safe compatibility
+with older or changed payloads.
+
 The report server accepts these two events only for Claude. The renderer keeps
 the active count and known identities on the in-memory agent status; identity
 tracking is not persisted or displayed. A completion with no matching identity
