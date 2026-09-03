@@ -50,7 +50,9 @@ turn_id() {
 }
 
 jsonbool() {
-  printf '%s' "$raw" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" | head -n1
+  # BSD sed (macOS) does not support GNU BRE alternation (\|). POSIX ERE is
+  # supported by both BSD and GNU sed.
+  printf '%s' "$raw" | sed -E -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*(true|false).*/\1/p" | head -n1
 }
 
 claude_stop_terminal_state() {

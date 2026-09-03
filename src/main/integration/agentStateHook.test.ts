@@ -305,30 +305,33 @@ describe('managed agent-state hook payload contract (spec 065)', { timeout: 60_0
   }, 60_000)
 
   it('lets idle_prompt clear incomplete unknown Stop evidence without authorizing suspension', async () => {
-    let state: AgentStatusState = {
-      status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: 1,
+    const platforms = UNIX_BASH_COMMAND ? (['host', 'unix'] as const) : (['host'] as const)
+    for (const platform of platforms) {
+      let state: AgentStatusState = {
+        status: 'working', sessionId: 'session-1', turnId: 'turn-1', event: 'user_prompt_submit', updatedAt: 1,
+      }
+      const stop = await runHook('stop', {
+        session_id: 'session-1', prompt_id: 'turn-1', stop_hook_active: false,
+      }, false, 'claude', platform)
+      state = eventToState(state, {
+        event: stop[0].event as 'stop', agentKind: 'claude', sessionId: stop[0].sessionId,
+        turnId: stop[0].turnId, evidence: stop[0].evidence,
+      }, 2)!
+      expect(state).toMatchObject({ status: 'idle', event: 'stop', suspensionBlocked: true })
+      expect(state.activeWorkCount).toBeUndefined()
+      expect(state.scheduledWorkCount).toBeUndefined()
+
+      state = eventToState(state, {
+        event: 'idle_prompt', agentKind: 'claude', sessionId: 'session-1', turnId: 'turn-1',
+      }, 3)!
+      expect(state).toMatchObject({ status: 'idle', event: 'stop', suspensionBlocked: true })
+
+      state = eventToState(state, {
+        event: 'user_prompt_submit', agentKind: 'claude', sessionId: 'session-1', turnId: 'turn-2',
+      }, 4)!
+      expect(state).toMatchObject({ status: 'working', event: 'user_prompt_submit', turnId: 'turn-2' })
+      expect(state.activeWorkCount).toBeUndefined()
+      expect(state.scheduledWorkCount).toBeUndefined()
     }
-    const stop = await runHook('stop', {
-      session_id: 'session-1', prompt_id: 'turn-1', stop_hook_active: false,
-    })
-    state = eventToState(state, {
-      event: stop[0].event as 'stop', agentKind: 'claude', sessionId: stop[0].sessionId,
-      turnId: stop[0].turnId, evidence: stop[0].evidence,
-    }, 2)!
-    expect(state).toMatchObject({ status: 'idle', event: 'stop', suspensionBlocked: true })
-    expect(state.activeWorkCount).toBeUndefined()
-    expect(state.scheduledWorkCount).toBeUndefined()
-
-    state = eventToState(state, {
-      event: 'idle_prompt', agentKind: 'claude', sessionId: 'session-1', turnId: 'turn-1',
-    }, 3)!
-    expect(state).toMatchObject({ status: 'idle', event: 'stop', suspensionBlocked: true })
-
-    state = eventToState(state, {
-      event: 'user_prompt_submit', agentKind: 'claude', sessionId: 'session-1', turnId: 'turn-2',
-    }, 4)!
-    expect(state).toMatchObject({ status: 'working', event: 'user_prompt_submit', turnId: 'turn-2' })
-    expect(state.activeWorkCount).toBeUndefined()
-    expect(state.scheduledWorkCount).toBeUndefined()
   }, 60_000)
 })
