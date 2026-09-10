@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { newSessionCommand, resumeSessionCommand, agentEnv } from './SessionSpawner'
+import { describe, it, expect, vi } from 'vitest'
+import type { PtyManager } from '../pty/PtyManager'
+import type { CodexAppServerManager } from '../integration/codexAppServer'
+import { SessionSpawner, newSessionCommand, resumeSessionCommand, agentEnv } from './SessionSpawner'
 
 // Spec 047 phase 4: app-launched Codex links via the managed SessionStart hook, the same
 // mechanism a CLI-launched Codex uses — the user accepts the managed hook once via
@@ -29,6 +31,21 @@ describe('SessionSpawner launch commands (spec 047 phase 4)', () => {
     const cmd = resumeSessionCommand('claude', '11111111-2222-3333-4444-555555555555', 'C:\\proj')
     expect(cmd).not.toContain('--dangerously-bypass-hook-trust')
     expect(cmd).toContain('--resume')
+  })
+
+  it('keeps a prepared Codex observer on the direct CLI instead of --remote', async () => {
+    const createDeferred = vi.fn((_cwd: string, _command: string[], ..._rest: unknown[]) => 'pty-1')
+    const prepare = vi.fn(async () => ({ observerReady: true as const }))
+    const ptyManager = { createDeferred } as unknown as PtyManager
+    const codexAppServer = { prepare } as unknown as CodexAppServerManager
+    const spawner = new SessionSpawner(ptyManager, { codexAppServer })
+
+    await spawner.spawnNew('codex', process.cwd())
+
+    const command = createDeferred.mock.calls[0]?.[1] as string[]
+    expect(prepare).toHaveBeenCalled()
+    expect(command.join(' ')).not.toContain('--remote')
+    expect(command.join(' ')).toContain('codex')
   })
 })
 

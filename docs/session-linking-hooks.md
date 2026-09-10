@@ -465,8 +465,8 @@ In all cases the pane continues to work as a terminal — only the session linka
 | `src/main/integration/managedHookController.ts` | IO orchestrator: installs/uninstalls both hooks + the feature flag, copies the script to `<userData>`, writes `.bak`, atomic replace, legacy cleanup. |
 | `src/main/ipc/handlers.ts` | Constructs the report server + controller, wires `getPaneEnv`, emits `session:detected` from `onReport`, default-on apply + startup-race `await`. |
 | `src/main/pty/buildEnv.ts` | Scrubs inherited `MULTIAGENT_*` vars so a nested MultiAgent can't reuse them. |
-| `src/main/sessions/SessionSpawner.ts` | App-Claude `--session-id` + `MULTIAGENT_SESSION_ID` via `agentEnv`; app-Codex sidecar preparation and `--remote` launch with direct fallback. |
-| `src/main/integration/codexAppServer.ts` | Pane-local Unix-socket Codex App Server/proxy observer, bounded work reconciliation, reconnect, and cleanup. |
+| `src/main/sessions/SessionSpawner.ts` | App-Claude `--session-id` + `MULTIAGENT_SESSION_ID` via `agentEnv`; app-Codex observer preparation with direct CLI launch. |
+| `src/main/integration/codexAppServer.ts` | Pane-local stdio JSONL Codex App Server observer, bounded work reconciliation, reconnect, and cleanup. |
 | `src/main/pty/agentProcessSweeper.ts` | Phase 1: process-tree promotion/demotion of shell panes that host a CLI agent. Independent of the hook; needed for demotion-on-exit (hooks fire on start, not exit). |
 | `src/renderer/src/store/panesIpc.ts` | Listener for `session:detected` → promote-if-shell → `setSessionId`. |
 | `src/renderer/src/store/settings.ts` + `…/CliSessionLinkingSetting.tsx` | The toggle (default-on, hydrates from main). |
@@ -528,12 +528,12 @@ evidence-gated as described above. Provider-specific recovery remains independen
   `stop_hook_active` must be explicitly `false` before a Stop can carry a completed terminal
   state; missing/true/malformed values remain busy or incomplete. StopFailure prefers the
   current `error`/`error_details` fields with bounded legacy fallbacks.
-- **Codex** direct-CLI panes retain hook-only reporting. App-launched Codex uses a pane-local
-  Unix-socket App Server sidecar and `codex --remote`; its observer reconciles turn completion
-  with background-terminal and descendant-thread queries. Preparation can fall back to direct
-  CLI before the PTY exists; observer loss after launch is incomplete/protected and does not
-  recreate the user's pane. Cleanup is awaited on kill, PTY exit/error, host recovery,
-  replacement, and shutdown.
+- **Codex** direct-CLI panes retain hook-only reporting. App-launched Codex adds a pane-local
+  App Server sidecar over its documented stdio JSONL transport; the user-facing pane still runs
+  the direct CLI, while the observer reconciles turn completion with background-terminal and
+  descendant-thread queries. Preparation can fall back to direct CLI before the PTY exists;
+  observer loss after launch is incomplete/protected and does not recreate the user's pane.
+  Cleanup is awaited on kill, PTY exit/error, host recovery, replacement, and shutdown.
 - **OpenCode** uses the process-scoped plugin's current `session.created`/`updated`,
   `session.status`, `session.error`, and permission events. Current `1.18.14` exposes no
   authoritative child-coverage field, so root-only idle is incomplete/protected; a child

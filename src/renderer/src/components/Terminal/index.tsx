@@ -13,6 +13,7 @@ import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
 import { createDirectPtyDataHandler } from '../../terminal/ptyData'
 import { createPrimaryLinkActivator, installTerminalLinkHandling } from '../../terminal/links'
+import { scrollOnEraseInDisplayForPane } from '../../terminal/terminalOptions'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
@@ -191,7 +192,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         lineHeight: 1.3,
         cursorBlink: pane.paneType !== 'agent',
         scrollback: storeState.terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES,
-        scrollOnEraseInDisplay: true,
+        scrollOnEraseInDisplay: scrollOnEraseInDisplayForPane(pane.paneType),
         allowTransparency: false,
         customGlyphs: true,
         minimumContrastRatio: storeState.terminalMinimumContrastRatio,
@@ -248,6 +249,10 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
       : XTERM_THEME
     xterm.options.cursorBlink = pane.paneType !== 'agent'
+    // The registry can return an instance created before this pane's metadata
+    // settled (or a previously promoted shell), so keep the option in sync on
+    // every attach as well as at construction time.
+    xterm.options.scrollOnEraseInDisplay = scrollOnEraseInDisplayForPane(pane.paneType)
 
     // Re-attach the key handler on every mount so the closure captures fresh
     // refs. attachCustomKeyEventHandler replaces the previous handler.

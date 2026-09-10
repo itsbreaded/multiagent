@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import { randomUUID } from 'crypto'
 import type { PtyManager } from '../pty/PtyManager'
 import { buildEnv } from '../pty/buildEnv'
-import type { CodexAppServerManager } from '../integration/codexAppServer'
+import type { CodexAppServerManager, CodexPreparedPane } from '../integration/codexAppServer'
 import type { AgentKind, AgentProviderSettings } from '../../shared/types'
 import { currentClaudeMcpConfigPath, currentCodexMcpUrl, currentOpencodeMcpUrl, currentMcpSettings, currentUiMcpUrl } from '../mcp/McpInjector'
 import { defaultShell } from '../pty/shell'
@@ -51,11 +51,12 @@ export class SessionSpawner {
     const sessionId = agentKind === 'claude' ? randomUUID() : null
     const requestedId = agentKind === 'codex' ? randomUUID() : undefined
     const extraEnv = agentEnv(agentKind, sessionId ?? undefined)
-    const sidecar = await this.prepareCodex(requestedId, agentKind, cwd, extraEnv)
+    // The App Server sidecar is an observer only; keep the user-facing PTY on the direct CLI.
+    await this.prepareCodex(requestedId, agentKind, cwd, extraEnv)
     try {
       const ptyId = this.ptyManager.createDeferred(
         cwd,
-        agentLaunchCommand(sidecar ? codexRemoteCommand(sidecar.socketPath) : newSessionCommand(agentKind, sessionId ?? undefined)),
+        agentLaunchCommand(newSessionCommand(agentKind, sessionId ?? undefined)),
         extraEnv,
         undefined, false, true, 'new-agent', requestedId,
       )
@@ -70,11 +71,12 @@ export class SessionSpawner {
     assertUsableAgentCwd(cwd)
     const requestedId = agentKind === 'codex' ? randomUUID() : undefined
     const extraEnv = agentEnv(agentKind, agentKind === 'claude' ? sessionId : undefined)
-    const sidecar = await this.prepareCodex(requestedId, agentKind, cwd, extraEnv)
+    // The App Server sidecar is an observer only; keep the user-facing PTY on the direct CLI.
+    await this.prepareCodex(requestedId, agentKind, cwd, extraEnv)
     try {
       const ptyId = this.ptyManager.createDeferred(
         cwd,
-        agentLaunchCommand(sidecar ? codexRemoteCommand(sidecar.socketPath, sessionId, cwd) : resumeSessionCommand(agentKind, sessionId, cwd)),
+        agentLaunchCommand(resumeSessionCommand(agentKind, sessionId, cwd)),
         extraEnv,
         undefined, false, true, 'resume-agent', requestedId,
       )
@@ -90,7 +92,7 @@ export class SessionSpawner {
     agentKind: AgentKind,
     cwd: string,
     extraEnv: Record<string, string | undefined>,
-  ): Promise<{ socketPath: string } | null> {
+  ): Promise<CodexPreparedPane | null> {
     if (agentKind !== 'codex' || !requestedId || !this.options.codexAppServer || process.env['MULTIAGENT_E2E_USER_DATA_DIR']) return null
     try {
       const paneEnv = this.options.getPaneEnv?.(requestedId) ?? {}
@@ -358,12 +360,6 @@ export function resumeSessionCommand(agentKind: AgentKind, sessionId: string, cw
   if (agentKind === 'claude') return `claude${claudeCliArgs()} --resume ${shellArg(sessionId)}`
   if (agentKind === 'opencode') return `opencode --session ${shellArg(sessionId)}${opencodeCliArgs()}`
   return `codex resume${codexCliArgs()} -C ${shellArg(cwd)} ${shellArg(sessionId)}`
-}
-
-export function codexRemoteCommand(socketPath: string, sessionId?: string, cwd?: string): string {
-  const remote = ` --remote ${shellArg(`unix://${socketPath.replace(/\\/g, '/')}`)}`
-  if (!sessionId) return `codex${codexCliArgs()}${remote}`
-  return `codex${codexCliArgs()}${remote} resume -C ${shellArg(cwd ?? '')} ${shellArg(sessionId)}`
 }
 
 function claudeCliArgs(sessionId?: string): string {

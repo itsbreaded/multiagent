@@ -119,6 +119,8 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   default Claude env; `buildEnv` scrubs inherited copies. Only default Claude env is
   `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`. Keep Codex `--no-alt-screen`
   `-c tui.animations=false -c tui.terminal_title=[]`.
+- Inline agent panes use viewport-only xterm ED2 (`scrollOnEraseInDisplay=false`) so TUI redraws
+  do not turn the current viewport into duplicate scrollback; shell panes retain `true`.
 - Shell CWD via OSC 633, sourcing the `<userData>`-materialized copy of
   `shellIntegration.{ps1,sh}`, **not** the raw asar path. Don't reintroduce `shellterm:*`/Bare
   Term. One process-snapshot mechanism per platform behind `snapshotProcesses()`; fails closed.
@@ -185,6 +187,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   managed `SessionStart` hook. **No file-poll scanner**, no scanner fallback, no
   `--dangerously-bypass-hook-trust`. Don't reintroduce Claude filesystem matching for panes we
   spawn. Startup defaults to resume.
+- The Codex App Server observer uses its stdio JSONL transport; app-launched Codex terminals
+  remain direct CLI sessions. Do not reintroduce pane-local Unix sockets, `app-server proxy`, or
+  `codex --remote` for this path.
 - Pending agent panes (`sessionDetectionState` + no `sessionId`) recover only from an exact
   single cwd/time match or stay as recovery placeholders; legacy no-marker panes revert to
   shell. `hydrateTabRuntime` validates `(agentKind, sessionId, cwd)` before resume — missing

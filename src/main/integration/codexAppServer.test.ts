@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it, vi } from 'vitest'
@@ -23,16 +23,6 @@ function asChildProcess(process: FakeProcess): ChildProcessWithoutNullStreams {
   return process as unknown as ChildProcessWithoutNullStreams
 }
 
-function serverFrame(value: unknown): Buffer {
-  const payload = Buffer.from(JSON.stringify(value))
-  if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload])
-  const header = Buffer.alloc(4)
-  header[0] = 0x81
-  header[1] = 126
-  header.writeUInt16BE(payload.length, 2)
-  return Buffer.concat([header, payload])
-}
-
 type FakeProtocolState = {
   background: Record<string, unknown>[]
   threads: Record<string, unknown>[]
@@ -45,45 +35,38 @@ type FakeProtocolState = {
   }
 }
 
-function attachProxyProtocol(proxy: FakeProcess, state: FakeProtocolState): void {
-  let input = Buffer.alloc(0)
-  let handshaken = false
-  proxy.stdin.on('data', (chunk: Buffer) => {
-    input = Buffer.concat([input, chunk])
-    if (!handshaken) {
-      const end = input.indexOf(Buffer.from('\r\n\r\n'))
-      if (end < 0) return
-      proxy.stdout.write('HTTP/1.1 101 Switching Protocols\r\n\r\n')
-      handshaken = true
-      input = input.subarray(end + 4)
-    }
-    while (handshaken && input.length >= 2) {
-      const second = input[1]
-      let offset = 2
-      let length = second & 0x7f
-      if (length === 126) {
-        if (input.length < 4) return
-        length = input.readUInt16BE(2)
-        offset = 4
+function serverMessage(value: unknown): string {
+  return `${JSON.stringify(value)}\n`
+}
+
+function attachStdioProtocol(server: FakeProcess, state: FakeProtocolState): void {
+  let input = ''
+  server.stdin.on('data', (chunk: Buffer) => {
+    input += chunk.toString()
+    let newline = input.indexOf('\n')
+    while (newline >= 0) {
+      const line = input.slice(0, newline).replace(/\r$/, '')
+      input = input.slice(newline + 1)
+      if (!line.trim()) {
+        newline = input.indexOf('\n')
+        continue
       }
-      if ((second & 0x80) === 0 || input.length < offset + 4 + length) return
-      const mask = input.subarray(offset, offset + 4)
-      offset += 4
-      const payload = Buffer.from(input.subarray(offset, offset + length))
-      input = input.subarray(offset + length)
-      for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4]
-      const request = JSON.parse(payload.toString('utf8')) as { id?: number; method?: string; params?: Record<string, unknown> }
+      const request = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown> }
       state.requests?.push({ method: request.method, params: request.params })
-      if (request.id === undefined) continue
+      if (request.id === undefined) {
+        newline = input.indexOf('\n')
+        continue
+      }
       const respond = (value: unknown): void => {
-        const frame = serverFrame(value)
-        if (state.responseDelay > 0) setTimeout(() => proxy.stdout.write(frame), state.responseDelay)
-        else proxy.stdout.write(frame)
+        const message = `${JSON.stringify(value)}\n`
+        if (state.responseDelay > 0) setTimeout(() => server.stdout.write(message), state.responseDelay)
+        else server.stdout.write(message)
       }
       let result: unknown = {}
       if (request.method === 'thread/backgroundTerminals/list') {
         if (state.failBackground) {
           respond({ jsonrpc: '2.0', id: request.id, error: { message: 'unsupported' } })
+          newline = input.indexOf('\n')
           continue
         }
         const pages = state.pagination?.background
@@ -98,6 +81,7 @@ function attachProxyProtocol(proxy: FakeProcess, state: FakeProtocolState): void
           : { data: ancestor ? state.threads.filter((item) => item.parentThreadId === ancestor) : state.threads, nextCursor: null }
       }
       respond({ jsonrpc: '2.0', id: request.id, result })
+      newline = input.indexOf('\n')
     }
   })
 }
@@ -113,34 +97,31 @@ describe('Codex App Server status observer', () => {
       background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0, requests: [],
     }
     const reports: Array<Record<string, unknown>> = []
-    let sidecar: FakeProcess | undefined
-    let proxy: FakeProcess | undefined
-    let socketPath: string | undefined
+    let server: FakeProcess | undefined
+    let serverArgs: string[] | undefined
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: (report) => reports.push(report as unknown as Record<string, unknown>),
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
-          sidecar = new FakeProcess()
-          writeFileSync(args[2].slice('unix://'.length), '')
-          return asChildProcess(sidecar)
+          serverArgs = args
+          server = new FakeProcess()
+          attachStdioProtocol(server, state)
+          return asChildProcess(server)
         }
-        proxy = new FakeProcess()
-        attachProxyProtocol(proxy, state)
-        return asChildProcess(proxy)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
 
     try {
       const prepared = await manager.prepare('pty-1', directory, {})
-      expect(prepared?.socketPath).toBeTruthy()
-      socketPath = prepared?.socketPath
+      expect(prepared).toEqual({ observerReady: true })
+      expect(serverArgs).toEqual(['app-server', '--listen', 'stdio://'])
       manager.bindSession('pty-1', 'thread-1')
       await waitForReports()
       expect(reports.at(-1)).toMatchObject({ event: 'work_snapshot', sessionId: 'thread-1' })
       expect((reports.at(-1) as any).evidence).toMatchObject({ completeness: 'complete', activeCount: 0, scheduledCount: 0 })
 
-      proxy!.stdout.write(serverFrame({ method: 'turn/started', params: { turn: { id: 'turn-1', threadId: 'thread-1', status: 'inProgress' } } }))
+      server!.stdout.write(`${JSON.stringify({ method: 'turn/started', params: { turn: { id: 'turn-1', threadId: 'thread-1', status: 'inProgress' } } })}\n`)
       expect((reports.at(-1) as any).evidence).toMatchObject({ terminalState: 'busy', activeCount: 1, turnId: 'turn-1' })
 
       state.background = [{ processId: 'background-1' }]
@@ -149,7 +130,7 @@ describe('Codex App Server status observer', () => {
         { id: 'unrelated-1', status: { type: 'active' } },
         { id: 'child-1', parentThreadId: 'thread-1', status: { type: 'active' } },
       ]
-      proxy!.stdout.write(serverFrame({ method: 'turn/completed', params: { turn: { id: 'turn-1', threadId: 'thread-1', status: 'interrupted' } } }))
+      server!.stdout.write(`${JSON.stringify({ method: 'turn/completed', params: { turn: { id: 'turn-1', threadId: 'thread-1', status: 'interrupted' } } })}\n`)
       await waitForReports()
       expect((reports.at(-1) as any).evidence).toMatchObject({ terminalState: 'interrupted', completeness: 'complete', activeCount: 1, scheduledCount: 1, activeIds: ['child-1'] })
 
@@ -159,9 +140,7 @@ describe('Codex App Server status observer', () => {
       expect(reports.at(-1)).toMatchObject({ event: 'work_snapshot', sessionId: 'thread-2' })
     } finally {
       await manager.dispose()
-      expect(proxy?.kill).toHaveBeenCalled()
-      expect(sidecar?.kill).toHaveBeenCalled()
-      expect(socketPath ? existsSync(socketPath) : false).toBe(false)
+      expect(server?.kill).toHaveBeenCalled()
       rmSync(directory, { recursive: true, force: true })
     }
   })
@@ -173,17 +152,14 @@ describe('Codex App Server status observer', () => {
     }
     const reports: Array<Record<string, unknown>> = []
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: (report) => reports.push(report as unknown as Record<string, unknown>),
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
           const process = new FakeProcess()
-          writeFileSync(args[2].slice('unix://'.length), '')
+          attachStdioProtocol(process, state)
           return asChildProcess(process)
         }
-        const process = new FakeProcess()
-        attachProxyProtocol(process, state)
-        return asChildProcess(process)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
     try {
@@ -208,17 +184,14 @@ describe('Codex App Server status observer', () => {
     }
     const reports: Array<Record<string, unknown>> = []
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: (report) => reports.push(report as unknown as Record<string, unknown>),
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
           const process = new FakeProcess()
-          writeFileSync(args[2].slice('unix://'.length), '')
+          attachStdioProtocol(process, state)
           return asChildProcess(process)
         }
-        const process = new FakeProcess()
-        attachProxyProtocol(process, state)
-        return asChildProcess(process)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
 
@@ -238,26 +211,23 @@ describe('Codex App Server status observer', () => {
     }
   })
 
-  it('marks a proxy disconnect protective and performs one bounded reconnect', async () => {
+  it('marks a server disconnect protective and performs one bounded reconnect', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'multiagent-codex-reconnect-'))
     const state: FakeProtocolState = {
       background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0,
     }
-    const proxies: FakeProcess[] = []
+    const servers: FakeProcess[] = []
     const reports: Array<Record<string, unknown>> = []
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: (report) => reports.push(report as unknown as Record<string, unknown>),
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
           const process = new FakeProcess()
-          writeFileSync(args[2].slice('unix://'.length), '')
+          servers.push(process)
+          attachStdioProtocol(process, state)
           return asChildProcess(process)
         }
-        const process = new FakeProcess()
-        proxies.push(process)
-        attachProxyProtocol(process, state)
-        return asChildProcess(process)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
 
@@ -265,9 +235,9 @@ describe('Codex App Server status observer', () => {
       await manager.prepare('pty-1', directory, {})
       manager.bindSession('pty-1', 'thread-1')
       await waitForReports()
-      proxies[0].emit('error', new Error('proxy disconnected'))
+      servers[0].emit('error', new Error('server disconnected'))
       await waitForReports()
-      expect(proxies).toHaveLength(2)
+      expect(servers).toHaveLength(2)
       expect(reports.some((report) => {
         const evidence = report.evidence as Record<string, unknown> | undefined
         return report.event === 'work_snapshot' && evidence?.completeness === 'incomplete' && evidence.activeCount === 1
@@ -284,19 +254,16 @@ describe('Codex App Server status observer', () => {
       background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0,
     }
     const reports: Array<Record<string, unknown>> = []
-    let proxy: FakeProcess | undefined
+    let server: FakeProcess | undefined
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: (report) => reports.push(report as unknown as Record<string, unknown>),
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
-          const process = new FakeProcess()
-          writeFileSync(args[2].slice('unix://'.length), '')
-          return asChildProcess(process)
+          server = new FakeProcess()
+          attachStdioProtocol(server, state)
+          return asChildProcess(server)
         }
-        proxy = new FakeProcess()
-        attachProxyProtocol(proxy, state)
-        return asChildProcess(proxy)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
 
@@ -305,12 +272,12 @@ describe('Codex App Server status observer', () => {
       manager.bindSession('pty-1', 'thread-1')
       await waitForReports()
 
-      proxy!.stdout.write(serverFrame({ method: 'turn/started', params: { turn: { id: 'turn-old', threadId: 'thread-1', status: 'inProgress' } } }))
+      server!.stdout.write(serverMessage({ method: 'turn/started', params: { turn: { id: 'turn-old', threadId: 'thread-1', status: 'inProgress' } } }))
       state.responseDelay = 30
-      proxy!.stdout.write(serverFrame({ method: 'turn/started', params: { turn: { id: 'turn-new', threadId: 'thread-1', status: 'inProgress' } } }))
-      proxy!.stdout.write(serverFrame({ method: 'turn/started', params: { turn: { id: 'turn-old', threadId: 'thread-1', status: 'inProgress' } } }))
+      server!.stdout.write(serverMessage({ method: 'turn/started', params: { turn: { id: 'turn-new', threadId: 'thread-1', status: 'inProgress' } } }))
+      server!.stdout.write(serverMessage({ method: 'turn/started', params: { turn: { id: 'turn-old', threadId: 'thread-1', status: 'inProgress' } } }))
       expect(reports.at(-1)).toMatchObject({ event: 'work_snapshot', turnId: 'turn-new' })
-      proxy!.stdout.write(serverFrame({ method: 'turn/completed', params: { turn: { id: 'turn-old', threadId: 'thread-1', status: 'interrupted' } } }))
+      server!.stdout.write(serverMessage({ method: 'turn/completed', params: { turn: { id: 'turn-old', threadId: 'thread-1', status: 'interrupted' } } }))
       await new Promise((resolve) => setTimeout(resolve, 80))
 
       expect(reports.at(-1)).toMatchObject({ event: 'work_snapshot', turnId: 'turn-new' })
@@ -318,17 +285,17 @@ describe('Codex App Server status observer', () => {
 
       const reportCount = reports.length
       state.responseDelay = 0
-      proxy!.stdout.write(serverFrame({ method: 'turn/completed', params: { status: 'interrupted' } }))
-      proxy!.stdout.write(serverFrame({ method: 'thread/status/changed', params: { status: { type: 'idle' } } }))
+      server!.stdout.write(serverMessage({ method: 'turn/completed', params: { status: 'interrupted' } }))
+      server!.stdout.write(serverMessage({ method: 'thread/status/changed', params: { status: { type: 'idle' } } }))
       await waitForReports()
       expect(reports).toHaveLength(reportCount)
 
       for (let index = 0; index < 253; index++) {
-        proxy!.stdout.write(serverFrame({ method: 'turn/started', params: { turn: { id: `turn-fill-${index}`, threadId: 'thread-1', status: 'inProgress' } } }))
+        server!.stdout.write(serverMessage({ method: 'turn/started', params: { turn: { id: `turn-fill-${index}`, threadId: 'thread-1', status: 'inProgress' } } }))
       }
       const cappedTurnId = (reports.at(-1)?.turnId as string | undefined)
       expect(cappedTurnId).toBe('turn-fill-252')
-      proxy!.stdout.write(serverFrame({ method: 'turn/started', params: { turn: { id: 'turn-after-cap', threadId: 'thread-1', status: 'inProgress' } } }))
+      server!.stdout.write(serverMessage({ method: 'turn/started', params: { turn: { id: 'turn-after-cap', threadId: 'thread-1', status: 'inProgress' } } }))
       expect(reports.at(-1)).toMatchObject({ event: 'work_snapshot', turnId: cappedTurnId })
       expect((reports.at(-1)?.evidence as Record<string, unknown>).completeness).toBe('incomplete')
     } finally {
@@ -343,19 +310,16 @@ describe('Codex App Server status observer', () => {
     const state: FakeProtocolState = {
       background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0,
     }
-    let proxy: FakeProcess | undefined
+    let server: FakeProcess | undefined
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: () => undefined,
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
-          const process = new FakeProcess()
-          writeFileSync(args[2].slice('unix://'.length), '')
-          return asChildProcess(process)
+          server = new FakeProcess()
+          attachStdioProtocol(server, state)
+          return asChildProcess(server)
         }
-        proxy = new FakeProcess()
-        attachProxyProtocol(proxy, state)
-        return asChildProcess(proxy)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
 
@@ -371,7 +335,7 @@ describe('Codex App Server status observer', () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
       expect(secondSettled).toBe(false)
       await Promise.all([first, second])
-      expect(proxy?.kill).toHaveBeenCalled()
+      expect(server?.kill).toHaveBeenCalled()
     } finally {
       state.responseDelay = 0
       await manager.dispose()
@@ -384,30 +348,25 @@ describe('Codex App Server status observer', () => {
     const state: FakeProtocolState = {
       background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0,
     }
-    let sidecar: FakeProcess | undefined
-    let proxy: FakeProcess | undefined
+    let server: FakeProcess | undefined
     const manager = new CodexAppServerManager({
-      tmpDir: directory,
       onReport: () => undefined,
       spawnProcess: (_command, args) => {
         if (args[0] === 'app-server' && args[1] === '--listen') {
-          sidecar = new FakeProcess()
-          setTimeout(() => writeFileSync(args[2].slice('unix://'.length), ''), 30)
-          return asChildProcess(sidecar)
+          server = new FakeProcess()
+          setTimeout(() => attachStdioProtocol(server!, state), 30)
+          return asChildProcess(server)
         }
-        proxy = new FakeProcess()
-        attachProxyProtocol(proxy, state)
-        return asChildProcess(proxy)
+        throw new Error(`Unexpected Codex App Server command: ${args.join(' ')}`)
       },
     })
 
     try {
       const preparation = manager.prepare('pty-1', directory, {})
       const shutdown = manager.dispose()
-      await expect(preparation).resolves.toMatchObject({ socketPath: expect.any(String) })
+      await expect(preparation).resolves.toEqual({ observerReady: true })
       await shutdown
-      expect(proxy?.kill).toHaveBeenCalled()
-      expect(sidecar?.kill).toHaveBeenCalled()
+      expect(server?.kill).toHaveBeenCalled()
     } finally {
       await manager.dispose()
       rmSync(directory, { recursive: true, force: true })

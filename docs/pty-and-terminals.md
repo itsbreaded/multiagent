@@ -153,6 +153,15 @@ to reduce cursor redraw/flicker in xterm panes. `tui.terminal_title=[]` suppress
 sequences that serve no purpose in an embedded pane. Keep these flags unless verified against
 current Codex behavior.
 
+Inline agent TUIs use erase-in-display (`ED2`) while repainting their viewport. xterm's
+`scrollOnEraseInDisplay` option is therefore set to `false` for all agent panes in
+`terminalOptions.ts`. With the default `true`, xterm preserves each erased viewport row by
+scrolling it into history; on a long inline session that creates avoidable scrollback and DOM
+work during redraw. `false` clears only the viewport, while ordinary line scrolling still adds
+new output to scrollback. The setting is applied at construction and on registry reattachment so
+metadata promotion and layout remounts cannot leave an old value behind. Shell panes retain the
+existing behavior because shell users may rely on cleared screens remaining in scrollback.
+
 ### cwd fallback
 
 Agent panes must not fall back to `os.homedir()` when their saved cwd is missing.
@@ -325,10 +334,11 @@ the renderer's current interrupt marker and the exact `idle_prompt` notification
 timer or watchdog. The renderer's idle-suspension coordinator checks the same pane state again
 in a microtask before invoking `pty:kill`, so work arriving before that commit cancels the kill.
 
-App-launched Codex has one pane-local App Server sidecar/proxy observer using a Unix socket and
-the same pane-scoped environment identity as its PTY. Sidecar setup may fall back to direct CLI
-before PTY creation. Once the live PTY exists, observer loss is incomplete/protected and does
-not kill/recreate the user's pane. Sidecar/proxy/socket cleanup is awaited for kill, PTY
-exit/error, host recovery, replacement, and shutdown. Direct CLI Codex and the independently
-researched OpenCode plugin each retain their own provider evidence rules; no provider semantics
-are copied across adapters.
+App-launched Codex has one pane-local App Server sidecar using the documented stdio JSONL
+transport and the same pane-scoped environment identity as its PTY. The user-facing Codex pane
+always remains a direct CLI session; the sidecar is only the status observer. Sidecar setup may
+fall back to direct CLI before PTY creation. Once the live PTY exists, observer loss is
+incomplete/protected and does not kill/recreate the user's pane. Sidecar cleanup is awaited for
+kill, PTY exit/error, host recovery, replacement, and shutdown. Direct CLI Codex and the
+independently researched OpenCode plugin each retain their own provider evidence rules; no
+provider semantics are copied across adapters.

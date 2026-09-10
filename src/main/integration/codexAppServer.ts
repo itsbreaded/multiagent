@@ -1,16 +1,10 @@
-import { randomBytes, randomUUID } from 'crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { existsSync } from 'fs'
-import { tmpdir } from 'os'
-import { unlinkSync } from 'fs'
-import { join } from 'path'
 import type { AgentWorkSnapshot } from '../../shared/types'
 import { MAX_AGENT_ID_LENGTH, MAX_AGENT_TRACKED_IDENTITIES, MAX_AGENT_WORK_ITEMS } from '../../shared/agentStatusEvidence'
 import type { AgentEventReport } from './agentSessionReportServer'
 
 const MAX_PAGES = 16
 const MAX_SEEN_TURNS = 256
-const SOCKET_WAIT_MS = 4000
 const REQUEST_TIMEOUT_MS = 3500
 
 type SpawnFn = (command: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcessWithoutNullStreams
@@ -21,43 +15,31 @@ interface JsonRpcResult {
   error?: unknown
 }
 
-interface StdioWebSocketOptions {
+interface StdioJsonRpcOptions {
   onMessage: (message: unknown) => void
   onClosed: () => void
 }
 
-/** Small RFC 6455 client for the documented `codex app-server proxy` stdio bridge. */
-class StdioWebSocket {
-  private buffer = Buffer.alloc(0)
-  private handshakeDone = false
+/** JSONL client for Codex's documented `app-server --listen stdio://` transport. */
+class StdioJsonRpc {
+  private buffer = ''
   private closed = false
   private nextRequestId = 1
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
-  private readonly handshake: Promise<void>
-  private resolveHandshake!: () => void
-  private rejectHandshake!: (error: Error) => void
-  private fragment: Buffer | null = null
 
-  constructor(private readonly process: ChildProcessWithoutNullStreams, private readonly options: StdioWebSocketOptions) {
-    this.handshake = new Promise<void>((resolve, reject) => { this.resolveHandshake = resolve; this.rejectHandshake = reject })
-    process.stdout.on('data', (chunk: Buffer) => this.receive(chunk))
+  constructor(private readonly process: ChildProcessWithoutNullStreams, private readonly options: StdioJsonRpcOptions) {
+    process.stdout.on('data', (chunk: Buffer | string) => this.receive(chunk.toString()))
+    // The protocol is on stdout; consume stderr so a verbose provider cannot block the
+    // sidecar by filling its pipe.
+    process.stderr.on('data', () => undefined)
     process.stdout.on('error', (error) => this.fail(error instanceof Error ? error : new Error(String(error))))
     process.on('error', (error) => this.fail(error))
-    process.on('close', () => this.fail(new Error('Codex App Server proxy closed')))
-  }
-
-  async connect(): Promise<void> {
-    const key = randomBytes(16).toString('base64')
-    this.process.stdin.write(
-      `GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
-    )
-    await this.handshake
+    process.on('close', () => this.fail(new Error('Codex App Server closed')))
   }
 
   request(method: string, params: unknown = {}): Promise<unknown> {
-    if (this.closed) return Promise.reject(new Error('Codex App Server proxy is closed'))
+    if (this.closed) return Promise.reject(new Error('Codex App Server is closed'))
     const id = this.nextRequestId++
-    const message = new TextEncoder().encode(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
@@ -65,7 +47,7 @@ class StdioWebSocket {
       }, REQUEST_TIMEOUT_MS)
       this.pending.set(id, { resolve, reject, timer })
       try {
-        this.writeFrame(message)
+        this.write({ jsonrpc: '2.0', id, method, params })
       } catch (error) {
         clearTimeout(timer)
         this.pending.delete(id)
@@ -76,7 +58,9 @@ class StdioWebSocket {
 
   notify(method: string, params: unknown = {}): void {
     if (this.closed) return
-    this.writeFrame(new TextEncoder().encode(JSON.stringify({ jsonrpc: '2.0', method, params })))
+    try { this.write({ jsonrpc: '2.0', method, params }) } catch (error) {
+      this.fail(error instanceof Error ? error : new Error(String(error)))
+    }
   }
 
   close(): void {
@@ -84,94 +68,31 @@ class StdioWebSocket {
     this.closed = true
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
-      pending.reject(new Error('Codex App Server proxy disposed'))
+      pending.reject(new Error('Codex App Server disposed'))
     }
     this.pending.clear()
     try { this.process.stdin.end() } catch { /* already closed */ }
     try { if (this.process.exitCode === null) this.process.kill() } catch { /* already closed */ }
   }
 
-  private writeFrame(payload: Uint8Array, opcode = 1): void {
-    const length = payload.byteLength
-    let header: Buffer
-    if (length < 126) {
-      header = Buffer.from([0x80 | opcode, 0x80 | length])
-    } else if (length <= 0xffff) {
-      header = Buffer.alloc(4)
-      header[0] = 0x80 | opcode
-      header[1] = 0x80 | 126
-      header.writeUInt16BE(length, 2)
-    } else {
-      header = Buffer.alloc(10)
-      header[0] = 0x80 | opcode
-      header[1] = 0x80 | 127
-      header.writeBigUInt64BE(BigInt(length), 2)
-    }
-    const mask = randomBytes(4)
-    const body = Buffer.from(payload)
-    for (let i = 0; i < body.length; i++) body[i] ^= mask[i % 4]
-    this.process.stdin.write(Buffer.concat([header, mask, body]))
+  private write(message: Record<string, unknown>): void {
+    this.process.stdin.write(`${JSON.stringify(message)}\n`)
   }
 
-  private receive(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk])
-    if (!this.handshakeDone) {
-      const end = this.buffer.indexOf(Buffer.from('\r\n\r\n'))
-      if (end < 0) return
-      const response = this.buffer.subarray(0, end).toString('ascii')
-      this.buffer = this.buffer.subarray(end + 4)
-      if (!/^HTTP\/1\.1 101\b/m.test(response)) {
-        this.fail(new Error('Codex App Server proxy did not accept WebSocket upgrade'))
-        return
-      }
-      this.handshakeDone = true
-      this.resolveHandshake()
-    }
-    while (!this.closed) {
-      if (this.buffer.length < 2) return
-      const first = this.buffer[0]
-      const second = this.buffer[1]
-      let offset = 2
-      let length = second & 0x7f
-      if (length === 126) {
-        if (this.buffer.length < 4) return
-        length = this.buffer.readUInt16BE(2)
-        offset = 4
-      } else if (length === 127) {
-        if (this.buffer.length < 10) return
-        const longLength = this.buffer.readBigUInt64BE(2)
-        if (longLength > BigInt(Number.MAX_SAFE_INTEGER)) { this.fail(new Error('Codex App Server frame is too large')); return }
-        length = Number(longLength)
-        offset = 10
-      }
-      const masked = (second & 0x80) !== 0
-      const maskOffset = masked ? offset : -1
-      if (masked) offset += 4
-      if (this.buffer.length < offset + length) return
-      const frame = this.buffer.subarray(offset, offset + length)
-      const data = Buffer.from(frame)
-      if (masked) {
-        const mask = this.buffer.subarray(maskOffset, maskOffset + 4)
-        for (let i = 0; i < data.length; i++) data[i] ^= mask[i % 4]
-      }
-      this.buffer = this.buffer.subarray(offset + length)
-      const opcode = first & 0x0f
-      if (opcode === 8) { this.fail(new Error('Codex App Server proxy sent close')); return }
-      if (opcode === 9) { this.writeFrame(data, 10); continue }
-      if (opcode === 0) this.fragment = Buffer.concat([this.fragment ?? Buffer.alloc(0), data])
-      else if (opcode === 1 && (first & 0x80) === 0) this.fragment = data
-      else if (opcode === 1) this.dispatch(data)
-      if (opcode === 0 && (first & 0x80) !== 0) {
-        const complete = this.fragment ?? Buffer.alloc(0)
-        this.fragment = null
-        this.dispatch(complete)
-      }
+  private receive(chunk: string): void {
+    this.buffer += chunk
+    let newline = this.buffer.indexOf('\n')
+    while (newline >= 0) {
+      const line = this.buffer.slice(0, newline).replace(/\r$/, '')
+      this.buffer = this.buffer.slice(newline + 1)
+      if (line.trim()) this.dispatch(line)
+      newline = this.buffer.indexOf('\n')
     }
   }
 
-  private dispatch(data: Buffer): void {
+  private dispatch(line: string): void {
     let message: JsonRpcResult & { method?: string; params?: unknown }
-    try { message = JSON.parse(data.toString('utf8')) as typeof message } catch { return }
+    try { message = JSON.parse(line) as typeof message } catch { return }
     if (typeof message.id === 'number') {
       const pending = this.pending.get(message.id)
       if (!pending) return
@@ -187,7 +108,6 @@ class StdioWebSocket {
   private fail(error: Error): void {
     if (this.closed) return
     this.closed = true
-    if (!this.handshakeDone) this.rejectHandshake(error)
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(error)
@@ -201,17 +121,14 @@ export interface CodexAppServerManagerOptions {
   onReport: (report: AgentEventReport) => void
   spawnProcess?: SpawnFn
   command?: string
-  tmpDir?: string
 }
 
 interface PaneObserver {
   ptyId: string
   cwd: string
   env: Record<string, string>
-  socketPath: string
   sidecar: ChildProcessWithoutNullStreams
-  proxy: ChildProcessWithoutNullStreams
-  ws: StdioWebSocket
+  rpc: StdioJsonRpc
   sessionId?: string
   turnId?: string
   turnGeneration: number
@@ -222,7 +139,7 @@ interface PaneObserver {
 }
 
 export interface CodexPreparedPane {
-  socketPath: string
+  observerReady: true
 }
 
 export class CodexAppServerManager {
@@ -231,13 +148,11 @@ export class CodexAppServerManager {
   private readonly preparations = new Map<string, Promise<CodexPreparedPane | null>>()
   private readonly spawnProcess: SpawnFn
   private readonly command: string
-  private readonly tmpDir: string
   private disposing = false
 
   constructor(private readonly options: CodexAppServerManagerOptions) {
     this.spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions) as ChildProcessWithoutNullStreams)
     this.command = options.command ?? (process.platform === 'win32' ? 'codex.cmd' : 'codex')
-    this.tmpDir = options.tmpDir ?? tmpdir()
   }
 
   async prepare(ptyId: string, cwd: string, env: Record<string, string>): Promise<CodexPreparedPane | null> {
@@ -255,32 +170,28 @@ export class CodexAppServerManager {
 
   private async prepareInternal(ptyId: string, cwd: string, env: Record<string, string>): Promise<CodexPreparedPane | null> {
     if (this.panes.has(ptyId)) return null
-    const socketPath = join(this.tmpDir, `multiagent-codex-${process.pid}-${randomUUID()}.sock`)
     let sidecar: ChildProcessWithoutNullStreams | undefined
-    let proxy: ChildProcessWithoutNullStreams | undefined
+    let rpc: StdioJsonRpc | undefined
     try {
-      const listen = `unix://${socketPath.replace(/\\/g, '/')}`
       const processOptions = {
         cwd, env, stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
         windowsHide: true, shell: process.platform === 'win32',
       }
-      sidecar = this.spawnProcess(this.command, ['app-server', '--listen', listen], { ...processOptions, stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'] })
-      await this.waitForSocket(sidecar, socketPath)
-      proxy = this.spawnProcess(this.command, ['app-server', 'proxy', '--sock', socketPath], processOptions)
-      const observer = this.createObserver(ptyId, cwd, env, socketPath, sidecar, proxy)
-      await observer.ws.connect()
-      await observer.ws.request('initialize', {
+      sidecar = this.spawnProcess(this.command, ['app-server', '--listen', 'stdio://'], processOptions)
+      const observer = this.createObserver(ptyId, cwd, env, sidecar)
+      rpc = observer.rpc
+      await rpc.request('initialize', {
         clientInfo: { name: 'multiagent', title: 'MultiAgent', version: '0.3.42' },
         capabilities: { experimentalApi: true },
       })
-      observer.ws.notify('initialized', {})
+      rpc.notify('initialized', {})
       this.panes.set(ptyId, observer)
-      return { socketPath }
+      return { observerReady: true }
     } catch (error) {
       console.warn('[MultiAgent] Codex App Server preparation failed; using direct CLI:', error)
-      try { proxy?.kill() } catch { /* already closed */ }
+      rpc?.close()
       try { sidecar?.kill() } catch { /* already closed */ }
-      try { unlinkSync(socketPath) } catch { /* not created */ }
+      if (sidecar) await waitForExit(sidecar, 1000)
       return null
     }
   }
@@ -296,7 +207,7 @@ export class CodexAppServerManager {
       pane.seenTurnIds = new Set([pane.turnId])
       pane.binding = pane.binding.then(async () => {
         if (previousSessionId) {
-          try { await pane.ws.request('thread/unsubscribe', { threadId: previousSessionId }) } catch { /* connection may already be gone */ }
+          try { await pane.rpc.request('thread/unsubscribe', { threadId: previousSessionId }) } catch { /* connection may already be gone */ }
         }
         if (!pane.disposing && pane.sessionId === sessionId) await this.resumeAndRefresh(pane)
       }).catch(() => undefined)
@@ -331,14 +242,11 @@ export class CodexAppServerManager {
     const disposal = (async () => {
       await pane.binding
       if (pane.sessionId) {
-        try { await pane.ws.request('thread/unsubscribe', { threadId: pane.sessionId }) } catch { /* connection may already be gone */ }
+        try { await pane.rpc.request('thread/unsubscribe', { threadId: pane.sessionId }) } catch { /* connection may already be gone */ }
       }
-      pane.ws.close()
-      try { if (pane.proxy.exitCode === null) pane.proxy.kill() } catch { /* already closed */ }
+      pane.rpc.close()
       try { if (pane.sidecar.exitCode === null) pane.sidecar.kill() } catch { /* already closed */ }
-      await waitForExit(pane.proxy, 1000)
       await waitForExit(pane.sidecar, 1000)
-      try { unlinkSync(pane.socketPath) } catch { /* already absent */ }
     })().finally(() => {
       if (this.panes.get(ptyId) === pane) this.panes.delete(ptyId)
       this.disposals.delete(ptyId)
@@ -354,39 +262,44 @@ export class CodexAppServerManager {
     await Promise.all([...ptyIds].map((ptyId) => this.disposePty(ptyId)))
   }
 
-  private createObserver(ptyId: string, cwd: string, env: Record<string, string>, socketPath: string, sidecar: ChildProcessWithoutNullStreams, proxy: ChildProcessWithoutNullStreams): PaneObserver {
+  private createObserver(ptyId: string, cwd: string, env: Record<string, string>, sidecar: ChildProcessWithoutNullStreams): PaneObserver {
     const pane: PaneObserver = {
-      ptyId, cwd, env, socketPath, sidecar, proxy,
-      ws: undefined as unknown as StdioWebSocket,
+      ptyId, cwd, env, sidecar,
+      rpc: undefined as unknown as StdioJsonRpc,
       turnGeneration: 0, seenTurnIds: new Set(), binding: Promise.resolve(), reconnects: 0, disposing: false,
     }
-    pane.ws = new StdioWebSocket(proxy, {
+    pane.rpc = new StdioJsonRpc(sidecar, {
       onMessage: (message) => this.onMessage(pane, message),
-      onClosed: () => { void this.onObserverClosed(pane) },
+      onClosed: () => { void this.onObserverClosed(pane, pane.rpc) },
     })
     return pane
   }
 
-  private async onObserverClosed(pane: PaneObserver): Promise<void> {
-    if (pane.disposing || !this.panes.has(pane.ptyId)) return
+  private async onObserverClosed(pane: PaneObserver, closedRpc: StdioJsonRpc): Promise<void> {
+    if (pane.disposing || pane.rpc !== closedRpc || !this.panes.has(pane.ptyId)) return
     this.emitIncomplete(pane, 'busy')
     if (pane.reconnects >= 1) return
     pane.reconnects++
+    let sidecar: ChildProcessWithoutNullStreams | undefined
+    let rpc: StdioJsonRpc | undefined
     try {
-      const proxy = this.spawnProcess(this.command, ['app-server', 'proxy', '--sock', pane.socketPath], {
+      sidecar = this.spawnProcess(this.command, ['app-server', '--listen', 'stdio://'], {
         cwd: pane.cwd, env: pane.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
         shell: process.platform === 'win32',
       })
-      pane.proxy = proxy
-      pane.ws = new StdioWebSocket(proxy, { onMessage: (message) => this.onMessage(pane, message), onClosed: () => { void this.onObserverClosed(pane) } })
-      await pane.ws.connect()
-      await pane.ws.request('initialize', {
+      pane.sidecar = sidecar
+      rpc = new StdioJsonRpc(sidecar, { onMessage: (message) => this.onMessage(pane, message), onClosed: () => { if (rpc) void this.onObserverClosed(pane, rpc) } })
+      pane.rpc = rpc
+      await rpc.request('initialize', {
         clientInfo: { name: 'multiagent', title: 'MultiAgent', version: '0.3.42' },
         capabilities: { experimentalApi: true },
       })
-      pane.ws.notify('initialized', {})
+      rpc.notify('initialized', {})
       if (pane.sessionId) await this.resumeAndRefresh(pane)
     } catch {
+      rpc?.close()
+      try { if (sidecar && sidecar.exitCode === null) sidecar.kill() } catch { /* already closed */ }
+      if (sidecar) await waitForExit(sidecar, 1000)
       this.emitIncomplete(pane, 'busy')
     }
   }
@@ -504,7 +417,7 @@ export class CodexAppServerManager {
     let cursor: string | undefined
     const seenCursors = new Set<string>()
     for (let page = 0; page < MAX_PAGES; page++) {
-      const result = await pane.ws.request(method, cursor ? { ...params, cursor } : params)
+      const result = await pane.rpc.request(method, cursor ? { ...params, cursor } : params)
       const payload = isRecord(result) ? result : {}
       const pageItems = Array.isArray(result)
         ? result
@@ -559,20 +472,10 @@ export class CodexAppServerManager {
     this.options.onReport({ ptyId: pane.ptyId, agentKind: 'codex', event, sessionId: pane.sessionId, turnId, evidence })
   }
 
-  private async waitForSocket(sidecar: ChildProcessWithoutNullStreams, socketPath: string): Promise<void> {
-    const deadline = Date.now() + SOCKET_WAIT_MS
-    while (Date.now() < deadline) {
-      if (existsSync(socketPath)) return
-      if (sidecar.exitCode !== null) throw new Error('Codex App Server exited before listening')
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-    throw new Error('Timed out waiting for Codex App Server socket')
-  }
-
   private async resumeAndRefresh(pane: PaneObserver): Promise<void> {
     if (!this.isCurrentPane(pane) || !pane.sessionId) return
     try {
-      await pane.ws.request('thread/resume', { threadId: pane.sessionId })
+      await pane.rpc.request('thread/resume', { threadId: pane.sessionId })
       await this.refresh(pane, 'idle')
     } catch {
       this.emitIncomplete(pane, 'busy')
