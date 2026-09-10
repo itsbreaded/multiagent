@@ -148,10 +148,12 @@ provider/model/auth overrides belong in `SessionSpawner.agentEnv('claude')`. Let
 Claude `tui` setting and `/tui` command control classic vs fullscreen rendering unless a future
 setting deliberately maps to process-scoped env.
 
-Codex panes pass `--no-alt-screen`, `-c tui.animations=false`, and `-c tui.terminal_title=[]`
-to reduce cursor redraw/flicker in xterm panes. `tui.terminal_title=[]` suppresses OSC title
-sequences that serve no purpose in an embedded pane. Keep these flags unless verified against
-current Codex behavior.
+Codex panes use Codex's default alternate-screen TUI mode, with `-c tui.animations=false` and
+`-c tui.terminal_title=[]` to reduce cursor redraw/flicker in xterm panes. Keeping the alternate
+screen prevents a resumed conversation's TUI replay from being accumulated as ordinary xterm
+scrollback; the viewport should still open on the current Codex screen. `tui.terminal_title=[]`
+suppresses OSC title sequences that serve no purpose in an embedded pane. Do not reintroduce
+`--no-alt-screen` without rechecking long-session resume performance and scrollback behavior.
 
 Inline agent TUIs use erase-in-display (`ED2`) while repainting their viewport. xterm's
 `scrollOnEraseInDisplay` option is therefore set to `false` for all agent panes in

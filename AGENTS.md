@@ -117,8 +117,8 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   `resumeError`. Shell panes may fall back.
 - Don't set `CLAUDECODE`/`CLAUDE_CODE_DISABLE_*`/`CLAUDE_CODE_NO_FLICKER` in the generic or
   default Claude env; `buildEnv` scrubs inherited copies. Only default Claude env is
-  `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`. Keep Codex `--no-alt-screen`
-  `-c tui.animations=false -c tui.terminal_title=[]`.
+  `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`. Keep Codex's default alternate-screen TUI mode and
+  retain `-c tui.animations=false -c tui.terminal_title=[]`.
 - Inline agent panes use viewport-only xterm ED2 (`scrollOnEraseInDisplay=false`) so TUI redraws
   do not turn the current viewport into duplicate scrollback; shell panes retain `true`.
 - Shell CWD via OSC 633, sourcing the `<userData>`-materialized copy of

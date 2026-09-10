@@ -372,7 +372,6 @@ function claudeCliArgs(sessionId?: string): string {
 
 function codexCliArgs(): string {
   const args = [
-    '--no-alt-screen',
     '-c',
     psSingleQuoted('tui.animations=false'),
     '-c',

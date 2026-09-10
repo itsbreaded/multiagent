@@ -21,6 +21,11 @@ describe('SessionSpawner launch commands (spec 047 phase 4)', () => {
     expect(cmd).toContain('resume')
   })
 
+  it('lets Codex use its default alternate-screen TUI mode', () => {
+    const cmd = newSessionCommand('codex')
+    expect(cmd).not.toContain('--no-alt-screen')
+  })
+
   it('app-launched Claude keeps --session-id on a new session', () => {
     const cmd = newSessionCommand('claude', '11111111-2222-3333-4444-555555555555')
     expect(cmd).toContain('--session-id')
