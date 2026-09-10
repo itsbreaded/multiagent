@@ -37,7 +37,7 @@ const WEBGL_BACKEND: RendererBackend = {
   isViable: (caps) => caps.webgl && !webglDemoted,
   attach: (xterm) => {
     try {
-      const addon = new WebglAddon()
+      const addon = new WebglAddon({ customGlyphs: true })
       addon.onContextLoss(() => {
         webglDemoted = true
         try { addon.dispose() } catch { /* ignore */ }

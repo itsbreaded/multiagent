@@ -194,7 +194,6 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         scrollback: storeState.terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES,
         scrollOnEraseInDisplay: scrollOnEraseInDisplayForPane(pane.paneType),
         allowTransparency: false,
-        customGlyphs: true,
         minimumContrastRatio: storeState.terminalMinimumContrastRatio,
         rescaleOverlappingGlyphs: storeState.terminalRescaleOverlappingGlyphs,
         windowOptions: {
@@ -217,7 +216,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         }
         // Legacy path: unconditional WebGL attempt with try/catch fallback
         try {
-          const webglAddon = new WebglAddon()
+          const webglAddon = new WebglAddon({ customGlyphs: true })
           webglAddon.onContextLoss(() => {
             try { webglAddon.dispose() } catch { /* ignore */ }
           })

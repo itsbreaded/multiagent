@@ -16,3 +16,17 @@ import { installMockIpc } from './mockIpc'
 
 vi.mock('zustand')
 installMockIpc()
+
+// xterm 6.1 measures DOM-renderer glyph widths through a 2D canvas during
+// Terminal.open(). happy-dom exposes getContext() but returns null, so provide
+// the small part of the CanvasRenderingContext2D API used by that measurement.
+// WebGL and other context requests retain happy-dom's original behavior.
+const canvas2dContext = {
+  font: '',
+  measureText: () => ({ width: 8 }),
+} as unknown as CanvasRenderingContext2D
+const originalCanvasGetContext = HTMLCanvasElement.prototype.getContext
+vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement, contextId: string) {
+  if (contextId === '2d') return canvas2dContext
+  return originalCanvasGetContext.call(this, contextId)
+})
