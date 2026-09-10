@@ -176,9 +176,10 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     if (!containerRef.current) return
 
     const createXterm = (): { xterm: XTerm; fitAddon: FitAddon; backendHandle: { dispose(): void } } => {
-      const theme = pane.paneType === 'agent'
-        ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
-        : XTERM_THEME
+      // Keep the xterm caret visible in agent input areas. xterm composites a
+      // transparent cursor against the terminal background, which makes it
+      // effectively black on Claude's dark prompt row.
+      const theme = XTERM_THEME
 
       const storeState = useSettingsStore.getState()
       const openExternalLink = createPrimaryLinkActivator((_event, uri) => {
@@ -244,9 +245,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     const { xterm, fitAddon } = entry
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
-    xterm.options.theme = pane.paneType === 'agent'
-      ? { ...XTERM_THEME, cursor: 'transparent', cursorAccent: 'transparent' }
-      : XTERM_THEME
+    xterm.options.theme = XTERM_THEME
     xterm.options.cursorBlink = pane.paneType !== 'agent'
     // The registry can return an instance created before this pane's metadata
     // settled (or a previously promoted shell), so keep the option in sync on
