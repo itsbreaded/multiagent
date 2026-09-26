@@ -73,12 +73,30 @@ describe('useJiraStore', () => {
       return success('DZ-1234')
     })
     await useJiraStore.getState().hydrateSettings()
-    useJiraStore.getState().syncProjects([{ tabId: 'one', label: 'DZ-1234' }])
+    useJiraStore.getState().syncProjects([{ tabId: 'one', label: 'Notes' }])
     await useJiraStore.getState().saveSettings({ baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], apiToken: 'token' })
     await flush()
     expect(ipc.invoke.mock.calls.filter((call) => call[0] === 'jira:fetch-status')).toHaveLength(0)
-    await useJiraStore.getState().refreshTab('one')
+    useJiraStore.getState().syncProjects([{ tabId: 'one', label: 'DZ-1234' }])
+    await flush()
     expect(ipc.invoke.mock.calls.filter((call) => call[0] === 'jira:fetch-status')).toHaveLength(1)
+  })
+
+  it('refreshes a renamed matching ticket after settings save suppresses initial refreshes', async () => {
+    const ipc = installMockIpc()
+    ipc.invoke.mockImplementation(async (channel: string, value?: string) => {
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false }
+      if (channel === 'jira:save-settings') return { ok: true, settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true } }
+      if (channel === 'jira:fetch-status') return success(value as string)
+      return { ok: true }
+    })
+    await useJiraStore.getState().hydrateSettings()
+    useJiraStore.getState().syncProjects([{ tabId: 'one', label: 'DZ-1234' }])
+    await useJiraStore.getState().saveSettings({ baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], apiToken: 'token' })
+    await useJiraStore.getState().refreshTab('one')
+    useJiraStore.getState().syncProjects([{ tabId: 'one', label: 'DZ-5678' }])
+    await flush()
+    expect(ipc.invoke.mock.calls.filter((call) => call[0] === 'jira:fetch-status').map((call) => call[1])).toEqual(['DZ-1234', 'DZ-5678'])
   })
 
   it('retains a successful result as stale after a failed refresh', async () => {

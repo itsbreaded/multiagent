@@ -148,9 +148,10 @@ export const useJiraStore = create<JiraStoreState>((set, get) => ({
       const previousProject = state.projects[input.tabId]
       const previousRow = state.rows[input.tabId]
       const issueChanged = previousProject !== undefined && previousProject.issueKey !== project.issueKey
+      const labelChanged = state.labels[input.tabId] !== input.label
       if (previousRow && !issueChanged) {
         rows[input.tabId] = { ...previousRow, issueKey: project.issueKey }
-      } else if (!suppressed[input.tabId]) {
+      } else if (!suppressed[input.tabId] || labelChanged || issueChanged) {
         rows[input.tabId] = {
           tabId: input.tabId,
           issueKey: project.issueKey,
