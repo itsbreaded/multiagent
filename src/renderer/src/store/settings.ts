@@ -22,7 +22,7 @@ import {
   isValidTrigger,
 } from '../utils/terminalKeyBindings'
 
-export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers' | 'updates'
+export type SettingsSection = 'appearance' | 'hotkeys' | 'terminal' | 'mcp' | 'providers' | 'jira' | 'updates'
 export type { GpuAccelerationPref }
 
 // Outcome of a mutating terminal-key-binding action. The store is the final

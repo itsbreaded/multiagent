@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { AppChrome } from './components/AppChrome'
 import { LeftChrome } from './components/TabBar'
@@ -12,11 +12,14 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { TerminalHostRecoveryBanner } from './components/TerminalHostRecoveryBanner'
 import { startIdleAgentSuspensionCoordinator, usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
+import { useSessionsStore } from './store/sessions'
+import { useJiraStore } from './store/jira'
 import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { absorbDroppedTab, transferDroppedPane, PANE_DRAG_MIME, TAB_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
 import type { Tab, ProviderAvailability } from '../../shared/types'
+import { computeLabels } from './utils/tabLabels'
 
 function useGlobalKeyboard() {
   const addTab = usePanesStore((s) => s.addTab)
@@ -98,12 +101,28 @@ export default function App(): JSX.Element {
   const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
 
   const tabs = usePanesStore((s) => s.tabs)
+  const sessions = useSessionsStore((s) => s.sessions)
   const windowId = usePanesStore((s) => s.windowId)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const sidebarPanelSizes = usePanesStore((s) => s.sidebarPanelSizes)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
+
+  // Jira is coordinated from App rather than Sidebar so startup lookup still
+  // happens when the sidebar is collapsed. Detached renderers never perform
+  // Jira lookups; their tabs are represented in the primary renderer.
+  const jiraHydrated = useJiraStore((s) => s.hydrated)
+  const hydrateJiraSettings = useJiraStore((s) => s.hydrateSettings)
+  const syncJiraProjects = useJiraStore((s) => s.syncProjects)
+  const jiraLabels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
+  useEffect(() => {
+    if (!isDetachedWindow && !jiraHydrated) void hydrateJiraSettings()
+  }, [isDetachedWindow, jiraHydrated, hydrateJiraSettings])
+  useEffect(() => {
+    if (isDetachedWindow || !layoutReady || !jiraHydrated) return
+    syncJiraProjects(Array.from(jiraLabels.entries()).map(([tabId, label]) => ({ tabId, label })))
+  }, [isDetachedWindow, layoutReady, jiraHydrated, jiraLabels, syncJiraProjects])
 
   // Detect VS Code availability once on startup
   const setVsCodeAvailable = usePanesStore((s) => s.setVsCodeAvailable)

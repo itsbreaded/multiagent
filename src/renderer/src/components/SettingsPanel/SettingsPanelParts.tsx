@@ -27,6 +27,7 @@ export function SearchResults({
   showRescaleSetting,
   showScrollbackSetting,
   showIdleSuspensionSetting,
+  showJiraSetting,
   anyTerminalSetting,
   visibleHotkeys,
   effectiveHotkeys,
@@ -47,6 +48,7 @@ export function SearchResults({
   showRescaleSetting: boolean
   showScrollbackSetting: boolean
   showIdleSuspensionSetting: boolean
+  showJiraSetting: boolean
   anyTerminalSetting: boolean
   visibleHotkeys: HotkeyId[]
   effectiveHotkeys: ReturnType<typeof buildHotkeys>
@@ -63,7 +65,8 @@ export function SearchResults({
   const hasMcp        = matchesSettingQuery(normalizedQuery, MCP_KEYWORDS.join(' '))
   const hasProviders  = matchesSettingQuery(normalizedQuery, PROVIDER_KEYWORDS.join(' '))
   const hasUpdates    = matchesSettingQuery(normalizedQuery, UPDATE_KEYWORDS.join(' '))
-  const hasAnything   = hasAppearance || hasHotkeys || anyTerminalSetting || hasMcp || hasProviders || hasUpdates
+  const hasJira       = showJiraSetting
+  const hasAnything   = hasAppearance || hasHotkeys || anyTerminalSetting || hasMcp || hasProviders || hasJira || hasUpdates
 
   if (!hasAnything) return <EmptyMessage>No settings match your search.</EmptyMessage>
 
@@ -147,6 +150,13 @@ export function SearchResults({
           title="Agent Providers"
           description="Set API keys and model overrides for Claude and Codex."
           onNavigate={() => onNavigate('providers')}
+        />
+      )}
+      {hasJira && (
+        <SettingNavCard
+          title="Jira status badges"
+          description="Configure Jira credentials, issue prefixes, and sidebar status lookups."
+          onNavigate={() => onNavigate('jira')}
         />
       )}
       {hasUpdates && (

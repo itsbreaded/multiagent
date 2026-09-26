@@ -219,6 +219,16 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   on the feed/publish config. Release: `npm version patch` then `publish.bat` (pushes the tag
   that CI builds). Don't hardcode tokens in source.
 
+### Jira sidebar status badges → [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md)
+
+- Keep Jira persistence and network access main-owned; the settings form may hold
+  a decrypted token only transiently for its standard password Show/Hide control.
+  Never persist that value in renderer state, token persistence is encrypted/
+  fail-closed, and Jira status lookups are GET-only with no polling, writes, or
+  automatic tab closure.
+- Route badge activation through main-owned issue-key URL construction and the
+  external-browser allowlist; never expose credential-bearing URLs or trace args.
+
 ## Docs index
 
 | File | Covers |
@@ -229,5 +239,6 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 | [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md) | Hook-based session-id linking: the managed-hook install, Claude vs Codex differences, the report server, failure modes, file map |
 | [`docs/testing.md`](docs/testing.md) | Vitest projects, postinstall/native rebuild, the PATH-rewrite guard, testable extractions, Zustand mock, determinism, E2E, coverage ratchets |
 | [`docs/packaging-and-release.md`](docs/packaging-and-release.md) | Per-OS `dist` output, signing/notarization deferral, icons, asar/native modules, auto-update, release publish flow, `patch-package` |
+| [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md) | Jira sidebar status badge ownership, encrypted credentials, lookup lifecycle, stale state, trace privacy, and external links |
 | [`docs/writing-specs.md`](docs/writing-specs.md) | Behavioral contracts, acceptance scenarios, definition of done, and spec lifecycle |
 | [`docs/writing-plans.md`](docs/writing-plans.md) | Detailed implementation-plan structure, lifecycle, task quality, and blind pre-execution review |

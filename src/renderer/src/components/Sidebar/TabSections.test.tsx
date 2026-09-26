@@ -5,12 +5,24 @@ import type { PaneLeaf, Tab } from '../../../../shared/types'
 import { installMockIpc } from '../../../../../tests/mockIpc'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
+import { useJiraStore } from '../../store/jira'
 import { isIdleAgentSuspensionEligible } from '../../store/idleAgentSuspension'
 import { TabSections } from './TabSections'
+
+const TEST_BASE_URL = 'https://jira.example.com'
 
 beforeEach(() => {
   installMockIpc()
   useSettingsStore.setState({ showGitBranchBadges: false })
+  useJiraStore.setState({
+    settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false },
+    hydrated: false,
+    configVersion: 0,
+    labels: {},
+    projects: {},
+    rows: {},
+    suppressedInitialTabs: {},
+  })
 })
 
 afterEach(() => {
@@ -217,5 +229,64 @@ describe('TabSections - detached tab reorder', () => {
       localBefore.id,
       localAfter.id,
     ])
+  })
+})
+
+describe('TabSections - Jira status badges', () => {
+  it('renders a clickable status badge without changing the active folder', () => {
+    const tab = tabWithLabel('jira-tab', 'DZ-1234')
+    usePanesStore.setState({ tabs: [tab], activeTabId: tab.id })
+    useJiraStore.setState({
+      hydrated: true,
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      projects: { [tab.id]: { tabId: tab.id, label: 'DZ-1234', issueKey: 'DZ-1234', prefix: 'DZ-' } },
+      rows: {
+        [tab.id]: {
+          tabId: tab.id,
+          issueKey: 'DZ-1234',
+          issueUrl: `${TEST_BASE_URL}/browse/DZ-1234`,
+          statusName: 'Closed',
+          phase: 'success',
+          generation: 1,
+          configVersion: 0,
+          linkable: true,
+        },
+      },
+    })
+    const ipc = installMockIpc()
+
+    render(<TabSections />)
+
+    const badge = screen.getByRole('link', { name: /DZ-1234: Closed/ })
+    expect(badge).toHaveAttribute('href', `${TEST_BASE_URL}/browse/DZ-1234`)
+    fireEvent.click(badge)
+    expect(ipc.invoke).toHaveBeenCalledWith('jira:open-issue', 'DZ-1234')
+    expect(usePanesStore.getState().activeTabId).toBe(tab.id)
+  })
+
+  it('offers refresh in the matching project context menu', () => {
+    const tab = tabWithLabel('jira-tab', 'DZ-1234')
+    usePanesStore.setState({ tabs: [tab], activeTabId: tab.id })
+    useJiraStore.setState({
+      hydrated: true,
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      projects: { [tab.id]: { tabId: tab.id, label: 'DZ-1234', issueKey: 'DZ-1234', prefix: 'DZ-' } },
+      rows: {
+        [tab.id]: {
+          tabId: tab.id,
+          issueKey: 'DZ-1234',
+          statusName: 'In Progress',
+          phase: 'success',
+          generation: 1,
+          configVersion: 0,
+          linkable: false,
+        },
+      },
+    })
+    const ipc = installMockIpc()
+    render(<TabSections />)
+    fireEvent.contextMenu(tabHeader('DZ-1234'))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Jira status' }))
+    expect(ipc.invoke).toHaveBeenCalledWith('jira:fetch-status', 'DZ-1234')
   })
 })

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import * as os from 'os'
 import type { IPCChannels, InvokeChannels, EventChannels, SendChannels, IpcBridge } from '../shared/types'
+import { traceInvokeArgs } from '../shared/ipcTrace'
 
 type TraceRecord = { channel: string; args: unknown[] }
 const e2eTraceEnabled = !!process.env['MULTIAGENT_E2E_USER_DATA_DIR']
@@ -26,7 +27,10 @@ if (e2eTraceEnabled) {
 // Expose typed IPC bridge to renderer
 const bridge: IpcBridge = {
   invoke<C extends InvokeChannels>(channel: C, ...args: Parameters<IPCChannels[C]>): Promise<ReturnType<IPCChannels[C]>> {
-    if (e2eTraceEnabled) pushBounded(invokes, { channel, args })
+    if (e2eTraceEnabled) {
+      const traceArgs = traceInvokeArgs(channel, args)
+      if (traceArgs) pushBounded(invokes, { channel, args: traceArgs })
+    }
     return ipcRenderer.invoke(channel, ...args) as Promise<ReturnType<IPCChannels[C]>>
   },
 

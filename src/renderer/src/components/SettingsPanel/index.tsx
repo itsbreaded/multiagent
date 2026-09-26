@@ -31,6 +31,7 @@ import { ScrollbackSetting } from './settings/ScrollbackSetting'
 import { TabOverflowSetting } from './settings/TabOverflowSetting'
 import { AgentProvidersSection } from './AgentProvidersSection'
 import { TerminalBindingsSection } from './TerminalBindingsSection'
+import { JiraSetting } from './settings/JiraSetting'
 
 // Terminal-only shortcuts shown read-only for visibility
 
@@ -76,6 +77,7 @@ export function SettingsPanel(): JSX.Element {
     { id: 'terminal' as const,     label: 'Terminal' },
     { id: 'mcp' as const,          label: 'MCP' },
     { id: 'providers' as const,    label: 'Providers' },
+    { id: 'jira' as const,         label: 'Jira' },
     { id: 'updates' as const,      label: 'Updates' },
   ]
 
@@ -171,6 +173,7 @@ export function SettingsPanel(): JSX.Element {
   const showRescaleSetting = matchesSettingQuery(normalizedQuery, 'rescale overlapping glyphs wide ambiguous')
   const showScrollbackSetting = matchesSettingQuery(normalizedQuery, 'terminal scrollback lines history memory buffer maximum')
   const showIdleSuspensionSetting = matchesSettingQuery(normalizedQuery, 'idle agent session suspension resume timeout unfocused tab')
+  const showJiraSetting = matchesSettingQuery(normalizedQuery, 'jira jira cloud status issue ticket base url api token prefix')
   const anyTerminalSetting = showOptimizedRendererSetting || showGpuAccelSetting || showContrastSetting || showRescaleSetting || showScrollbackSetting || showIdleSuspensionSetting
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
@@ -459,6 +462,14 @@ export function SettingsPanel(): JSX.Element {
                 {/* Providers section */}
                 {activeSection === 'providers' && <AgentProvidersSection />}
 
+                {/* Jira section */}
+                {activeSection === 'jira' && (
+                  <>
+                    <SectionLabel>Jira status badges</SectionLabel>
+                    <JiraSetting />
+                  </>
+                )}
+
                 {/* Updates section */}
                 {activeSection === 'updates' && (
                   <UpdatesSection />
@@ -475,6 +486,7 @@ export function SettingsPanel(): JSX.Element {
                 showRescaleSetting={showRescaleSetting}
                 showScrollbackSetting={showScrollbackSetting}
                 showIdleSuspensionSetting={showIdleSuspensionSetting}
+                showJiraSetting={showJiraSetting}
                 anyTerminalSetting={anyTerminalSetting}
                 visibleHotkeys={visibleHotkeys}
                 effectiveHotkeys={effectiveHotkeys}

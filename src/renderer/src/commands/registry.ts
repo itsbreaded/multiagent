@@ -93,6 +93,14 @@ const COMMANDS: Command[] = [
     run: (ctx) => { ctx.openSettings('providers') },
   },
   {
+    id: 'settings.open.jira',
+    title: 'Settings: Jira',
+    category: 'General',
+    keywords: ['preferences', 'config', 'jira', 'ticket', 'status', 'atlassian', 'api token', 'issue prefix'],
+    enabled: (ctx) => !ctx.isDetachedWindow,
+    run: (ctx) => { ctx.openSettings('jira') },
+  },
+  {
     id: 'settings.open.terminal',
     title: 'Settings: Terminal',
     category: 'General',

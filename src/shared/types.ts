@@ -1,3 +1,14 @@
+import type {
+  JiraOpenIssueResult,
+  JiraConnectionTestInput,
+  JiraConnectionTestResult,
+  JiraSaveSettingsResult,
+  JiraSettings,
+  JiraSettingsInput,
+  JiraStatusResult,
+  JiraTokenResult,
+} from './jira'
+
 // Auto-updater status pushed from main to renderer
 export type UpdaterStatus =
   | { state: 'available'; version: string }
@@ -547,6 +558,14 @@ export interface IPCChannels {
   'shell:open-vscode': (cwd: string) => void
   'shell:vscode-available': () => boolean
 
+  // --- Jira status badges ---
+  'jira:get-settings': () => JiraSettings
+  'jira:get-token': () => JiraTokenResult
+  'jira:save-settings': (settings: JiraSettingsInput) => JiraSaveSettingsResult
+  'jira:test-connection': (settings: JiraConnectionTestInput) => JiraConnectionTestResult
+  'jira:fetch-status': (issueKey: string) => JiraStatusResult
+  'jira:open-issue': (issueKey: string) => JiraOpenIssueResult
+
   // --- Git ---
   'git:branch': (cwd: string) => string | null
   'git:unwatch-branch': (cwd: string) => void
@@ -737,6 +756,12 @@ export type InvokeChannels = ChannelSubset<
   | 'shell:copy-to-clipboard'
   | 'shell:open-vscode'
   | 'shell:vscode-available'
+  | 'jira:get-settings'
+  | 'jira:get-token'
+  | 'jira:save-settings'
+  | 'jira:test-connection'
+  | 'jira:fetch-status'
+  | 'jira:open-issue'
   | 'git:branch'
   | 'git:unwatch-branch'
   | 'layout:save'

@@ -8,5 +8,5 @@ coverage/
 test-results/
 playwright-report/
 .claude/skills/
-# Transient state for an interrupted auto-orchestrator-spec run
+# Auto-orchestrator transient resume state
 specs/.auto-orchestrator-state.md

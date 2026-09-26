@@ -11,6 +11,7 @@ import { DirPicker } from '../DirPicker'
 import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnChoiceMenu'
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
+import { useJiraStore } from '../../store/jira'
 import { border, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
 import { isAgentPaneDisconnected, StatusDot } from '../PaneHeader/StatusDot'
@@ -18,6 +19,7 @@ import closeIcon from '../../assets/close.png'
 import threeDotIcon from '../../assets/threedot.png'
 import addBoxIcon from '../../assets/addbox.png'
 import { PaneSplitDropTarget } from '../PaneGrid/PaneSplitDropTarget'
+import { JiraStatusBadge } from './JiraStatusBadge'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 const TAB_REORDER_MIME = 'application/x-multiagent-tab-reorder'
@@ -52,6 +54,9 @@ export function TabSections(): JSX.Element {
   const reorderTab = usePanesStore((s) => s.reorderTab)
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
+  const jiraRows = useJiraStore((s) => s.rows)
+  const jiraProjects = useJiraStore((s) => s.projects)
+  const refreshJiraTab = useJiraStore((s) => s.refreshTab)
 
   const tabLabels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
   const leavesByTab = useMemo(
@@ -198,9 +203,12 @@ export function TabSections(): JSX.Element {
                 />
               }
               headerActionsAlways={
-                <ProjectSpawnButton
-                  onClick={(e) => setSpawnMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
-                />
+                <>
+                  {jiraRows[tab.id] && <JiraStatusBadge row={jiraRows[tab.id]} />}
+                  <ProjectSpawnButton
+                    onClick={(e) => setSpawnMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
+                  />
+                </>
               }
               titleSuffix={
                 <span title="In separate window — click to focus" style={{ fontSize: 11, color: '#5a6050', marginLeft: 4, flexShrink: 0 }}>↗</span>
@@ -306,6 +314,7 @@ export function TabSections(): JSX.Element {
             onRenameChange={setRenameValue}
             onRenameCommit={commitRename}
             onRenameCancel={() => setRenamingTabId(null)}
+            titleSuffix={jiraRows[tab.id] && <JiraStatusBadge row={jiraRows[tab.id]} />}
             headerDraggable={!isRenaming}
             onHeaderDragStart={(e) => {
               e.dataTransfer.setData(TAB_REORDER_MIME, JSON.stringify({ tabId: tab.id }))
@@ -405,6 +414,8 @@ export function TabSections(): JSX.Element {
           onRename={(id) => { startRename(id); setTabMenu(null) }}
           onCloseTab={(id) => { closeTab(id); setTabMenu(null) }}
           onChangeDefaultDir={(id) => { setDirPickerTabId(id); setTabMenu(null) }}
+          jiraMatch={jiraProjects[tabMenu.tabId] !== undefined}
+          onRefreshJiraStatus={() => { void refreshJiraTab(tabMenu.tabId) }}
         />
       )}
 
@@ -943,6 +954,8 @@ function TabContextMenu({
   onRename,
   onCloseTab,
   onChangeDefaultDir,
+  jiraMatch,
+  onRefreshJiraStatus,
 }: {
   tabId: string
   tabs: Tab[]
@@ -952,6 +965,8 @@ function TabContextMenu({
   onRename: (id: string) => void
   onCloseTab: (id: string) => void
   onChangeDefaultDir: (id: string) => void
+  jiraMatch: boolean
+  onRefreshJiraStatus: () => void
 }): JSX.Element {
   const tab = tabs.find((t) => t.id === tabId)
   const isDetached = !!tab?.detached
@@ -978,6 +993,7 @@ function TabContextMenu({
       <div style={{ ...menuStyles.panel, left: x, top: y, minWidth: 200 }}>
         {btn('Rename', () => { onRename(tabId); onClose() })}
         {!isDetached && btn(defaultDirLabel, () => { onChangeDefaultDir(tabId); onClose() })}
+        {jiraMatch && btn('Refresh Jira status', () => { onRefreshJiraStatus(); onClose() })}
         {isDetached && (
           <>
             <div style={{ ...menuStyles.separator, margin: '4px 0' }} />

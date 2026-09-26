@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, shell, clipboard, app, dialog } from 'electron'
+import { ipcMain, BrowserWindow, shell, clipboard, app, dialog, safeStorage } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
@@ -36,6 +36,9 @@ import { registerTransferHandlers } from './transferHandlers'
 import { createLayoutStore } from './layoutStore'
 import { killPtyIfAllowed, senderMayControlPty as senderMayControlOwnedPty } from './ptyControl'
 import { DEFAULT_IDLE_AGENT_SUSPENSION, normalizeIdleAgentSuspensionSettings } from '../../shared/idleAgentSuspension'
+import { JiraClient } from '../jira/JiraClient'
+import { JiraSettingsStore } from '../jira/JiraSettingsStore'
+import { createJiraIpcController, isPrimaryWindowSender } from '../jira/jiraIpc'
 
 // PTY output is relayed straight to xterm (seq=0 direct write) for both shell and
 // agent panes — no coalescing, no ack, no backpressure. node-pty + xterm handle
@@ -58,6 +61,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     windowManager,
   })
   layoutStore.registerHandlers(registrar)
+  const jiraSettingsStore = new JiraSettingsStore(path.join(app.getPath('userData'), 'jira-settings.json'), safeStorage)
+  const jiraController = createJiraIpcController(jiraSettingsStore, new JiraClient(), openExternalUrl)
   const ack = createAckProtocol({
     on: (channel, listener) => ipcMain.on(channel, listener),
     removeListener: (channel, listener) => ipcMain.removeListener(channel, listener),
@@ -495,6 +500,20 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('shell:vscode-available', () => vsCodeAvailable)
+
+  registrar.handle('jira:get-settings', () => jiraController.getSettings())
+  registrar.handle('jira:get-token', (event) => {
+    const senderWindowId = BrowserWindow.fromWebContents(event.sender)?.id ?? null
+    const primaryWindowId = windowManager.getPrimaryWindow()?.id ?? null
+    if (!isPrimaryWindowSender(senderWindowId, primaryWindowId)) {
+      return { ok: false, error: 'Jira token is only available in the primary settings window.' }
+    }
+    return jiraController.getToken()
+  })
+  registrar.handle('jira:save-settings', (_e, settings) => jiraController.saveSettings(settings))
+  registrar.handle('jira:test-connection', (_e, settings) => jiraController.testConnection(settings))
+  registrar.handle('jira:fetch-status', (_e, issueKey) => jiraController.fetchStatus(issueKey))
+  registrar.handle('jira:open-issue', (_e, issueKey) => jiraController.openIssue(issueKey))
 
   registrar.handle('git:branch', (_e, cwd: string) => gitBranchWatcher.watchCwd(cwd))
   registrar.handle('git:unwatch-branch', (_e, cwd: string) => gitBranchWatcher.unwatchCwd(cwd))

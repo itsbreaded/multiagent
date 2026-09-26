@@ -8,6 +8,8 @@ import { border, sidebarStyles, ui } from '../../styles/theme'
 import newFolderIcon from '../../assets/newfolder.png'
 import collapseAllIcon from '../../assets/collapse_all.png'
 import expandAllIcon from '../../assets/expand_all.png'
+import refreshIcon from '../../assets/refresh.png'
+import { useJiraStore } from '../../store/jira'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 
@@ -26,6 +28,8 @@ export function Sidebar(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const { resumable, loading } = useSessions()
+  const jiraProjects = useJiraStore((s) => s.projects)
+  const refreshAllJira = useJiraStore((s) => s.refreshAll)
 
   function activeCwd(): string {
     return getFocusedPane()?.cwd ?? DEFAULT_CWD
@@ -162,6 +166,28 @@ export function Sidebar(): JSX.Element {
             alt=""
             style={{ width: 14, height: 14, opacity: 0.8 }}
           />
+        </button>
+        <button
+          title="Refresh all Jira statuses"
+          aria-label="Refresh all Jira statuses"
+          onClick={() => { void refreshAllJira() }}
+          disabled={Object.keys(jiraProjects).length === 0}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 26,
+            height: 26,
+            flexShrink: 0,
+            padding: 0,
+            background: 'none',
+            border: border.default,
+            borderRadius: 5,
+            cursor: Object.keys(jiraProjects).length === 0 ? 'default' : 'pointer',
+            opacity: Object.keys(jiraProjects).length === 0 ? 0.4 : 1,
+          }}
+        >
+          <img src={refreshIcon} alt="" style={{ width: 14, height: 14, opacity: 0.8 }} />
         </button>
       </div>
 
