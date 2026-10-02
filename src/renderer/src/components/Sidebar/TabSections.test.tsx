@@ -179,8 +179,8 @@ describe('TabSections - agent status dot (spec 032)', () => {
   })
 })
 
-describe('TabSections - detached tab reorder', () => {
-  it('allows local and detached tabs to reorder through the same sidebar flow', () => {
+describe('TabSections - ownership-scoped reorder', () => {
+  it('hides detached proxies and reorders only visible local tabs', () => {
     const localBefore = tabWithLabel('local-before', 'Local before')
     const detached = tabWithLabel('detached', 'Detached', true)
     const localAfter = tabWithLabel('local-after', 'Local after')
@@ -189,46 +189,67 @@ describe('TabSections - detached tab reorder', () => {
       activeTabId: localBefore.id,
       detachedWindowTabIds: {},
       detachedWindowActiveTabIds: {},
+      isDetachedWindow: false,
     })
 
     render(<TabSections />)
 
-    const detachedHeader = tabHeader('Detached')
-    expect(detachedHeader).toHaveAttribute('draggable', 'true')
+    expect(screen.queryByRole('button', { name: 'Detached' })).toBeNull()
 
     const localAfterTransfer = tabDataTransfer()
     fireEvent.dragStart(tabHeader('Local after'), { dataTransfer: localAfterTransfer })
     expect(localAfterTransfer.types).toContain('application/x-multiagent-tab-reorder')
     expect(localAfterTransfer.getData('application/x-multiagent-tab-reorder')).toBe(JSON.stringify({ tabId: localAfter.id }))
     let dragOverEvent!: Event
-    act(() => {
-      dragOverEvent = dispatchTabDrag(detachedHeader, 'dragover', localAfterTransfer, -1)
-    })
+    act(() => { dragOverEvent = dispatchTabDrag(tabHeader('Local before'), 'dragover', localAfterTransfer, -1) })
     expect(dragOverEvent.defaultPrevented).toBe(true)
-    expect(detachedHeader.style.boxShadow).not.toBe('none')
-    act(() => {
-      dispatchTabDrag(detachedHeader, 'drop', localAfterTransfer, -1)
-    })
+    act(() => { dispatchTabDrag(tabHeader('Local before'), 'drop', localAfterTransfer, -1) })
     expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
-      localBefore.id,
       localAfter.id,
       detached.id,
+      localBefore.id,
     ])
+  })
+})
 
-    const detachedTransfer = tabDataTransfer()
-    fireEvent.dragStart(tabHeader('Detached'), { dataTransfer: detachedTransfer })
-    const localBeforeHeader = tabHeader('Local before')
-    act(() => {
-      dispatchTabDrag(localBeforeHeader, 'dragover', detachedTransfer, -1)
-    })
-    act(() => {
-      dispatchTabDrag(localBeforeHeader, 'drop', detachedTransfer, -1)
-    })
-    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
-      detached.id,
-      localBefore.id,
-      localAfter.id,
-    ])
+describe('TabSections - sidebar tab actions', () => {
+  it('activates a tab selected from the sidebar', () => {
+    const first = tabWithLabel('first-tab', 'First tab')
+    const second = tabWithLabel('second-tab', 'Second tab')
+    usePanesStore.setState({ tabs: [first, second], activeTabId: first.id, isDetachedWindow: false })
+
+    render(<TabSections />)
+    fireEvent.click(screen.getByRole('button', { name: 'Second tab' }))
+
+    expect(usePanesStore.getState().activeTabId).toBe(second.id)
+  })
+
+  it('keeps individual actions and movement while removing duplicate/bulk-close actions', () => {
+    const tab = tabWithLabel('local-tab', 'Local tab')
+    usePanesStore.setState({ tabs: [tab], activeTabId: tab.id, isDetachedWindow: false })
+
+    render(<TabSections />)
+    fireEvent.contextMenu(tabHeader('Local tab'))
+
+    expect(screen.getByText('Move Tab to New Window')).toBeInTheDocument()
+    expect(screen.getByText('Rename')).toBeInTheDocument()
+    expect(screen.getByText('Close tab')).toBeInTheDocument()
+    expect(screen.queryByText('Duplicate Tab')).toBeNull()
+    expect(screen.queryByText('Close Other Tabs')).toBeNull()
+    expect(screen.queryByText('Close Tabs to the Right')).toBeNull()
+  })
+
+  it('offers return to the main window for a detached tab', () => {
+    const ipc = installMockIpc()
+    const tab = tabWithLabel('detached-tab', 'Detached tab')
+    usePanesStore.setState({ tabs: [tab], activeTabId: tab.id, isDetachedWindow: true })
+
+    render(<TabSections />)
+    fireEvent.contextMenu(tabHeader('Detached tab'))
+    fireEvent.click(screen.getByText('Bring to Main Window'))
+
+    expect(ipc.invoke).toHaveBeenCalledWith('tab:reattach-home', tab.id)
+    expect(screen.queryByText('Move Tab to New Window')).toBeNull()
   })
 })
 

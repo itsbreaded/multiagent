@@ -71,8 +71,6 @@ function defaultAgentProviderSettings(): AgentProviderSettings {
 interface SettingsState {
   showGitBranchBadges: boolean
   setShowGitBranchBadges: (value: boolean) => void
-  tabOverflowMode: 'scroll' | 'wrap'
-  setTabOverflowMode: (mode: 'scroll' | 'wrap') => void
   // Terminal renderer settings (apply on next pane mount)
   optimizedTerminalRenderer: boolean
   setOptimizedTerminalRenderer: (value: boolean) => void
@@ -139,7 +137,6 @@ type Persisted = Pick<SettingsState,
   | 'agentStatusScraping'
   | 'idleAgentSuspension'
   | 'showGitBranchBadges'
-  | 'tabOverflowMode'
   | 'optimizedTerminalRenderer'
   | 'terminalGpuAcceleration'
   | 'terminalMinimumContrastRatio'
@@ -159,7 +156,6 @@ function defaultSettings(): Persisted {
     agentStatusScraping: true,
     idleAgentSuspension: { ...DEFAULT_IDLE_AGENT_SUSPENSION },
     showGitBranchBadges: true,
-    tabOverflowMode: 'scroll',
     optimizedTerminalRenderer: true,
     terminalGpuAcceleration: 'auto',
     terminalMinimumContrastRatio: 1,
@@ -213,7 +209,6 @@ function loadSettings(): Persisted {
       agentStatusScraping: parsed.agentStatusScraping !== false,
       idleAgentSuspension: normalizeIdleAgentSuspensionSettings(parsed.idleAgentSuspension),
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
-      tabOverflowMode: parsed.tabOverflowMode === 'wrap' ? 'wrap' : 'scroll',
       optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
       terminalGpuAcceleration: coerceGpuAcceleration(parsed.terminalGpuAcceleration),
       terminalMinimumContrastRatio: normalizeContrastRatio(parsed.terminalMinimumContrastRatio),
@@ -252,7 +247,6 @@ function saveSettings(state: Persisted): void {
     agentStatusScraping: state.agentStatusScraping,
     idleAgentSuspension: state.idleAgentSuspension,
     showGitBranchBadges: state.showGitBranchBadges,
-    tabOverflowMode: state.tabOverflowMode,
     optimizedTerminalRenderer: state.optimizedTerminalRenderer,
     terminalGpuAcceleration: state.terminalGpuAcceleration,
     terminalMinimumContrastRatio: state.terminalMinimumContrastRatio,
@@ -322,11 +316,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setShowGitBranchBadges: (value) => {
     set({ showGitBranchBadges: value })
-    saveSettings(get())
-  },
-
-  setTabOverflowMode: (mode) => {
-    set({ tabOverflowMode: mode })
     saveSettings(get())
   },
 

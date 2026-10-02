@@ -184,7 +184,8 @@ export function wirePanesIpc(): void {
 
   // Main tells this window to release a tab (it moved to another window).
   // In a detached window: just remove it locally (PTYs stay alive in the destination).
-  // In the primary window: mark it as detached so the sidebar still shows it.
+  // In the primary window: retain it as an internal detached ownership record;
+  // the sidebar filters that record from navigation rows.
   //
   // Two-phase (absorb) vs one-phase (bring-home / reattach-home):
   // - With a releaseId, this is the absorb handshake. We only ACK here and DEFER the actual
@@ -209,9 +210,17 @@ export function wirePanesIpc(): void {
 
   // Absorb committed: the PTYs have been transferred to the absorbing window, so it is now
   // safe to finalize releasing our copy of the tab (deferred from tab:release above).
-  window.ipc.on('tab:absorb-committed', (tabId: unknown, ownerWindowId: unknown) => {
+  window.ipc.on('tab:absorb-committed', (tabId: unknown, ownerWindowId: unknown, transferId: unknown) => {
     if (typeof tabId !== 'string') return
     const store = usePanesStore.getState()
+    if (typeof transferId === 'string') {
+      if (store.isDetachedWindow) {
+        store.markTabTearOffCommitted(tabId, transferId)
+      } else {
+        store.commitTabTearOff(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined, transferId)
+      }
+      return
+    }
     if (store.isDetachedWindow) {
       store.removeTabLocally(tabId)
     } else {
@@ -219,7 +228,17 @@ export function wirePanesIpc(): void {
     }
   })
 
-  // Main tells the primary window to un-mark a tab and move it to the end of the tab bar.
+  window.ipc.on('tab:tear-off-rolled-back', (tabId: unknown, transferId: unknown) => {
+    if (typeof tabId !== 'string' || typeof transferId !== 'string') return
+    usePanesStore.getState().rollbackTabTearOff(tabId, transferId)
+  })
+
+  window.ipc.on('tab:closed', (tabId: unknown, windowId: unknown) => {
+    if (typeof tabId !== 'string') return
+    usePanesStore.getState().removeClosedDetachedTab(tabId, typeof windowId === 'number' ? windowId : undefined)
+  })
+
+  // Main tells the primary window to un-mark a tab and move it to the end of the sidebar list.
   window.ipc.on('tab:return', (tabId: unknown) => {
     if (typeof tabId !== 'string') return
     usePanesStore.getState().returnTab(tabId)

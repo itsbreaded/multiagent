@@ -38,6 +38,7 @@ const automaticSuspensionInFlight = new Set<string>()
 const automaticSuspensionFailed = new Set<string>()
 const automaticSuspensionTokens = new Map<string, symbol>()
 const tabUnfocusedSince = new Map<string, number>()
+const pendingTabTransfers = new Map<string, string>()
 let idleCoordinatorCleanup: (() => void) | null = null
 const DEFAULT_AGENT_KIND: AgentKind = 'claude'
 
@@ -165,7 +166,7 @@ function clearHostRecoveryState(node: PaneNode, incidentId: string): { node: Pan
   }
 }
 
-function ownsRuntimeTab(isDetachedWindow: boolean, tab: Tab): boolean {
+export function isTabVisibleInCurrentWindow(isDetachedWindow: boolean, tab: Tab): boolean {
   return isDetachedWindow || !tab.detached
 }
 
@@ -373,11 +374,11 @@ interface PanesStore {
   hydratedTabIds: Record<string, true>
   hydrateTab: (tabId: string) => void
   isTabHydrated: (tabId: string) => boolean
-  initDetached: (tab: Tab, ptyIds: string[]) => void
-  receiveTab: (tab: Tab, atIndex?: number) => void
+  initDetached: (tab: Tab, ptyIds: string[], transferId?: string) => void
   detachTab: (tabId: string, ownerWindowId?: number) => void
   returnTab: (tabId: string) => void
   removeTabLocally: (tabId: string) => void
+  removeClosedDetachedTab: (tabId: string, windowId?: number) => void
   syncDetachedTabs: (windowId: number, tabs: Tab[], activeTabId?: string) => void
   addPaneToTab: (pane: PaneLeaf, tabId: string) => boolean
   removePaneKeepTab: (paneId: string) => void
@@ -406,11 +407,12 @@ interface PanesStore {
   setPendingRenameTabId: (id: string | null) => void
   setTabDefaultCwd: (tabId: string, cwd: string) => void
   closeTab: (tabId: string) => void
+  moveTabToNewWindow: (tabId: string) => void
+  commitTabTearOff: (tabId: string, ownerWindowId: number | undefined, transferId: string) => boolean
+  markTabTearOffCommitted: (tabId: string, transferId: string) => boolean
+  rollbackTabTearOff: (tabId: string, transferId: string) => boolean
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, label: string) => void
-  duplicateTab: (tabId: string) => void
-  closeOtherTabs: (tabId: string) => void
-  closeTabsToRight: (tabId: string) => void
   setSidebarSectionOpen: (sectionId: string, open: boolean) => void
   setAllTabSidebarSectionsOpen: (open: boolean) => void
 
@@ -484,7 +486,7 @@ interface PanesStore {
   clearSwapDrag: () => void
   movePaneToTab: (sourcePaneId: string, targetTabId: string) => void
   movePaneToNewTab: (paneId: string) => void
-  // `scope` defaults to the tab-bar behavior, where null appends among local tabs.
+  // `scope` defaults to the sidebar behavior, where null appends among local tabs.
   // The sidebar can pass `all` because detached tabs are part of its visible order.
   reorderTab: (tabId: string, beforeTabId: string | null, scope?: 'local' | 'all') => void
   removePaneById: (paneId: string) => void
@@ -691,63 +693,30 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   detachedWindowTabIds: {},
   detachedWindowActiveTabIds: {},
 
-  initDetached: (tab, ptyIds) => {
+  initDetached: (tab, ptyIds, transferId) => {
     const seededTab = seedInitialAgentStatusesInTab(tab)
+    if (transferId) pendingTabTransfers.set(seededTab.id, transferId)
     set({
       tabs: [seededTab],
       activeTabId: seededTab.id,
       isDetachedWindow: true,
-      sidebarOpen: false,
+      sidebarOpen: true,
       hydratedTabIds: {},
       sidebarSectionOpen: { [tabSidebarSectionId(seededTab.id)]: true },
     })
-    hydrateTabRuntime(seededTab.id, true)
+    const hydration = hydrateTabRuntime(seededTab.id, true)
     if (typeof window !== 'undefined' && window.ipc) {
       const adoption = ptyIds.length > 0
-        ? window.ipc.invoke('tab:adopt', ptyIds)
+        ? window.ipc.invoke('tab:adopt', ptyIds, transferId)
         : Promise.resolve(true)
-      void adoption.then(() => {
-        window.ipc.send('tab:detached-ready', tab.id)
+      void Promise.all([hydration, adoption]).then(([, ok]) => {
+        if (ok !== true) {
+          window.close()
+          return
+        }
+        window.ipc.send('tab:detached-ready', tab.id, transferId)
       }).catch(() => {})
     }
-  },
-
-  receiveTab: (tab, atIndex) => {
-    set((s) => {
-      // If this tab was previously torn off from this window it still exists as detached:true.
-      // Un-mark it rather than appending a duplicate. Preserve existing data (synced rootNode/ptyIds).
-      const existing = s.tabs.find((t) => t.id === tab.id)
-      const base = seedInitialAgentStatusesInTab(existing
-        ? { ...existing, detached: false }
-        : { ...tab, detached: false })
-      const rest = s.tabs.filter((t) => t.id !== tab.id)
-
-      let newTabs: typeof rest
-      if (atIndex === undefined) {
-        newTabs = [...rest, base]
-      } else {
-        // Insert at the atIndex-th position among the non-detached (visible) tabs in `rest`.
-        let localCount = 0
-        let insertAt = rest.length
-        for (let i = 0; i < rest.length; i++) {
-          if (!rest[i].detached) {
-            if (localCount === atIndex) { insertAt = i; break }
-            localCount++
-          }
-        }
-        newTabs = [...rest]
-        newTabs.splice(insertAt, 0, base)
-      }
-
-      return {
-        tabs: newTabs,
-        activeTabId: tab.id,
-        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
-        sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
-      }
-    })
-    hydrateTabRuntime(tab.id, true)
-    reportCurrentFocusTarget()
   },
 
   detachTab: (tabId, ownerWindowId) => {
@@ -783,7 +752,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   returnTab: (tabId) => {
-    // Move the returning tab to the end of the tab bar and un-mark it.
+    // Move the returning tab to the end of the sidebar list and un-mark it.
     set((s) => {
       const tab = s.tabs.find((t) => t.id === tabId)
       if (!tab) return s
@@ -855,7 +824,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
       // Update existing or insert new entries, all marked detached.
       // Never overwrite a tab that is already local (detached:false) — that means a
-      // receiveTab/returnTab already claimed it; the sync is stale.
+      // A local return/transfer already claimed it; the sync is stale.
       for (const incoming of incomingTabs) {
         const idx = tabs.findIndex((t) => t.id === incoming.id)
         const synced = seedInitialAgentStatusesInTab({ ...incoming, detached: true })
@@ -996,10 +965,20 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   closeTab: (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId)
-    // The primary keeps a detached tab as a sidebar proxy. Release the owning
-    // renderer before removing that proxy so its next state sync cannot restore
-    // a tab whose PTYs were just torn down. tab:return is harmless because this
-    // local copy is removed synchronously below.
+    const pendingTransferId = pendingTabTransfers.get(tabId)
+    const pendingDetachedClose = !!pendingTransferId && get().isDetachedWindow
+    if (pendingTransferId && typeof window !== 'undefined' && window.ipc) {
+      pendingTabTransfers.delete(tabId)
+      void window.ipc.invoke('tab:tear-off-cancel', pendingTransferId).catch(() => {})
+    }
+    if (pendingDetachedClose) {
+      get().removeTabLocally(tabId)
+      return
+    }
+    // Release the owning renderer before removing an internal detached record
+    // so its next state sync cannot restore a tab whose PTYs were just torn
+    // down. tab:return is harmless because this local copy is removed
+    // synchronously below.
     if (tab?.detached && typeof window !== 'undefined' && window.ipc) {
       void window.ipc.invoke('tab:bring-home', tabId).catch((err) => {
         console.error('tab:bring-home before close failed', err)
@@ -1020,6 +999,78 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
     scheduleSessionRefreshAfter(teardown.killPromises, teardown.needsSessionRefresh)
     hydrateTabForActivation(get().activeTabId, previousHydrated)
+  },
+
+  removeClosedDetachedTab: (tabId, windowId) => {
+    const previousHydrated = get().hydratedTabIds
+    set((s) => {
+      const tabs = s.tabs.filter((tab) => tab.id !== tabId)
+      const activeTabId = s.activeTabId === tabId
+        ? (tabs.filter((tab) => !tab.detached).slice(-1)[0]?.id ?? '')
+        : s.activeTabId
+      const { [tabSidebarSectionId(tabId)]: _closed, [tabId]: _legacyClosed, ...sidebarSectionOpen } = s.sidebarSectionOpen
+      const hydratedTabIds = removeHydratedTabs(s.hydratedTabIds, [tabId])
+      const detachedWindowTabIds = Object.fromEntries(
+        Object.entries(s.detachedWindowTabIds)
+          .map(([key, ids]) => [key, ids.filter((id) => id !== tabId)] as const)
+          .filter(([key, ids]) => ids.length > 0 && (windowId === undefined || key !== String(windowId)))
+      )
+      const detachedWindowActiveTabIds = { ...s.detachedWindowActiveTabIds }
+      if (windowId !== undefined) delete detachedWindowActiveTabIds[String(windowId)]
+      return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen, detachedWindowTabIds, detachedWindowActiveTabIds }
+    })
+    hydrateTabForActivation(get().activeTabId, previousHydrated)
+  },
+
+  moveTabToNewWindow: (tabId) => {
+    const tab = get().tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || pendingTabTransfers.has(tabId) || typeof window === 'undefined' || !window.ipc) return
+    const transferId = uuid()
+    pendingTabTransfers.set(tabId, transferId)
+    const ptyIds = tab.rootNode
+      ? collectLeaves(tab.rootNode).map((leaf) => leaf.ptyId).filter((id): id is string => typeof id === 'string')
+      : []
+    const screenX = window.screenX + Math.floor(window.outerWidth / 2)
+    const screenY = window.screenY + 40
+    void window.ipc.invoke('tab:tear-off', JSON.stringify(tab), ptyIds, screenX, screenY, transferId)
+      .then((result) => {
+        const returnedTransferId = typeof result === 'object' && result !== null && 'transferId' in result && typeof result.transferId === 'string'
+          ? result.transferId
+          : null
+        if (pendingTabTransfers.get(tabId) === transferId && returnedTransferId !== transferId) {
+          pendingTabTransfers.delete(tabId)
+        }
+      })
+      .catch(() => {
+        if (pendingTabTransfers.get(tabId) === transferId) pendingTabTransfers.delete(tabId)
+      })
+  },
+
+  commitTabTearOff: (tabId, ownerWindowId, transferId) => {
+    if (pendingTabTransfers.get(tabId) !== transferId) return false
+    pendingTabTransfers.delete(tabId)
+    const store = get()
+    if (store.isDetachedWindow) {
+      store.removeTabLocally(tabId)
+    } else {
+      store.detachTab(tabId, ownerWindowId)
+    }
+    return true
+  },
+
+  markTabTearOffCommitted: (tabId, transferId) => {
+    if (pendingTabTransfers.get(tabId) !== transferId) return false
+    pendingTabTransfers.delete(tabId)
+    return true
+  },
+
+  rollbackTabTearOff: (tabId, transferId) => {
+    if (pendingTabTransfers.get(tabId) !== transferId) return false
+    pendingTabTransfers.delete(tabId)
+    if (get().isDetachedWindow) {
+      get().removeTabLocally(tabId)
+    }
+    return true
   },
 
   setActiveTab: (tabId) => {
@@ -1060,106 +1111,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     })
   },
 
-  duplicateTab: (tabId) => {
-    set((s) => {
-      const tab = s.tabs.find((t) => t.id === tabId)
-      if (!tab) return s
-      const focusedLeaf = tab.rootNode
-        ? (findLeaf(tab.rootNode, tab.focusedPaneId) ?? (tab.rootNode.type === 'leaf' ? tab.rootNode : null))
-        : null
-      const fallbackLabel = focusedLeaf
-        ? (focusedLeaf.cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Shell')
-        : undefined
-      const newTab: Tab = {
-        id: uuid(),
-        focusedPaneId: '',
-        customLabel: tab.customLabel ?? fallbackLabel,
-        defaultCwd: tab.defaultCwd,
-      }
-      const idx = s.tabs.findIndex((t) => t.id === tabId)
-      const tabs = [...s.tabs.slice(0, idx + 1), newTab, ...s.tabs.slice(idx + 1)]
-      return {
-        tabs,
-        activeTabId: newTab.id,
-        hydratedTabIds: markHydrated(s.hydratedTabIds, newTab.id),
-        sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(newTab.id)]: true },
-      }
-    })
-  },
-
-  closeOtherTabs: (tabId) => {
-    const wasHydrated = get().hydratedTabIds[tabId] === true
-    const killPromises: Promise<unknown>[] = []
-    let needsSessionRefresh = false
-    get().tabs.forEach((t) => {
-      if (t.id !== tabId && t.rootNode) {
-        const teardown = teardownTabRuntime(t)
-        killPromises.push(...teardown.killPromises)
-        if (teardown.needsSessionRefresh) needsSessionRefresh = true
-      }
-    })
-    set((s) => {
-      const tabs = s.tabs.filter((t) => t.id === tabId)
-      const sectionId = tabSidebarSectionId(tabId)
-      return {
-        tabs,
-        activeTabId: tabId,
-        hydratedTabIds: wasHydrated ? { [tabId]: true } : {},
-        sidebarSectionOpen: {
-          [RECENT_SECTION_ID]: s.sidebarSectionOpen[RECENT_SECTION_ID] ?? true,
-          [sectionId]: s.sidebarSectionOpen[sectionId] ?? s.sidebarSectionOpen[tabId] ?? true,
-        },
-      }
-    })
-    scheduleSessionRefreshAfter(killPromises, needsSessionRefresh)
-    if (!wasHydrated) hydrateTabRuntime(tabId, true)
-  },
-
-  closeTabsToRight: (tabId) => {
-    const { tabs } = get()
-    const idx = tabs.findIndex((t) => t.id === tabId)
-    const previousHydrated = get().hydratedTabIds
-    const killPromises: Promise<unknown>[] = []
-    let needsSessionRefresh = false
-    if (idx !== -1) {
-      tabs.slice(idx + 1).forEach((t) => {
-        if (!t.rootNode) return
-        const teardown = teardownTabRuntime(t)
-        killPromises.push(...teardown.killPromises)
-        if (teardown.needsSessionRefresh) needsSessionRefresh = true
-      })
-    }
-    set((s) => {
-      const idx = s.tabs.findIndex((t) => t.id === tabId)
-      if (idx === -1) return s
-      const tabs = s.tabs.slice(0, idx + 1)
-      const activeTabId = tabs.find((t) => t.id === s.activeTabId)
-        ? s.activeTabId
-        : tabId
-      const removedIds = s.tabs.slice(idx + 1).map((t) => t.id)
-      const kept = new Set(tabs.flatMap((t) => [tabSidebarSectionId(t.id), t.id]))
-      const sidebarSectionOpen = Object.fromEntries(
-        Object.entries(s.sidebarSectionOpen).filter(([id]) =>
-          id === RECENT_SECTION_ID || kept.has(id)
-        )
-      )
-      const hydratedTabIds = removeHydratedTabs(
-        s.hydratedTabIds,
-        removedIds
-      )
-      return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
-    })
-    scheduleSessionRefreshAfter(killPromises, needsSessionRefresh)
-    hydrateTabForActivation(get().activeTabId, previousHydrated)
-  },
-
   setSidebarSectionOpen: (sectionId, open) => {
     set((s) => ({ sidebarSectionOpen: { ...s.sidebarSectionOpen, [sectionId]: open } }))
   },
 
   setAllTabSidebarSectionsOpen: (open) => {
     set((s) => ({
-      sidebarSectionOpen: s.tabs.reduce(
+      sidebarSectionOpen: s.tabs.filter((tab) => isTabVisibleInCurrentWindow(s.isDetachedWindow, tab)).reduce(
         (sections, tab) => ({ ...sections, [tabSidebarSectionId(tab.id)]: open }),
         { ...s.sidebarSectionOpen }
       ),
@@ -1523,7 +1481,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       set((s) => {
         let changed = false
         const tabs = s.tabs.map((tab) => {
-          if (!tab.rootNode || !ownsRuntimeTab(s.isDetachedWindow, tab)) return tab
+          if (!tab.rootNode || !isTabVisibleInCurrentWindow(s.isDetachedWindow, tab)) return tab
           const cleared = clearHostRecoveryState(tab.rootNode, status.incidentId)
           if (cleared.node === tab.rootNode) return tab
           changed = true
@@ -2173,6 +2131,24 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   reorderTab: (tabId, beforeTabId, scope = 'local') => {
     if (tabId === beforeTabId) return
     set((s) => {
+      if (scope === 'local') {
+        const visibleIndices = s.tabs
+          .map((tab, index) => ({ tab, index }))
+          .filter(({ tab }) => isTabVisibleInCurrentWindow(s.isDetachedWindow, tab))
+          .map(({ index }) => index)
+        const fromVisible = visibleIndices.findIndex((index) => s.tabs[index].id === tabId)
+        if (fromVisible === -1) return s
+        const visibleTabs = visibleIndices.map((index) => s.tabs[index])
+        const [moved] = visibleTabs.splice(fromVisible, 1)
+        let toVisible = beforeTabId === null
+          ? visibleTabs.length
+          : visibleTabs.findIndex((tab) => tab.id === beforeTabId)
+        if (toVisible < 0) toVisible = visibleTabs.length
+        visibleTabs.splice(toVisible, 0, moved)
+        const next = [...s.tabs]
+        visibleIndices.forEach((index, position) => { next[index] = visibleTabs[position] })
+        return { tabs: next }
+      }
       const from = s.tabs.findIndex((t) => t.id === tabId)
       if (from === -1) return s
       const next = [...s.tabs]
@@ -2270,7 +2246,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     return found
   },
 
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  toggleSidebar: () => set((s) => s.isDetachedWindow ? s : ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setSidebarPanelSize: (panelId, size) => set((s) => ({ sidebarPanelSizes: { ...s.sidebarPanelSizes, [panelId]: size } })),
   toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false, settingsOpen: false })),
@@ -2332,8 +2308,8 @@ export function startIdleAgentSuspensionCoordinator(): () => void {
     const ownedTabIds = new Set<string>()
 
     for (const tab of store.tabs) {
-      // The primary renderer retains detached tabs as synchronized metadata;
-      // only the detached owner may suspend/resume their live panes.
+      // The primary renderer retains detached tabs as synchronized ownership
+      // metadata; only the detached owner may suspend/resume their live panes.
       if (!store.isDetachedWindow && tab.detached) continue
       ownedTabIds.add(tab.id)
       const focused = isTabFocused(tab, store.activeTabId, store.windowId, store.activeWindowId)

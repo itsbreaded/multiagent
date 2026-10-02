@@ -28,7 +28,6 @@ import { GpuAccelerationSetting } from './settings/GpuAccelerationSetting'
 import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
 import { RescaleGlyphsSetting } from './settings/RescaleGlyphsSetting'
 import { ScrollbackSetting } from './settings/ScrollbackSetting'
-import { TabOverflowSetting } from './settings/TabOverflowSetting'
 import { AgentProvidersSection } from './AgentProvidersSection'
 import { TerminalBindingsSection } from './TerminalBindingsSection'
 import { JiraSetting } from './settings/JiraSetting'
@@ -166,7 +165,6 @@ export function SettingsPanel(): JSX.Element {
   const normalizedQuery = query.trim().toLowerCase()
   const isSearching = normalizedQuery !== ''
   const showBranchSetting = matchesSettingQuery(normalizedQuery, 'git branch badges tabs panes')
-  const showOverflowSetting = matchesSettingQuery(normalizedQuery, 'tab overflow scroll wrap rows')
   const showOptimizedRendererSetting = matchesSettingQuery(normalizedQuery, 'optimized terminal renderer feature flag webgl dom')
   const showGpuAccelSetting = matchesSettingQuery(normalizedQuery, 'gpu acceleration webgl renderer auto on off')
   const showContrastSetting = matchesSettingQuery(normalizedQuery, 'minimum contrast ratio color accuracy')
@@ -307,8 +305,7 @@ export function SettingsPanel(): JSX.Element {
                   <>
                     <SectionLabel>Appearance</SectionLabel>
                     {showBranchSetting && <GitBranchBadgesSetting />}
-                    {showOverflowSetting && <TabOverflowSetting />}
-                    {!showBranchSetting && !showOverflowSetting && (
+                    {!showBranchSetting && (
                       <EmptyMessage>No settings match your search.</EmptyMessage>
                     )}
                   </>
@@ -479,7 +476,6 @@ export function SettingsPanel(): JSX.Element {
               <SearchResults
                 normalizedQuery={normalizedQuery}
                 showBranchSetting={showBranchSetting}
-                showOverflowSetting={showOverflowSetting}
                 showOptimizedRendererSetting={showOptimizedRendererSetting}
                 showGpuAccelSetting={showGpuAccelSetting}
                 showContrastSetting={showContrastSetting}

@@ -6,7 +6,6 @@ import { join, resolve } from 'path'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
-const TAB_DRAG_MIME = 'application/x-multiagent-tab'
 interface SavedTab {
   id: string
   detached?: boolean
@@ -104,11 +103,8 @@ async function closeApp(target: ElectronApplication): Promise<void> {
 }
 
 async function tearOffTab(app: ElectronApplication, page: Page, tabName: string): Promise<Page> {
-  const tabElement = page.locator('.tab-strip').getByText(tabName, { exact: true }).locator('..')
-  const transfer = await page.evaluateHandle(() => new DataTransfer())
-  await tabElement.dispatchEvent('mousedown', { button: 0 })
-  await tabElement.dispatchEvent('dragstart', { dataTransfer: transfer })
-  await tabElement.dispatchEvent('dragend', { dataTransfer: transfer, screenX: -1_000, screenY: -1_000 })
+  await page.getByTitle(tabName, { exact: true }).click({ button: 'right' })
+  await page.getByRole('button', { name: 'Move Tab to New Window', exact: true }).click()
   await expect.poll(() => app.windows().length).toBe(2)
   return app.windows().find((candidate) => candidate !== page)!
 }
@@ -394,15 +390,15 @@ test.describe('cold-start layout restore', () => {
     expect(sessions.map((session) => session.sessionId)).not.toContain('fts-session')
   })
 
-  test('closing a detached shell tab from the primary sidebar kills its process', async () => {
+  test('closing a detached shell tab from its sidebar kills its process', async () => {
     const { ptyId } = await spawnShell(page, userDataDir)
     const ready = await page.evaluate((id) => window.ipc.invoke('pty:get-ready', id), ptyId) as { pid: number }
     const pid = ready.pid
     const detached = await tearOffTab(app, page, 'Alpha')
-    await expect(page.locator('.tab-strip').getByText('Alpha', { exact: true })).toHaveCount(0)
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
 
-    await page.getByText('Alpha', { exact: true }).click({ button: 'right' })
-    await page.getByText('Close tab', { exact: true }).click()
+    await detached.getByTitle('Alpha', { exact: true }).click({ button: 'right' })
+    await detached.getByText('Close tab', { exact: true }).click().catch(() => {})
     await expect.poll(() => app.evaluate((_electron, childPid) => {
       try { process.kill(childPid, 0); return true } catch { return false }
     }, pid)).toBe(false)
@@ -411,7 +407,7 @@ test.describe('cold-start layout restore', () => {
     // treat a closed-page error the same as isClosed() === true: no window means no Alpha tab.
     const detachedAlphaCount = () => detached.isClosed()
       ? Promise.resolve(0)
-      : detached.locator('.tab-strip').getByText('Alpha', { exact: true }).count().catch(() => 0)
+      : detached.getByTitle('Alpha', { exact: true }).count().catch(() => 0)
     await expect.poll(detachedAlphaCount).toBe(0)
     await page.waitForTimeout(5_500)
     expect(await detachedAlphaCount()).toBe(0)
@@ -599,81 +595,48 @@ test.describe('cold-start layout restore', () => {
     await expect(page.locator('.xterm-rows')).toContainText('__multiagent_direct_output__')
   })
 
-  test('commits tab:absorb before releasing the source window and reroutes its PTY', async () => {
-    const { tab, ptyId } = await spawnShell(page, userDataDir)
-    const primaryWindowId = await page.evaluate(() => window.ipc.invoke('window:get-id')) as number
-    const tabElement = page.locator('.tab-strip').getByText('Alpha').locator('..')
-    const transfer = await page.evaluateHandle(() => new DataTransfer())
-    await tabElement.dispatchEvent('mousedown', { button: 0 })
-    await tabElement.dispatchEvent('dragstart', { dataTransfer: transfer })
-    await tabElement.dispatchEvent('dragend', {
-      dataTransfer: transfer,
-      screenX: -1_000,
-      screenY: -1_000,
-    })
-    await expect.poll(() => app.evaluate(
-      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length
-    )).toBe(2)
-    const detachedWindowId = await app.evaluate(
-      ({ BrowserWindow }, primaryId) =>
-        BrowserWindow.getAllWindows().find((candidate) => candidate.id !== primaryId)?.id ?? null,
-      primaryWindowId
-    )
-    expect(typeof detachedWindowId).toBe('number')
-    // Real renderer tear-off must remove the tab from the local tab strip before
-    // the destination drop. This makes receiveTab application observable rather
-    // than letting a pre-existing destination copy mask a no-op regression.
-    await expect(page.locator('.tab-strip').getByText('Alpha')).toHaveCount(0)
-    await page.waitForTimeout(1_000)
-    const sourceInfo = await app.evaluate(
-      ({ BrowserWindow }, windowId) => {
-        const source = BrowserWindow.getAllWindows().find((candidate) => candidate.id === windowId)
-        return source ? { loading: source.webContents.isLoading(), url: source.webContents.getURL() } : null
-      },
-      detachedWindowId
-    )
-    expect(sourceInfo).toMatchObject({ loading: false })
-    expect(sourceInfo?.url).toContain('index.html')
-    // React effects install the release/commit listeners just after load.
-    await page.waitForTimeout(250)
+  test('moves a tab and its PTY to a new window from the sidebar', async () => {
+    const { ptyId } = await spawnShell(page, userDataDir)
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
 
-    await page.locator('.tab-strip').evaluate(
-      (strip, payload) => {
-        const transfer = new DataTransfer()
-        transfer.setData(payload.mime, JSON.stringify(payload.dragPayload))
-        strip.dispatchEvent(new DragEvent('dragover', {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: transfer,
-        }))
-        strip.dispatchEvent(new DragEvent('drop', {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: transfer,
-        }))
-      },
-      {
-        mime: TAB_DRAG_MIME,
-        dragPayload: { tab, ptyIds: [ptyId], sourceWindowId: detachedWindowId },
-      }
-    )
+    await expect(page.locator('.tab-strip')).toHaveCount(0)
+    await expect(detached.locator('.tab-strip')).toHaveCount(0)
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
+    await expect(detached.getByTitle('Alpha', { exact: true })).toBeVisible()
 
-    await expect(page.locator('.tab-strip').getByText('Alpha')).toHaveCount(1)
+    const output = detached.evaluate((id) => new Promise<string>((resolve, reject) => {
+      let text = ''
+      const timer = window.setTimeout(() => {
+        unsubscribe()
+        reject(new Error('Timed out waiting for detached PTY output'))
+      }, 15_000)
+      const unsubscribe = window.ipc.on('pty:data', (receivedId: unknown, chunk: unknown) => {
+        if (receivedId !== id || typeof chunk !== 'string') return
+        text += chunk
+        if (!text.includes('__sidebar_tearoff__')) return
+        window.clearTimeout(timer)
+        unsubscribe()
+        resolve(text)
+      })
+      window.ipc.send('pty:write', id, 'echo __sidebar_tearoff__\r')
+    }), ptyId)
+    await expect(output).resolves.toContain('__sidebar_tearoff__')
+  })
 
-    await expect.poll(() => app.evaluate(
-      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length
-    )).toBe(1)
-    const readyAtDestination = await page.evaluate(
-      (id) => window.ipc.invoke('pty:get-ready', id),
-      ptyId
-    ) as { cwd: string } | null
-    expect(readyAtDestination).toMatchObject({ cwd: homeDir })
+  test('returns a detached tab to the primary sidebar', async () => {
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
 
-    const layoutPath = join(userDataDir, 'layout.json')
-    await expect.poll(async () => {
-      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as { tabs: SavedTab[] }
-      return saved.tabs.filter((candidate) => candidate.id === tab.id && !candidate.detached).length
-    }).toBe(1)
+    await detached.getByTitle('Alpha', { exact: true }).click({ button: 'right' })
+    await detached.getByText('Bring to Main Window', { exact: true }).click().catch(() => {})
+
+    await expect(page.getByTitle('Alpha', { exact: true })).toBeVisible()
+    await expect.poll(() => detached.isClosed()
+      ? 0
+      : detached.getByTitle('Alpha', { exact: true }).count().catch(() => 0)
+    ).toBe(0)
   })
 
   test('completes the Claude deferred-spawn size handshake with a deterministic fake agent', async () => {

@@ -14,7 +14,7 @@ optional `customName` (user-set label prefix).
 
 Display labels: `src/renderer/src/utils/tabLabels.ts` is the single source for label
 computation. `paneLabelText(pane, sessions)` returns `"customName - directory"` or just the
-directory. `computeLabels(tabs, sessions)` returns a `Map<tabId, string>` for the tab bar.
+directory. `computeLabels(tabs, sessions)` returns a `Map<tabId, string>` for sidebar rows.
 
 ## Startup restore
 
@@ -25,8 +25,8 @@ includes `activeTabId`, `sidebarSectionOpen`, and `sidebarPanelSizes`; `layout:s
 `applyLayout` normalize every saved tab to `detached: false` because detached BrowserWindows
 are not recreated on cold start. `applyLayout` validates focused pane IDs, restores tab/pane
 metadata and sidebar section expansion state, clears stale detached-window ownership maps,
-and hydrates only the restored active tab. Inactive restored tabs stay visible in the tab
-bar/sidebar from metadata but their pane trees, shell PTYs, xterms, and agent resumes are
+and hydrates only the restored active tab. Inactive restored tabs stay visible in the sidebar
+from metadata but their pane trees, shell PTYs, xterms, and agent resumes are
 deferred until first focus. Once a tab has hydrated, keep it mounted while inactive so
 scrollback and live PTY/session state survive tab switches. Startup resume should feel
 exactly like "where we left off"; do not collapse, expand, or focus UI sections implicitly
@@ -37,10 +37,30 @@ Terminal scrollback default + the terminal renderer decision live in `docs/pty-a
 
 ## Multi-window ownership
 
-The primary window owns the sidebar and shows local plus detached tabs. Detached windows have
-content and a tab bar, but no sidebar. Multi-window tab and pane movement should preserve a
-single coherent ownership model across main, source renderer, target renderer, and PTY
-routing.
+Every window owns its own sidebar navigation rows. The primary renderer filters out detached
+ownership records, while a detached renderer shows only its local tabs. The top chrome remains for
+window controls and non-tab actions, but the top tab strip is no longer rendered. Detached
+sidebars stay open in this first version; their collapse state is not independently persisted.
+Multi-window tab and pane movement should preserve a single coherent ownership model across
+main, source renderer, target renderer, and PTY routing.
+
+### Sidebar-first tab movement
+
+The sidebar is the only tab/folder navigation surface. Individual sidebar actions retain
+rename, project-directory, pane navigation, and close; duplicate, close-other, and close-to-
+right actions are not part of the interface. The primary sidebar starts a tokenized tear-off
+with `tab:tear-off`, but the source keeps its tab and PTY routes until the detached renderer
+has passed the `tab:adopt` preflight and sent `tab:detached-ready`. Main validates every PTY's
+source route, reroutes the complete set, records target ownership, and sends the existing
+`tab:absorb-committed` finalization event. Timeout, startup failure, source close, target close,
+or explicit source cancellation restores only routes still owned by the pending target and
+removes the target's optimistic row.
+
+Returning a tab uses the explicit detached-sidebar return action. Native detached-window close
+is different: `WindowManager.unregister` invalidates pending tear-offs synchronously, retains
+closed-window tombstones so stale sync cannot reclaim ownership, removes primary detached
+ownership records
+with `tab:closed`, and cleans PTYs routed to the closing window. It never emits `tab:return`.
 
 ### Atomic focus transitions
 

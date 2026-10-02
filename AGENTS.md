@@ -160,6 +160,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 - Transfer ack must reflect **actual** apply (store actions return boolean); a no-op apply
   stays silent so main times out/rolls back. Guard self-drops at the drop site, the IPC
   handler, and the store action. Detached sync/focus messages are versioned/generation-checked.
+- Each window’s sidebar shows only its owned tabs; detached windows keep the sidebar, the top
+  tab strip is not a navigation surface, and closing a detached window closes its owned tabs
+  instead of returning them.
 
 ### UI & command registry
 

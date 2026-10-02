@@ -214,6 +214,16 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     scraper: statusScraper,
   })
 
+  windowManager.configureDetachedWindowCloseCleanup(async (ptyIds) => {
+    await Promise.all(ptyIds.map(async (ptyId) => {
+      windowManager.unroutePty(ptyId)
+      ptyOutputRouter.releasePty(ptyId)
+      ptyAgentKind.delete(ptyId)
+      await spawner?.disposePty(ptyId)
+      ptyManager.kill(ptyId)
+    }))
+  })
+
   let currentTerminalHostStatus: TerminalHostStatus | null = null
   async function releaseHostPtys(failure: Pick<PtyHostFailure, 'affectedPtyIds'>): Promise<void> {
     await Promise.all(failure.affectedPtyIds.map(async (ptyId) => {

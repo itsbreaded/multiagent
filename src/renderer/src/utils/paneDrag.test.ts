@@ -7,11 +7,9 @@ import {
   paneDragSourceId,
   PANE_DRAG_MIME,
   type PaneDragPayload,
-  TAB_DRAG_MIME,
-  absorbDroppedTab,
   transferDroppedPane,
 } from './paneDrag'
-import type { PaneLeaf, Tab } from '../../../shared/types'
+import type { PaneLeaf } from '../../../shared/types'
 
 function leaf(overrides: Partial<PaneLeaf> = {}): PaneLeaf {
   return {
@@ -92,20 +90,6 @@ describe('decodePaneDragPayload validation', () => {
 })
 
 describe('rejected cross-window drops', () => {
-  it('rolls back an optimistically received tab and logs the rejection', async () => {
-    const tab: Tab = { id: 'tab-1', rootNode: leaf(), focusedPaneId: 'pane-1' }
-    const dt = makeDataTransfer()
-    dt.setData(TAB_DRAG_MIME, JSON.stringify({ tab, ptyIds: ['pty-1'], sourceWindowId: 7 }))
-    const invoke = vi.fn().mockRejectedValue(new Error('timed out'))
-    Object.defineProperty(window, 'ipc', { configurable: true, value: { invoke } })
-    const receiveTab = vi.fn(), removeTabLocally = vi.fn()
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    expect(absorbDroppedTab(dragEvent(dt), 8, { receiveTab, removeTabLocally })).toBe(true)
-    await vi.waitFor(() => expect(removeTabLocally).toHaveBeenCalledWith('tab-1'))
-    expect(error).toHaveBeenCalledWith('tab:absorb failed', expect.any(Error))
-  })
-
   it('catches and logs a rejected pane transfer', async () => {
     const dt = makeDataTransfer()
     setPaneDragData(dt, { pane: leaf(), sourceTabId: 'tab-1', sourceWindowId: 7 })

@@ -21,7 +21,6 @@ export interface CommandContext {
   unzoom: () => void
   addTab: () => string
   closeTab: (tabId: string) => void
-  duplicateTab: (tabId: string) => void
   toggleSidebar: () => void
   toggleSessionBrowser: () => void
   openSettings: (section?: SettingsSection) => void
@@ -290,12 +289,6 @@ const COMMANDS: Command[] = [
     shortcut: (ctx) => buildHotkeys(ctx.hotkeyOverrides).closeTab.display,
     enabled: (ctx) => ctx.tabCount > 1,
     run: (ctx) => { ctx.closeTab(ctx.activeTabId); ctx.closeOverlays() },
-  },
-  {
-    id: 'tab.duplicate',
-    title: 'Duplicate Tab',
-    category: 'Tabs',
-    run: (ctx) => { ctx.duplicateTab(ctx.activeTabId); ctx.closeOverlays() },
   },
   {
     id: 'tab.rename',

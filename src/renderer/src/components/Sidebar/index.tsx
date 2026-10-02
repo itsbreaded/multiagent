@@ -1,5 +1,5 @@
 import React, { useRef, useCallback } from 'react'
-import { RECENT_SECTION_ID, tabSidebarSectionId, usePanesStore } from '../../store/panes'
+import { isTabVisibleInCurrentWindow, RECENT_SECTION_ID, tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessions } from '../../hooks/useSessions'
 import { SidebarSection } from './SidebarSection'
 import { SessionRow } from './SessionRow'
@@ -26,10 +26,12 @@ export function Sidebar(): JSX.Element {
   const setSidebarSectionOpen = usePanesStore((s) => s.setSidebarSectionOpen)
   const setAllTabSidebarSectionsOpen = usePanesStore((s) => s.setAllTabSidebarSectionsOpen)
   const tabs = usePanesStore((s) => s.tabs)
+  const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const { resumable, loading } = useSessions()
   const jiraProjects = useJiraStore((s) => s.projects)
   const refreshAllJira = useJiraStore((s) => s.refreshAll)
+  const visibleTabs = tabs.filter((tab) => isTabVisibleInCurrentWindow(isDetachedWindow, tab))
 
   function activeCwd(): string {
     return getFocusedPane()?.cwd ?? DEFAULT_CWD
@@ -37,7 +39,7 @@ export function Sidebar(): JSX.Element {
 
   const recentOpen = sidebarSectionOpen[RECENT_SECTION_ID] ?? true
   const recentHeight = sidebarPanelSizes[RECENT_SECTION_ID] ?? 220
-  const anyProjectOpen = tabs.some((tab) =>
+  const anyProjectOpen = visibleTabs.some((tab) =>
     sidebarSectionOpen[tabSidebarSectionId(tab.id)] ?? sidebarSectionOpen[tab.id] ?? tab.id === activeTabId
   )
 
@@ -52,18 +54,23 @@ export function Sidebar(): JSX.Element {
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      e.preventDefault()
       dragging.current = true
       startX.current = e.clientX
       startWidth.current = sidebarWidth
+      const previousUserSelect = document.body.style.userSelect
+      document.body.style.userSelect = 'none'
 
       const onMove = (me: MouseEvent) => {
         if (!dragging.current) return
+        me.preventDefault()
         const delta = me.clientX - startX.current
         const next = Math.max(140, Math.min(400, startWidth.current + delta))
         setSidebarWidth(next)
       }
       const onUp = () => {
         dragging.current = false
+        document.body.style.userSelect = previousUserSelect
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
       }
@@ -80,9 +87,12 @@ export function Sidebar(): JSX.Element {
       bottomDragging.current = true
       startY.current = e.clientY
       startBottomHeight.current = recentHeight
+      const previousUserSelect = document.body.style.userSelect
+      document.body.style.userSelect = 'none'
 
       const onMove = (me: MouseEvent) => {
         if (!bottomDragging.current) return
+        me.preventDefault()
         const delta = startY.current - me.clientY
         const containerHeight = sidebarRef.current?.clientHeight ?? window.innerHeight
         const max = Math.max(140, containerHeight - 64)
@@ -91,6 +101,7 @@ export function Sidebar(): JSX.Element {
       }
       const onUp = () => {
         bottomDragging.current = false
+        document.body.style.userSelect = previousUserSelect
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
       }
@@ -145,7 +156,7 @@ export function Sidebar(): JSX.Element {
           title={anyProjectOpen ? 'Collapse all project folders' : 'Expand all project folders'}
           aria-label={anyProjectOpen ? 'Collapse all project folders' : 'Expand all project folders'}
           onClick={() => setAllTabSidebarSectionsOpen(!anyProjectOpen)}
-          disabled={tabs.length === 0}
+          disabled={visibleTabs.length === 0}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -157,8 +168,8 @@ export function Sidebar(): JSX.Element {
             background: 'none',
             border: border.default,
             borderRadius: 5,
-            cursor: tabs.length === 0 ? 'default' : 'pointer',
-            opacity: tabs.length === 0 ? 0.4 : 1,
+            cursor: visibleTabs.length === 0 ? 'default' : 'pointer',
+            opacity: visibleTabs.length === 0 ? 0.4 : 1,
           }}
         >
           <img

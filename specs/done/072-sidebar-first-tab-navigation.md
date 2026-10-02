@@ -1,8 +1,8 @@
 # Spec: Sidebar-first tab navigation
 
-Status: draft
+Status: done
 Created: 2026-10-02
-Completed:
+Completed: 2026-10-02
 
 ## Problem
 
@@ -44,35 +44,38 @@ to the primary window.
    folders in the primary window.
 2. MUST make the sidebar the primary way to view and switch between tabs/project
    folders in every detached window.
-3. MUST hide the top tab strip in both primary and detached windows. The top
+3. MUST keep the detached-window sidebar open and usable for navigation in this
+   iteration; detached-sidebar collapse and per-window collapse persistence are
+   out of scope.
+4. MUST hide the top tab strip in both primary and detached windows. The top
    chrome must remain available for window controls and other non-tab actions;
    this spec does not require adding new top-level actions.
-4. MUST show each window's sidebar tab list using only the tabs owned by that
+5. MUST show each window's sidebar tab list using only the tabs owned by that
    window. The primary window must not display detached-window tabs as
    navigation entries, and a detached window must not display tabs owned by
    another window.
-5. MUST activate the selected tab's content when a user selects its folder/tab
+6. MUST activate the selected tab's content when a user selects its folder/tab
    entry in the sidebar, with the active tab visibly distinguishable from other
    entries.
-6. MUST preserve the sidebar's existing project-folder and pane navigation
+7. MUST preserve the sidebar's existing project-folder and pane navigation
    capabilities, including tab ordering, tab renaming, project-directory
    management, pane selection, and individual tab closing.
-7. MUST provide a sidebar tab action to move a tab from the primary window into
+8. MUST provide a sidebar tab action to move a tab from the primary window into
    a new detached window. After a successful move, the new window must show the
    moved tab in its sidebar and the source window must no longer show it.
-8. MUST provide the appropriate sidebar action for returning a detached tab to
+9. MUST provide the appropriate sidebar action for returning a detached tab to
    the primary window. After a successful return, the tab must disappear from
    the detached window and become available in the primary window's sidebar.
-9. MUST NOT expose duplicate-tab functionality in the new interface. A user
+10. MUST NOT expose duplicate-tab functionality in the new interface. A user
    must not be able to create a duplicate tab through a sidebar or top-chrome
    tab action.
-10. MUST NOT expose bulk tab-closing actions that were provided by the top tab
+11. MUST NOT expose bulk tab-closing actions that were provided by the top tab
     section, including closing other tabs or closing tabs to the right.
     Individual tab closing from the sidebar remains available.
-11. MUST close all tabs owned by a detached window when that window is closed.
+12. MUST close all tabs owned by a detached window when that window is closed.
     Those tabs must not be returned to, recreated in, or left as navigation
     entries in the primary window.
-12. SHOULD leave the remaining top chrome intentionally open for future
+13. SHOULD leave the remaining top chrome intentionally open for future
     non-tab controls without introducing replacement controls in this change.
 
 ## Non-Goals
@@ -109,6 +112,10 @@ to the primary window.
   the tab is removed from the primary sidebar, and the detached sidebar lists
   the tab.
 
+- **Given** a move-to-new-window request cannot be completed, **when** the move
+  fails, **then** the source sidebar retains the tab and no stale or duplicate
+  tab remains in the destination window.
+
 - **Given** a detached window owns a tab, **when** the user returns that tab to
   the primary window from the detached sidebar, **then** the tab is removed from
   the detached sidebar and appears in the primary sidebar.
@@ -133,9 +140,7 @@ to the primary window.
 
 ## Open Questions
 
-- [ ] Should sidebar collapsed/open state be independently controllable and
-  persisted per detached window, or should detached sidebars remain open for
-  reliable navigation in this first version?
+None outstanding.
 
 ## Resolved Decisions
 
@@ -146,6 +151,9 @@ to the primary window.
   the primary window.
 - Individual sidebar tab actions remain useful; bulk close actions and duplicate
   tab are removed from the new interface.
+- Detached sidebars remain open in this iteration and do not gain independent
+  collapse-state persistence, resolved by the auto-orchestrator blind subagent
+  because this preserves reliable navigation and is reversible.
 
 ## Out-of-Scope Notes
 

@@ -160,10 +160,7 @@ describe('usePanesStore — idle defaults for agent session entry paths', () => 
     const detached = makeLeaf('C:\\detached', 'agent', 'claude')
     usePanesStore.getState().initDetached({ id: 'detached-tab', rootNode: detached, focusedPaneId: detached.id }, [])
     expect(usePanesStore.getState().findPaneInAnyTab(detached.id)?.agentStatus?.status).toBe('idle')
-
-    const received = makeLeaf('C:\\received', 'agent', 'codex')
-    usePanesStore.getState().receiveTab({ id: 'received-tab', rootNode: received, focusedPaneId: received.id })
-    expect(usePanesStore.getState().findPaneInAnyTab(received.id)?.agentStatus?.status).toBe('idle')
+    expect(usePanesStore.getState().sidebarOpen).toBe(true)
 
     const synced = makeLeaf('C:\\synced', 'agent', 'opencode')
     usePanesStore.getState().syncDetachedTabs(7, [{ id: 'synced-tab', rootNode: synced, focusedPaneId: synced.id }], 'synced-tab')
@@ -719,50 +716,19 @@ describe('usePanesStore — tab close tears down PTYs', () => {
     expect(invoke.mock.calls.some((c) => c[0] === 'sessions:refresh')).toBe(false)
   })
 
-  it('closeOtherTabs kills every PTY outside the kept tab and none inside it', async () => {
-    const keep = plantLeavesTab([shellLeaf('keep-1')])
-    const other1 = plantLeavesTab([shellLeaf('o1-1')])
-    const other2 = plantLeavesTab([agentLeaf('o2-1', 'sess-2')])
-    void other1; void other2
+  it('reorders visible local tabs without moving hidden detached records', () => {
+    const localA = plantLeavesTab([shellLeaf('a-1')])
+    const detached = plantLeavesTab([shellLeaf('d-1')])
+    const localB = plantLeavesTab([shellLeaf('b-1')])
+    usePanesStore.setState((state) => ({
+      tabs: state.tabs.map((tab) => tab.id === detached ? { ...tab, detached: true } : tab),
+      isDetachedWindow: false,
+    }))
 
-    usePanesStore.getState().closeOtherTabs(keep)
-
-    await new Promise((r) => setTimeout(r, 10))
-    const killed = invoke.mock.calls.filter((c) => c[0] === 'pty:kill').map((c) => c[1])
-    expect(killed.sort()).toEqual(['o1-1', 'o2-1'])
-    expect(killed).not.toContain('keep-1')
-    // One refresh at most (other2 had a session).
-    expect(invoke.mock.calls.filter((c) => c[0] === 'sessions:refresh').length).toBeLessThanOrEqual(1)
-  })
-
-  it('closeTabsToRight kills only PTYs in tabs after the given index', async () => {
-    const t1 = plantLeavesTab([shellLeaf('t1-1')])
-    const t2 = plantLeavesTab([shellLeaf('t2-1')])
-    const t3 = plantLeavesTab([shellLeaf('t3-1')])
-    void t1; void t3
-
-    usePanesStore.getState().closeTabsToRight(t2)
-
-    await new Promise((r) => setTimeout(r, 10))
-    const killed = invoke.mock.calls.filter((c) => c[0] === 'pty:kill').map((c) => c[1])
-    expect(killed).toEqual(['t3-1'])
-    expect(killed).not.toContain('t2-1')
-  })
-
-  it('with window.ipc absent, all three actions still update state without throwing', () => {
-    delete (window as unknown as { ipc?: unknown }).ipc
-    const t1 = plantLeavesTab([shellLeaf('a-1')])
-    const t2 = plantLeavesTab([shellLeaf('b-1')])
-    const t3 = plantLeavesTab([shellLeaf('c-1')])
-
-    expect(() => usePanesStore.getState().closeTab(t1)).not.toThrow()
-    expect(() => usePanesStore.getState().closeOtherTabs(t2)).not.toThrow()
-    expect(() => usePanesStore.getState().closeTabsToRight(t2)).not.toThrow()
-    // t3 was the only one to the right of t2; both should still be present otherwise.
-    const ids = usePanesStore.getState().tabs.map((t) => t.id)
-    expect(ids).toContain(t2)
-    expect(ids).not.toContain(t1)
-    expect(ids).not.toContain(t3)
+    usePanesStore.getState().reorderTab(localB, localA)
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([localB, detached, localA])
+    usePanesStore.getState().reorderTab(localA, null)
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([localB, detached, localA])
   })
 
   it('closePaneInTab on agent-with-sessionId-but-no-ptyId still refreshes', async () => {

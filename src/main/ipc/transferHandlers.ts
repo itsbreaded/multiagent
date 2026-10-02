@@ -8,6 +8,19 @@ let remoteFocusRequestSeq = 0
 let remoteSpawnRequestSeq = 0
 let focusTargetVersionSeq = 0
 let tabReleaseSeq = 0
+const tearOffTimers = new Map<string, NodeJS.Timeout>()
+
+function trySend(win: BrowserWindow, channel: string, ...args: unknown[]): boolean {
+  try {
+    if (win.isDestroyed()) return false
+    win.webContents.send(channel, ...args)
+    return true
+  } catch {
+    // BrowserWindow#isDestroyed() and webContents.send() are not atomic.
+    // Renderer notifications during teardown are best effort.
+    return false
+  }
+}
 
 export function registerTransferHandlers(deps: {
   registrar: IpcRegistrar
@@ -18,19 +31,30 @@ export function registerTransferHandlers(deps: {
   registerWindowHandlers: (win: BrowserWindow) => void
 }): void {
   const { registrar, ack, windowManager, getPrimaryWindow, flushDirectOutput, registerWindowHandlers } = deps
-  registrar.handle('tab:tear-off', async (e, tabJson: string, ptyIds: string[], screenX: number, screenY: number) => {
+  registrar.handle('tab:tear-off', async (e, tabJson: string, ptyIds: string[], screenX: number, screenY: number, transferId: string) => {
     const fromWin = BrowserWindow.fromWebContents(e.sender) ?? getPrimaryWindow()
-    if (!fromWin) return null
+    if (!fromWin || typeof transferId !== 'string' || !transferId) return null
     const tab = JSON.parse(tabJson) as Tab
     const newWin = windowManager.createDetachedWindow(
       fromWin,
       screenX,
       screenY,
-      { mode: 'detached', tab, ptyIds }
+      { mode: 'detached', tab, ptyIds, transferId }
     )
-    windowManager.prepareDetachedTab(newWin.id, [tab.id])
+    if (!windowManager.prepareTabTearOff(transferId, fromWin.id, newWin.id, tab.id, ptyIds)) {
+      newWin.close()
+      return null
+    }
     registerWindowHandlers(newWin)
-    return { windowId: newWin.id }
+    const timer = setTimeout(() => {
+      tearOffTimers.delete(transferId)
+      const canceled = windowManager.cancelPendingTabTransfer(transferId)
+      if (canceled && !fromWin.isDestroyed()) {
+        // The source renderer intentionally remains unchanged on timeout.
+      }
+    }, 5000)
+    tearOffTimers.set(transferId, timer)
+    return { windowId: newWin.id, transferId }
   })
 
   registrar.handle('window:focus-for-tab', (_e, tabId: string) => {
@@ -74,7 +98,7 @@ export function registerTransferHandlers(deps: {
       currentWin.focus()
     }
     void ack.waitForAck(win.id, 'pane:focus-remote-applied', requestId, () => {
-      win.webContents.send('pane:focus-remote', tabId, paneId, requestId)
+      trySend(win, 'pane:focus-remote', tabId, paneId, requestId)
     }).then(focusTarget)
     return true
   })
@@ -98,7 +122,7 @@ export function registerTransferHandlers(deps: {
 
     const requestId = `${Date.now()}:${++remoteSpawnRequestSeq}`
     const result = await ack.waitForAckWithResult(win.id, 'tab:spawn-in-project-applied', requestId, () => {
-      win.webContents.send('tab:spawn-in-project-remote', tabId, payload, requestId)
+      trySend(win, 'tab:spawn-in-project-remote', tabId, payload, requestId)
     }, 3000)
     if (
       result.ok &&
@@ -114,9 +138,21 @@ export function registerTransferHandlers(deps: {
     return result.ok
   })
 
-  registrar.handle('tab:adopt', (e, ptyIds: string[]) => {
+  registrar.handle('tab:adopt', (e, ptyIds: string[], transferId?: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win) return false
+    if (typeof transferId === 'string') {
+      const transfer = windowManager.getPendingTabTransfer(transferId)
+      if (!transfer || transfer.targetWindowId !== win.id || transfer.phase !== 'pending') return false
+      if (transfer.ptyIds.length !== ptyIds.length || transfer.ptyIds.some((ptyId) => !ptyIds.includes(ptyId))) return false
+      const sourceWin = windowManager.getWindowById(transfer.sourceWindowId)
+      if (!sourceWin || sourceWin.isDestroyed() || windowManager.isWindowClosing(sourceWin.id)) return false
+      if (windowManager.getOwnershipGeneration(transfer.tabId) !== transfer.sourceGeneration) return false
+      if (transfer.ptyIds.some((ptyId) => windowManager.getPtyOwner(ptyId) !== sourceWin.webContents.id)) return false
+      // Adoption is a preflight. The PTY route changes only in detached-ready,
+      // after the target renderer has mounted its local tab.
+      return true
+    }
     for (const ptyId of ptyIds as string[]) {
       windowManager.routePty(ptyId, win.webContents.id)
       flushDirectOutput(ptyId)
@@ -124,10 +160,55 @@ export function registerTransferHandlers(deps: {
     return true
   })
 
-  registrar.on('tab:detached-ready', (e, tabId: string) => {
+  registrar.on('tab:detached-ready', (e, tabId: string, transferId?: string) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win || typeof tabId !== 'string') return
+    if (typeof transferId === 'string') {
+      const transfer = windowManager.markTabTransferReady(transferId)
+      if (!transfer || transfer.targetWindowId !== win.id || transfer.tabId !== tabId) return
+      const sourceWin = windowManager.getWindowById(transfer.sourceWindowId)
+      if (!sourceWin || sourceWin.isDestroyed() || windowManager.isWindowClosing(sourceWin.id) || windowManager.isWindowClosing(win.id)) {
+        windowManager.cancelPendingTabTransfer(transferId)
+        return
+      }
+      if (windowManager.getOwnershipGeneration(tabId) !== transfer.sourceGeneration) {
+        windowManager.cancelPendingTabTransfer(transferId)
+        return
+      }
+      if (transfer.ptyIds.some((ptyId) => windowManager.getPtyOwner(ptyId) !== sourceWin.webContents.id)) {
+        windowManager.cancelPendingTabTransfer(transferId)
+        return
+      }
+      for (const ptyId of transfer.ptyIds) {
+        windowManager.transferPty(ptyId, win)
+        flushDirectOutput(ptyId)
+      }
+      windowManager.recordDetachedTab(win.id, [tabId])
+      if (windowManager.isWindowClosing(sourceWin.id) || sourceWin.isDestroyed() || win.isDestroyed()) {
+        windowManager.cancelPendingTabTransfer(transferId)
+        return
+      }
+      const committed = windowManager.commitPendingTabTransfer(transferId)
+      if (!committed) return
+      const timer = tearOffTimers.get(transferId)
+      if (timer) clearTimeout(timer)
+      tearOffTimers.delete(transferId)
+      trySend(sourceWin, 'tab:absorb-committed', tabId, win.id, transferId)
+      trySend(win, 'tab:absorb-committed', tabId, win.id, transferId)
+      return
+    }
     windowManager.markDetachedTabReady(win.id, tabId)
+  })
+
+  registrar.handle('tab:tear-off-cancel', (e, transferId: string) => {
+    if (typeof transferId !== 'string') return false
+    const transfer = windowManager.getPendingTabTransfer(transferId)
+    const sender = BrowserWindow.fromWebContents(e.sender)
+    if (!transfer || !sender || (transfer.sourceWindowId !== sender.id && transfer.targetWindowId !== sender.id)) return false
+    const timer = tearOffTimers.get(transferId)
+    if (timer) clearTimeout(timer)
+    tearOffTimers.delete(transferId)
+    return windowManager.cancelPendingTabTransfer(transferId) !== null
   })
 
   // Live tab state sync: detached window pushes its tab list; we update routing and forward to others.
@@ -140,13 +221,13 @@ export function registerTransferHandlers(deps: {
     let version: number | undefined
     if (typeof payloadOrWindowId === 'object' && payloadOrWindowId !== null) {
       const payload = payloadOrWindowId as { windowId?: unknown; tabs?: unknown; activeTabId?: unknown; version?: unknown }
-      if (typeof payload.windowId !== 'number' || !Array.isArray(payload.tabs)) return
+      if (typeof payload.windowId !== 'number' || payload.windowId !== senderWin.id || !Array.isArray(payload.tabs)) return
       windowId = payload.windowId
       tabsJson = JSON.stringify(payload.tabs)
       activeTabId = typeof payload.activeTabId === 'string' ? payload.activeTabId : undefined
       version = typeof payload.version === 'number' ? payload.version : undefined
     } else {
-      if (typeof payloadOrWindowId !== 'number' || typeof tabsJsonArg !== 'string') return
+      if (typeof payloadOrWindowId !== 'number' || payloadOrWindowId !== senderWin.id || typeof tabsJsonArg !== 'string') return
       windowId = payloadOrWindowId
       tabsJson = tabsJsonArg
       activeTabId = typeof activeTabIdArg === 'string' ? activeTabIdArg : undefined
@@ -171,26 +252,26 @@ export function registerTransferHandlers(deps: {
       const sourceWin = windowManager.getWindowById(payload.sourceWindowId)
       if (!sourceWin || sourceWin.isDestroyed()) return false
       if (payload.sourceWindowId === targetWindowId) {
-        sourceWin.webContents.send('pane:move-remote', payload.pane.id, payload.targetTabId)
+        trySend(sourceWin, 'pane:move-remote', payload.pane.id, payload.targetTabId)
         return true
       }
       const transferId = `${Date.now()}:${Math.random().toString(36).slice(2)}`
       const committed = await waitForAck(toWin, 'pane:received-applied', transferId, () => {
-        toWin.webContents.send('pane:received', JSON.stringify(payload.pane), payload.targetTabId, transferId)
+        trySend(toWin, 'pane:received', JSON.stringify(payload.pane), payload.targetTabId, transferId)
       })
       if (!committed || toWin.isDestroyed()) {
         // The target optimistically added the pane on pane:received but the transfer never
         // committed (no PTY routing will follow). Tell it to discard the pane so it does not
         // linger as a dead, output-less duplicate. The source still holds its working pane.
         // See specs/atomic-state-audit-followup #2.
-        if (!toWin.isDestroyed()) toWin.webContents.send('pane:transfer-rolledback', payload.pane.id)
+        trySend(toWin, 'pane:transfer-rolledback', payload.pane.id)
         return false
       }
       if (payload.pane.ptyId) {
         windowManager.transferPty(payload.pane.ptyId, toWin)
         flushDirectOutput(payload.pane.ptyId)
       }
-      sourceWin.webContents.send('pane:remove-remote', payload.pane.id)
+      trySend(sourceWin, 'pane:remove-remote', payload.pane.id)
       return true
     } catch {
       return false
@@ -212,10 +293,10 @@ export function registerTransferHandlers(deps: {
       if (!srcWin || srcWin.isDestroyed() || !tgtWin || tgtWin.isDestroyed()) return false
       const transferId = `split:${Date.now()}:${Math.random().toString(36).slice(2)}`
       const committed = await waitForAck(tgtWin, 'renderer:insert-at-split-applied', transferId, () => {
-        tgtWin.webContents.send('renderer:insert-at-split', JSON.stringify(pane), targetPaneId, direction, sourceBefore, transferId)
+        trySend(tgtWin, 'renderer:insert-at-split', JSON.stringify(pane), targetPaneId, direction, sourceBefore, transferId)
       })
       if (!committed || tgtWin.isDestroyed()) return false
-      srcWin.webContents.send('renderer:remove-pane', pane.id)
+      trySend(srcWin, 'renderer:remove-pane', pane.id)
       if (pane.ptyId) {
         windowManager.transferPty(pane.ptyId, tgtWin)
         flushDirectOutput(pane.ptyId)
@@ -244,9 +325,9 @@ export function registerTransferHandlers(deps: {
       // Commit in both windows before rerouting either PTY (multi-window invariant)
       const [ok1, ok2] = await Promise.all([
         waitForAck(srcWin, 'renderer:replace-pane-applied', id1, () =>
-          srcWin.webContents.send('renderer:replace-pane', sourcePane.id, JSON.stringify(targetPane), id1)),
+          trySend(srcWin, 'renderer:replace-pane', sourcePane.id, JSON.stringify(targetPane), id1)),
         waitForAck(tgtWin, 'renderer:replace-pane-applied', id2, () =>
-          tgtWin.webContents.send('renderer:replace-pane', targetPane.id, JSON.stringify(sourcePane), id2)),
+          trySend(tgtWin, 'renderer:replace-pane', targetPane.id, JSON.stringify(sourcePane), id2)),
       ])
       if (!ok1 || !ok2) {
         // Partial commit: roll back whichever side applied so we never leave a half-swapped tree
@@ -254,10 +335,10 @@ export function registerTransferHandlers(deps: {
         // ack means that side did not apply; only undo the side that acked. PTYs are untouched here
         // (reroute happens only after both commit), so restoring the tree is sufficient.
         if (ok1 && !srcWin.isDestroyed()) {
-          srcWin.webContents.send('renderer:replace-pane', targetPane.id, JSON.stringify(sourcePane), `${id1}:rollback`)
+          trySend(srcWin, 'renderer:replace-pane', targetPane.id, JSON.stringify(sourcePane), `${id1}:rollback`)
         }
         if (ok2 && !tgtWin.isDestroyed()) {
-          tgtWin.webContents.send('renderer:replace-pane', sourcePane.id, JSON.stringify(targetPane), `${id2}:rollback`)
+          trySend(tgtWin, 'renderer:replace-pane', sourcePane.id, JSON.stringify(targetPane), `${id2}:rollback`)
         }
         return false
       }
@@ -283,9 +364,9 @@ export function registerTransferHandlers(deps: {
     if (!sourceWin || sourceWin.isDestroyed()) return false
     // Unrecord before sending release so stale syncs and unregister() don't re-process this tab.
     windowManager.unrecordTab(tabId)
-    sourceWin.webContents.send('tab:release', tabId)
+    trySend(sourceWin, 'tab:release', tabId)
     const callerWin = BrowserWindow.fromWebContents(e.sender)
-    callerWin?.webContents.send('tab:return', tabId)
+    if (callerWin) trySend(callerWin, 'tab:return', tabId)
     return true
   })
 
@@ -299,8 +380,8 @@ export function registerTransferHandlers(deps: {
     const primaryWin = windowManager.getPrimaryWindow()
     if (!primaryWin || primaryWin.isDestroyed() || primaryWin.id === callerWin.id) return false
     windowManager.unrecordTab(tabId)
-    callerWin.webContents.send('tab:release', tabId)
-    primaryWin.webContents.send('tab:return', tabId)
+    trySend(callerWin, 'tab:release', tabId)
+    trySend(primaryWin, 'tab:return', tabId)
     return true
   })
 
@@ -316,10 +397,12 @@ export function registerTransferHandlers(deps: {
 
     const sourceWin = windowManager.getWindowById(sourceWindowId)
     if (!sourceWin || sourceWin.isDestroyed()) return false
+    const sourceGeneration = windowManager.getOwnershipGeneration(tab.id)
+    const sourceWebContentsId = sourceWin.webContents.id
 
     const releaseId = `${Date.now()}:${++tabReleaseSeq}`
     const released = await waitForAck(sourceWin, 'tab:release-applied', releaseId, () => {
-      sourceWin.webContents.send(
+      trySend(sourceWin,
         'tab:release',
         tab.id,
         windowManager.isDetachedWindow(toWin.id) ? toWin.id : undefined,
@@ -329,7 +412,15 @@ export function registerTransferHandlers(deps: {
     // On failure the source has NOT yet touched its copy of the tab (it only acked the
     // release; finalize is deferred to tab:absorb-committed below), so there is nothing to
     // roll back here — the absorber discards its optimistic copy on the falsy result.
-    if (!released || toWin.isDestroyed()) return false
+    if (
+      !released ||
+      toWin.isDestroyed() ||
+      sourceWin.isDestroyed() ||
+      windowManager.isWindowClosing(sourceWin.id) ||
+      windowManager.isWindowClosing(toWin.id) ||
+      windowManager.getOwnershipGeneration(tab.id) !== sourceGeneration ||
+      ptyIds.some((ptyId) => windowManager.getPtyOwner(ptyId) !== sourceWebContentsId)
+    ) return false
 
     windowManager.unrecordTab(tab.id)
     if (windowManager.isDetachedWindow(toWin.id)) {
@@ -343,7 +434,7 @@ export function registerTransferHandlers(deps: {
     // drop/detach its copy. Without this commit the source either lost the tab before the
     // transfer was confirmed (data loss) or never released it at all.
     if (!sourceWin.isDestroyed()) {
-      sourceWin.webContents.send(
+      trySend(sourceWin,
         'tab:absorb-committed',
         tab.id,
         windowManager.isDetachedWindow(toWin.id) ? toWin.id : undefined,

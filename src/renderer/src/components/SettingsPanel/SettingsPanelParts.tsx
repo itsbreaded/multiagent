@@ -10,7 +10,6 @@ import { GpuAccelerationSetting } from './settings/GpuAccelerationSetting'
 import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
 import { RescaleGlyphsSetting } from './settings/RescaleGlyphsSetting'
 import { ScrollbackSetting } from './settings/ScrollbackSetting'
-import { TabOverflowSetting } from './settings/TabOverflowSetting'
 import { IdleAgentSuspensionSetting } from './settings/IdleAgentSuspensionSetting'
 
 const MCP_KEYWORDS = ['mcp', 'model context', 'protocol', 'server', 'browser']
@@ -20,7 +19,6 @@ const UPDATE_KEYWORDS = ['update', 'version', 'auto update', 'release', 'upgrade
 export function SearchResults({
   normalizedQuery,
   showBranchSetting,
-  showOverflowSetting,
   showOptimizedRendererSetting,
   showGpuAccelSetting,
   showContrastSetting,
@@ -41,7 +39,6 @@ export function SearchResults({
 }: {
   normalizedQuery: string
   showBranchSetting: boolean
-  showOverflowSetting: boolean
   showOptimizedRendererSetting: boolean
   showGpuAccelSetting: boolean
   showContrastSetting: boolean
@@ -60,7 +57,7 @@ export function SearchResults({
   onResetHotkey: (id: HotkeyId) => void
   onNavigate: (section: SettingsSection) => void
 }): JSX.Element {
-  const hasAppearance = showBranchSetting || showOverflowSetting
+  const hasAppearance = showBranchSetting
   const hasHotkeys    = visibleHotkeys.length > 0
   const hasMcp        = matchesSettingQuery(normalizedQuery, MCP_KEYWORDS.join(' '))
   const hasProviders  = matchesSettingQuery(normalizedQuery, PROVIDER_KEYWORDS.join(' '))
@@ -76,7 +73,6 @@ export function SearchResults({
         <>
           <SectionLabel>Appearance</SectionLabel>
           {showBranchSetting && <GitBranchBadgesSetting />}
-          {showOverflowSetting && <TabOverflowSetting />}
         </>
       )}
       {hasHotkeys && (

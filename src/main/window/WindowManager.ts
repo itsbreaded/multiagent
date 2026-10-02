@@ -4,6 +4,18 @@ export interface WindowInitData {
   mode: 'detached'
   tab: object
   ptyIds: string[]
+  transferId?: string
+}
+
+export interface PendingTabTransfer {
+  transferId: string
+  sourceWindowId: number
+  targetWindowId: number
+  tabId: string
+  ptyIds: string[]
+  originalRoutes: Map<string, number | undefined>
+  sourceGeneration: number
+  phase: 'pending' | 'ready' | 'canceled' | 'committed'
 }
 
 export interface SnapZone {
@@ -22,7 +34,7 @@ export class WindowManager {
   private pendingDetachedWindowTabs = new Map<number, string[]>()
   /** Resolvers waiting on a tab's ownership handshake to land (see waitForTabOwnership). */
   private ownershipWaiters = new Map<string, Array<(windowId: number) => void>>()
-  /** Maps detached window id → tab ids it owns (for tab:return on close) */
+  /** Maps detached window id → tab ids it owns for routing and terminal close cleanup. */
   private detachedWindowTabs = new Map<number, string[]>()
   /** Maps tab id → detached window id (for window:focus-for-tab) */
   private tabToWindowId = new Map<string, number>()
@@ -30,6 +42,9 @@ export class WindowManager {
   private tabSyncTombstones = new Map<string, number>()
   private syncVersionByWindow = new Map<number, number>()
   private detachedWindowIds = new Set<number>()
+  private closingWindowIds = new Set<number>()
+  private pendingTabTransfers = new Map<string, PendingTabTransfer>()
+  private detachedWindowCloseCleanup: ((ptyIds: string[]) => void | Promise<void>) | null = null
 
   private preloadPath: string | null = null
   private rendererUrl: string | null = null
@@ -48,44 +63,64 @@ export class WindowManager {
     this.onWindowCreated = onWindowCreated
   }
 
+  configureDetachedWindowCloseCleanup(cleanup: (ptyIds: string[]) => void | Promise<void>): void {
+    this.detachedWindowCloseCleanup = cleanup
+  }
+
   register(win: BrowserWindow): void {
     this.windows.set(win.id, win)
     win.once('closed', () => this.unregister(win.id))
   }
 
   unregister(id: number): void {
-    // If a detached window is closing, tell the primary window to return its tabs.
-    const tabIds = Array.from(new Set([
-      ...(this.detachedWindowTabs.get(id) ?? []),
-      ...(this.pendingDetachedWindowTabs.get(id) ?? []),
-    ]))
-    if (tabIds && tabIds.length > 0) {
-      // The primary window is the first registered window that is NOT this one.
-      const primaryWin = this._getPrimaryWindow(id)
-      if (primaryWin && !primaryWin.isDestroyed()) {
-        for (const tabId of tabIds) {
-          primaryWin.webContents.send('tab:return', tabId)
-          this.tabToWindowId.delete(tabId)
-          this.tabSyncTombstones.set(tabId, id)
-          this.bumpTabOwnershipGeneration(tabId)
-        }
+    if (this.closingWindowIds.has(id)) return
+    this.closingWindowIds.add(id)
+
+    // BrowserWindow#closed is synchronous. Invalidate pending transfer tokens
+    // and restore routes before clearing ownership so a late ready/commit cannot
+    // win the shutdown race.
+    for (const transfer of [...this.pendingTabTransfers.values()]) {
+      if (transfer.sourceWindowId === id || transfer.targetWindowId === id) {
+        this.cancelPendingTabTransfer(transfer.transferId, id)
       }
-      this.detachedWindowTabs.delete(id)
-      this.pendingDetachedWindowTabs.delete(id)
     }
+
+    const closingWin = this.windows.get(id)
+    const closingWebContentsId = this.getWebContentsId(closingWin)
+    const ownedTabIds = Array.from(new Set(this.detachedWindowTabs.get(id) ?? []))
+    const cleanupPtyIds = closingWebContentsId === undefined
+      ? []
+      : [...this.ptyToWebContentsId.entries()]
+        .filter(([, wcId]) => wcId === closingWebContentsId)
+        .map(([ptyId]) => ptyId)
+
+    const primaryWin = this.getPrimaryWindow()
+    if (ownedTabIds.length > 0 && primaryWin && !primaryWin.isDestroyed()) {
+      for (const tabId of ownedTabIds) {
+        this.tabToWindowId.delete(tabId)
+        this.tabSyncTombstones.set(tabId, id)
+        this.bumpTabOwnershipGeneration(tabId)
+        this.trySend(primaryWin, 'tab:closed', tabId, id)
+      }
+    }
+    this.detachedWindowTabs.delete(id)
+    this.pendingDetachedWindowTabs.delete(id)
     this.detachedWindowIds.delete(id)
 
     this.windows.delete(id)
     for (const [ptyId, wcId] of this.ptyToWebContentsId) {
       const win = this.getWindowByWebContentsId(wcId)
-      if (!win || win.id === id) {
-        this.ptyToWebContentsId.delete(ptyId)
-      }
+      if (!win || win.id === id) this.ptyToWebContentsId.delete(ptyId)
+    }
+    this.pendingInitData.delete(id)
+    if (cleanupPtyIds.length > 0 && this.detachedWindowCloseCleanup) {
+      void Promise.resolve(this.detachedWindowCloseCleanup(Array.from(new Set(cleanupPtyIds)))).catch(() => {})
     }
   }
 
   /** Record that a detached window owns the given tab IDs (appends; used on tear-off). */
   recordDetachedTab(windowId: number, tabIds: string[]): void {
+    if (!this.detachedWindowIds.has(windowId) || this.closingWindowIds.has(windowId)) return
     const existing = this.detachedWindowTabs.get(windowId) ?? []
     this.detachedWindowTabs.set(windowId, [...existing, ...tabIds])
     for (const tabId of tabIds) {
@@ -99,6 +134,87 @@ export class WindowManager {
   prepareDetachedTab(windowId: number, tabIds: string[]): void {
     const existing = this.pendingDetachedWindowTabs.get(windowId) ?? []
     this.pendingDetachedWindowTabs.set(windowId, Array.from(new Set([...existing, ...tabIds])))
+  }
+
+  prepareTabTearOff(
+    transferId: string,
+    sourceWindowId: number,
+    targetWindowId: number,
+    tabId: string,
+    ptyIds: string[],
+  ): boolean {
+    const source = this.windows.get(sourceWindowId)
+    const target = this.windows.get(targetWindowId)
+    if (!source || source.isDestroyed() || !target || target.isDestroyed() || this.closingWindowIds.has(sourceWindowId) || this.closingWindowIds.has(targetWindowId)) return false
+    const originalRoutes = new Map(ptyIds.map((ptyId) => [ptyId, this.ptyToWebContentsId.get(ptyId)] as const))
+    this.pendingTabTransfers.set(transferId, {
+      transferId,
+      sourceWindowId,
+      targetWindowId,
+      tabId,
+      ptyIds: [...ptyIds],
+      originalRoutes,
+      sourceGeneration: this.getOwnershipGeneration(tabId),
+      phase: 'pending',
+    })
+    this.prepareDetachedTab(targetWindowId, [tabId])
+    return true
+  }
+
+  getPendingTabTransfer(transferId: string): PendingTabTransfer | null {
+    return this.pendingTabTransfers.get(transferId) ?? null
+  }
+
+  markTabTransferReady(transferId: string): PendingTabTransfer | null {
+    const transfer = this.pendingTabTransfers.get(transferId)
+    if (!transfer || transfer.phase !== 'pending') return null
+    transfer.phase = 'ready'
+    return transfer
+  }
+
+  commitPendingTabTransfer(transferId: string): PendingTabTransfer | null {
+    const transfer = this.pendingTabTransfers.get(transferId)
+    if (!transfer || transfer.phase !== 'ready') return null
+    transfer.phase = 'committed'
+    this.pendingTabTransfers.delete(transferId)
+    return transfer
+  }
+
+  cancelPendingTabTransfer(transferId: string, closingWindowId?: number): PendingTabTransfer | null {
+    const transfer = this.pendingTabTransfers.get(transferId)
+    if (!transfer || transfer.phase === 'committed' || transfer.phase === 'canceled') return null
+    transfer.phase = 'canceled'
+    this.pendingTabTransfers.delete(transferId)
+    const source = this.windows.get(transfer.sourceWindowId)
+    const target = this.windows.get(transfer.targetWindowId)
+    const sourceAlive = !!source && !source.isDestroyed() && !this.closingWindowIds.has(transfer.sourceWindowId)
+    const targetWebContentsId = this.getWebContentsId(target)
+    if (sourceAlive && targetWebContentsId !== undefined) {
+      for (const ptyId of transfer.ptyIds) {
+        if (this.ptyToWebContentsId.get(ptyId) !== targetWebContentsId) continue
+        const originalOwner = transfer.originalRoutes.get(ptyId)
+        if (originalOwner === undefined) this.ptyToWebContentsId.delete(ptyId)
+        else this.ptyToWebContentsId.set(ptyId, originalOwner)
+      }
+    }
+    if (target && !target.isDestroyed() && transfer.targetWindowId !== closingWindowId) {
+      this.trySend(target, 'tab:tear-off-rolled-back', transfer.tabId, transfer.transferId)
+      try {
+        target.close()
+      } catch {
+        // The native window may cross from closing to destroyed between the
+        // checks above and close(). Its closed handler still performs cleanup.
+      }
+    }
+    const pending = this.pendingDetachedWindowTabs.get(transfer.targetWindowId) ?? []
+    const remaining = pending.filter((id) => id !== transfer.tabId)
+    if (remaining.length > 0) this.pendingDetachedWindowTabs.set(transfer.targetWindowId, remaining)
+    else this.pendingDetachedWindowTabs.delete(transfer.targetWindowId)
+    return transfer
+  }
+
+  isWindowClosing(windowId: number): boolean {
+    return this.closingWindowIds.has(windowId)
   }
 
   private resolveOwnershipWaiters(tabId: string, windowId: number): void {
@@ -169,6 +285,7 @@ export class WindowManager {
 
   /** Replace the full tab list for a window (used on live-sync updates). */
   recordDetachedTabsForWindow(windowId: number, tabIds: string[], version?: number): string[] {
+    if (!this.detachedWindowIds.has(windowId) || this.closingWindowIds.has(windowId)) return []
     if (version !== undefined) {
       const previous = this.syncVersionByWindow.get(windowId) ?? 0
       if (version <= previous) return this.detachedWindowTabs.get(windowId) ?? []
@@ -208,10 +325,32 @@ export class WindowManager {
     this.tabOwnershipGeneration.set(tabId, (this.tabOwnershipGeneration.get(tabId) ?? 0) + 1)
   }
 
+  private getWebContentsId(win: BrowserWindow | null | undefined): number | undefined {
+    if (!win) return undefined
+    try {
+      return win.webContents.id
+    } catch {
+      return undefined
+    }
+  }
+
+  private trySend(win: BrowserWindow, channel: string, ...args: unknown[]): boolean {
+    try {
+      if (win.isDestroyed()) return false
+      win.webContents.send(channel, ...args)
+      return true
+    } catch {
+      // BrowserWindow#isDestroyed() and webContents.send() are not atomic.
+      // A close can win between them; renderer notifications are best effort
+      // during teardown and must never crash the main process.
+      return false
+    }
+  }
+
   broadcastExcept(excludeId: number, channel: string, ...args: unknown[]): void {
     for (const [id, win] of this.windows) {
       if (id !== excludeId && !win.isDestroyed()) {
-        win.webContents.send(channel, ...args)
+        this.trySend(win, channel, ...args)
       }
     }
   }
@@ -225,14 +364,6 @@ export class WindowManager {
     if (win.isMinimized()) win.restore()
     win.focus()
     return true
-  }
-
-  /** Returns the first registered window that is NOT the given window id (i.e. the primary). */
-  private _getPrimaryWindow(excludeId: number): BrowserWindow | null {
-    for (const [id, win] of this.windows) {
-      if (id !== excludeId && !win.isDestroyed()) return win
-    }
-    return null
   }
 
   /** Returns the primary (non-detached) window — the original window tabs reattach to. */
@@ -268,14 +399,13 @@ export class WindowManager {
     if (wcId === undefined) return false
     const win = this.getWindowByWebContentsId(wcId)
     if (!win || win.isDestroyed()) return false
-    win.webContents.send(channel, ...args)
-    return true
+    return this.trySend(win, channel, ...args)
   }
 
   broadcastAll(channel: string, ...args: unknown[]): void {
     for (const win of this.windows.values()) {
       if (!win.isDestroyed()) {
-        win.webContents.send(channel, ...args)
+        this.trySend(win, channel, ...args)
       }
     }
   }

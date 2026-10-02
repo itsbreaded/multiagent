@@ -32,10 +32,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Tab strip: hide scrollbar while keeping scroll */
-.tab-strip::-webkit-scrollbar { display: none; }
-.tab-strip { scrollbar-width: none; }
-
 .dark-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: var(--ui-scroll-thumb) var(--ui-bg-panel);

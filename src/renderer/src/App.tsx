@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { AppChrome } from './components/AppChrome'
-import { LeftChrome } from './components/TabBar'
 import { PaneGrid } from './components/PaneGrid'
 import { SessionBrowser } from './components/SessionBrowser'
 import { CommandPalette } from './components/CommandPalette'
@@ -16,7 +15,7 @@ import { useSessionsStore } from './store/sessions'
 import { useJiraStore } from './store/jira'
 import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
-import { absorbDroppedTab, transferDroppedPane, PANE_DRAG_MIME, TAB_DRAG_MIME } from './utils/paneDrag'
+import { transferDroppedPane, PANE_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
 import type { Tab, ProviderAvailability } from '../../shared/types'
 import { computeLabels } from './utils/tabLabels'
@@ -96,9 +95,7 @@ export default function App(): JSX.Element {
   const dirPickerTabId = usePanesStore((s) => s.dirPickerTabId)
   const closeDirPicker = usePanesStore((s) => s.closeDirPicker)
   const setTabDefaultCwd = usePanesStore((s) => s.setTabDefaultCwd)
-  const receiveTab = usePanesStore((s) => s.receiveTab)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
-  const tabOverflowMode = useSettingsStore((s) => s.tabOverflowMode)
 
   const tabs = usePanesStore((s) => s.tabs)
   const sessions = useSessionsStore((s) => s.sessions)
@@ -111,7 +108,7 @@ export default function App(): JSX.Element {
 
   // Jira is coordinated from App rather than Sidebar so startup lookup still
   // happens when the sidebar is collapsed. Detached renderers never perform
-  // Jira lookups; their tabs are represented in the primary renderer.
+  // Jira lookups remain primary-owned; detached sidebars do not initiate them.
   const jiraHydrated = useJiraStore((s) => s.hydrated)
   const hydrateJiraSettings = useJiraStore((s) => s.hydrateSettings)
   const syncJiraProjects = useJiraStore((s) => s.syncProjects)
@@ -172,7 +169,7 @@ export default function App(): JSX.Element {
     return off
   }, [hydrateIdleAgentSuspension])
 
-  // Fetch this window's ID from main so the tab bar can use it for drag-out.
+  // Fetch this window's ID from main for pane transfer and ownership messages.
   const setWindowId = usePanesStore((s) => s.setWindowId)
   useEffect(() => {
     window.ipc.invoke('window:get-id').then((id) => {
@@ -187,8 +184,8 @@ export default function App(): JSX.Element {
 
     window.ipc.invoke('window:get-init-data').then((initData) => {
       if (initData && (initData as { mode: string }).mode === 'detached') {
-        const { tab, ptyIds } = initData as { tab: Tab; ptyIds: string[] }
-        usePanesStore.getState().initDetached(tab, ptyIds)
+        const { tab, ptyIds, transferId } = initData as { tab: Tab; ptyIds: string[]; transferId?: string }
+        usePanesStore.getState().initDetached(tab, ptyIds, transferId)
         setLayoutReady(true)
         return
       }
@@ -269,8 +266,6 @@ export default function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [layoutReady, isDetachedWindow, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes])
 
-  const isWrapLayout = tabOverflowMode === 'wrap' && !isDetachedWindow
-
   // Wait only for the runtime availability check; preferences already restored.
   if (!providerAvailabilityHydrated) {
     return <div style={{ height: '100vh', background: '#0e1011' }} />
@@ -288,35 +283,13 @@ export default function App(): JSX.Element {
         color: '#d4d4d4',
       }}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(PANE_DRAG_MIME)) e.preventDefault()
+        if (e.dataTransfer.types.includes(PANE_DRAG_MIME)) e.preventDefault()
       }}
       onDrop={(e) => {
-        if (activeTabId && transferDroppedPane(e, activeTabId, windowId, { movePaneToTab })) return
-        absorbDroppedTab(e, windowId, { receiveTab, removeTabLocally: usePanesStore.getState().removeTabLocally })
+        if (activeTabId) transferDroppedPane(e, activeTabId, windowId, { movePaneToTab })
       }}
     >
-      {isWrapLayout ? (
-        /* Wrap mode: left column (LeftChrome + Sidebar) || right column (tab strip + content) */
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          {/* Left column */}
-          <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-            <LeftChrome withBorderBottom />
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
-              <Sidebar />
-            </div>
-          </div>
-          {/* Right column */}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            <AppChrome />
-            {!isDetachedWindow && <UpdateBanner />}
-            <TerminalHostRecoveryBanner />
-            <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <PaneGrid />
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
+      <>
           <AppChrome />
           {!isDetachedWindow && <UpdateBanner />}
           <TerminalHostRecoveryBanner />
@@ -347,8 +320,7 @@ export default function App(): JSX.Element {
               <PaneGrid />
             </div>
           </div>
-        </>
-      )}
+      </>
 
       {/* Overlays — workspace tools only shown in the primary window */}
       {!isDetachedWindow && sessionBrowserOpen && <SessionBrowser />}

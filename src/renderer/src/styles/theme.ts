@@ -191,6 +191,7 @@ export const sidebarStyles = {
     bottom: 0,
     width: 4,
     cursor: 'col-resize',
+    userSelect: 'none',
     zIndex: ui.z.resizeHandle,
   },
   resizeHandleHorizontal: {
@@ -200,6 +201,7 @@ export const sidebarStyles = {
     right: 0,
     height: 6,
     cursor: 'row-resize',
+    userSelect: 'none',
     zIndex: ui.z.resizeHandle + 1,
   },
 } satisfies Record<string, React.CSSProperties>

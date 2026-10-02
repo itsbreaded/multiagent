@@ -282,7 +282,7 @@ test.describe('browser MCP Electron runtime', () => {
     const host = JSON.parse(hostWindows.text) as Array<{ id: number; title: string }>
     expect(host.length).toBeGreaterThan(0)
     await expect(callBrowserTool(48127, 'ui_content', { window_id: host[0].id })).resolves.toMatchObject({ isError: false })
-    await expect(callBrowserTool(48127, 'ui_click', { window_id: host[0].id, selector: 'button[title="New tab (Ctrl+T)"]' })).resolves.toMatchObject({ isError: false })
+    await expect(callBrowserTool(48127, 'ui_click', { window_id: host[0].id, selector: 'button[title="New Project Folder"]' })).resolves.toMatchObject({ isError: false })
     await expect(callBrowserTool(48127, 'ui_type', { window_id: host[0].id, selector: 'input', text: 'Automation test' })).resolves.toMatchObject({ isError: false })
     await expect(callBrowserTool(48127, 'ui_evaluate', { window_id: host[0].id, js: 'document.querySelector(\'input\')?.value' })).resolves.toEqual({ isError: false, text: '"Automation test"' })
     await expect(callBrowserTool(48127, 'ui_evaluate', { window_id: host[0].id, js: 'undefined' })).resolves.toEqual({ isError: false, text: 'undefined' })

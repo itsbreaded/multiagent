@@ -30,4 +30,14 @@ describe('provider settings persistence', () => {
     await Promise.resolve()
     expect(ipc.invoke).toHaveBeenCalledWith('settings:set-agent-providers', desired)
   })
+
+  it('ignores and removes the retired tab overflow preference when saving current settings', () => {
+    localStorage.setItem('multiagent:settings', JSON.stringify({ tabOverflowMode: 'wrap' }))
+
+    useSettingsStore.getState().setShowGitBranchBadges(true)
+
+    const persisted = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as Record<string, unknown>
+    expect(persisted).not.toHaveProperty('tabOverflowMode')
+    expect(useSettingsStore.getState()).not.toHaveProperty('tabOverflowMode')
+  })
 })

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { PaneLeaf, Session, SpawnInTabPayload, SplitDirection, Tab } from '../../../../shared/types'
-import { tabSidebarSectionId, usePanesStore } from '../../store/panes'
+import { isTabVisibleInCurrentWindow, tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
 import { SidebarSection } from './SidebarSection'
 import { computeLabels, paneLabelText } from '../../utils/tabLabels'
@@ -26,6 +26,7 @@ const TAB_REORDER_MIME = 'application/x-multiagent-tab-reorder'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
+  const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
   const sessions = useSessionsStore((s) => s.sessions)
@@ -36,16 +37,13 @@ export function TabSections(): JSX.Element {
   const setActiveTab = usePanesStore((s) => s.setActiveTab)
   const draggedPaneId = usePanesStore((s) => s.draggedPaneId)
   const movePaneToTab = usePanesStore((s) => s.movePaneToTab)
-  const findPaneInAnyTab = usePanesStore((s) => s.findPaneInAnyTab)
-  const detachedWindowTabIds = usePanesStore((s) => s.detachedWindowTabIds)
-  const detachedWindowActiveTabIds = usePanesStore((s) => s.detachedWindowActiveTabIds)
   const windowId = usePanesStore((s) => s.windowId)
   const activeWindowId = usePanesStore((s) => s.activeWindowId)
   const pendingFocusTarget = usePanesStore((s) => s.pendingFocusTarget)
   const localFocusArmed = usePanesStore((s) => s.localFocusArmed)
-  const focusDetachedPaneOptimistically = usePanesStore((s) => s.focusDetachedPaneOptimistically)
   const focusLocalPaneFromSidebar = usePanesStore((s) => s.focusLocalPaneFromSidebar)
   const spawnInTab = usePanesStore((s) => s.spawnInTab)
+  const moveTabToNewWindow = usePanesStore((s) => s.moveTabToNewWindow)
   // Which window is effectively active: pending remote click wins, otherwise OS focus.
   // Only one window shows a highlighted pane at a time — confirmedFocusTarget is
   // intentionally excluded so that OS focus changes immediately de-highlight the old window.
@@ -57,11 +55,15 @@ export function TabSections(): JSX.Element {
   const jiraRows = useJiraStore((s) => s.rows)
   const jiraProjects = useJiraStore((s) => s.projects)
   const refreshJiraTab = useJiraStore((s) => s.refreshTab)
+  const visibleTabs = useMemo(
+    () => tabs.filter((tab) => isTabVisibleInCurrentWindow(isDetachedWindow, tab)),
+    [tabs, isDetachedWindow],
+  )
 
-  const tabLabels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
+  const tabLabels = useMemo(() => computeLabels(visibleTabs, sessions), [visibleTabs, sessions])
   const leavesByTab = useMemo(
-    () => new Map(tabs.map((tab) => [tab.id, tab.rootNode ? collectLeaves(tab.rootNode) : []])),
-    [tabs],
+    () => new Map(visibleTabs.map((tab) => [tab.id, tab.rootNode ? collectLeaves(tab.rootNode) : []])),
+    [visibleTabs],
   )
 
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
@@ -74,9 +76,9 @@ export function TabSections(): JSX.Element {
   // undefined = no reorder drag; null = insert at end; string = insert before that tab id
   const [reorderInsertBeforeId, setReorderInsertBeforeId] = useState<string | null | undefined>(undefined)
 
-  const dirPickerTab = dirPickerTabId ? tabs.find((t) => t.id === dirPickerTabId) : null
-  const spawnMenuTab = spawnMenu ? tabs.find((t) => t.id === spawnMenu.tabId) : null
-  const dirPickerSpawnTab = dirPickerSpawn ? tabs.find((t) => t.id === dirPickerSpawn.tabId) : null
+  const dirPickerTab = dirPickerTabId ? visibleTabs.find((t) => t.id === dirPickerTabId) : null
+  const spawnMenuTab = spawnMenu ? visibleTabs.find((t) => t.id === spawnMenu.tabId) : null
+  const dirPickerSpawnTab = dirPickerSpawn ? visibleTabs.find((t) => t.id === dirPickerSpawn.tabId) : null
 
   function startRename(tabId: string) {
     setRenameValue(tabLabels.get(tabId) ?? '')
@@ -117,13 +119,13 @@ export function TabSections(): JSX.Element {
   }
 
   useEffect(() => {
-    if (pendingRenameTabId && tabs.some((t) => t.id === pendingRenameTabId)) {
+    if (pendingRenameTabId && visibleTabs.some((t) => t.id === pendingRenameTabId)) {
       startRename(pendingRenameTabId)
       setPendingRenameTabId(null)
     }
-  }, [pendingRenameTabId, tabs, startRename, setPendingRenameTabId])
+  }, [pendingRenameTabId, visibleTabs, startRename, setPendingRenameTabId])
 
-  if (tabs.length === 0) return <></>
+  if (visibleTabs.length === 0) return <></>
 
   return (
     <>
@@ -146,7 +148,7 @@ export function TabSections(): JSX.Element {
           e.stopPropagation()
           try {
             const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-            reorderTab(sourceTabId, reorderInsertBeforeId, 'all')
+            reorderTab(sourceTabId, reorderInsertBeforeId)
           } catch {}
           setReorderInsertBeforeId(undefined)
         }}
@@ -156,145 +158,15 @@ export function TabSections(): JSX.Element {
           }
         }}
       >
-      {tabs.map((tab) => {
+      {visibleTabs.map((tab) => {
         const label = tabLabels.get(tab.id) ?? 'Tab'
         const leaves = leavesByTab.get(tab.id) ?? []
         const isActive = tab.id === activeTabId
         const isRenaming = renamingTabId === tab.id
         const sectionId = tabSidebarSectionId(tab.id)
         const open = sidebarSectionOpen[sectionId] ?? sidebarSectionOpen[tab.id] ?? isActive
-        const isDetached = !!tab.detached
-        const tabIdx = tabs.findIndex((candidate) => candidate.id === tab.id)
-        const isLastTab = tabIdx === tabs.length - 1
-
-        // Detached tabs: same visual treatment as local tabs.
-        // Header/pane clicks focus the external window.
-        // Pane drag onto header transfers the pane cross-window.
-        if (isDetached) {
-          const ownerWindowId = Object.entries(detachedWindowTabIds).find(([, ids]) => ids.includes(tab.id))?.[0]
-          const ownerWindowNumId = ownerWindowId !== undefined ? parseInt(ownerWindowId, 10) : undefined
-          const focusTab = () => {
-            if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id)
-            window.ipc?.invoke('window:focus-for-tab', tab.id).catch(() => {})
-          }
-          const isOwnerWindowActive = ownerWindowNumId !== undefined && effectiveActiveWindowId === ownerWindowNumId
-          const focusTargetForTab = pendingFocusTarget !== null && pendingFocusTarget.windowId === ownerWindowNumId && pendingFocusTarget.tabId === tab.id
-            ? pendingFocusTarget
-            : null
-          const isTabActiveInWindow = focusTargetForTab !== null || (ownerWindowId ? detachedWindowActiveTabIds[ownerWindowId] === tab.id : leaves.length > 0)
-          return (
-            <SidebarSection
-              key={tab.id}
-              title={label}
-              count={leaves.length > 1 ? leaves.length : undefined}
-              open={open}
-              onOpenChange={(next) => setSidebarSectionOpen(sectionId, next)}
-              onTitleClick={focusTab}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })
-              }}
-              headerActions={
-                <SidebarHoverActions
-                  menuTitle="Tab menu"
-                  closeTitle="Close tab"
-                  onMenu={(e) => setTabMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
-                  onClose={() => closeTab(tab.id)}
-                />
-              }
-              headerActionsAlways={
-                <>
-                  {jiraRows[tab.id] && <JiraStatusBadge row={jiraRows[tab.id]} />}
-                  <ProjectSpawnButton
-                    onClick={(e) => setSpawnMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
-                  />
-                </>
-              }
-              titleSuffix={
-                <span title="In separate window — click to focus" style={{ fontSize: 11, color: '#5a6050', marginLeft: 4, flexShrink: 0 }}>↗</span>
-              }
-              headerDraggable={!isRenaming}
-              onHeaderDragStart={(e) => {
-                e.dataTransfer.setData(TAB_REORDER_MIME, JSON.stringify({ tabId: tab.id }))
-                e.dataTransfer.effectAllowed = 'move'
-              }}
-              onHeaderDragEnd={() => {
-                setReorderInsertBeforeId(undefined)
-              }}
-              headerDropActive={dropTabId === tab.id}
-              headerInsertTop={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === tab.id}
-              sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastTab}
-              onHeaderDragOver={(e) => {
-                // Project reorder — MIME-type check prevents collision with pane drops.
-                if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  if (e.clientY - rect.top < rect.height / 2) {
-                    setReorderInsertBeforeId(tab.id)
-                  } else {
-                    setReorderInsertBeforeId(tabs[tabIdx + 1]?.id ?? null)
-                  }
-                  return
-                }
-                // Pane drop
-                if (!draggedPaneId && !e.dataTransfer.types.includes(PANE_DRAG_MIME)) return
-                e.preventDefault()
-                e.stopPropagation()
-                setDropTabId(tab.id)
-              }}
-              onHeaderDragLeave={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
-              }}
-              onHeaderDrop={(e) => {
-                // Project reorder
-                if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  try {
-                    const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-                    reorderTab(sourceTabId, reorderInsertBeforeId ?? null, 'all')
-                  } catch {}
-                  setReorderInsertBeforeId(undefined)
-                  return
-                }
-                const payload = decodePaneDragPayload(e.dataTransfer)
-                if (!draggedPaneId && !payload) return
-                e.preventDefault()
-                e.stopPropagation()
-                if (payload && ownerWindowNumId !== undefined) {
-                  transferPaneToTab(payload, tab.id, ownerWindowNumId)
-                } else if (draggedPaneId) {
-                  const pane = findPaneInAnyTab(draggedPaneId)
-                  const sourceWindowId = windowId
-                  if (pane && sourceWindowId !== null && ownerWindowNumId !== undefined) {
-                    transferPaneToTab({ pane, sourceTabId: activeTabId, sourceWindowId }, tab.id, ownerWindowNumId)
-                  }
-                }
-                setDropTabId(null)
-              }}
-            >
-              {leaves.map((pane) => (
-                <PaneRow
-                  key={pane.id}
-                  pane={pane}
-                  tab={tab}
-                  sourceWindowId={ownerWindowNumId}
-                  isFocused={isOwnerWindowActive && isTabActiveInWindow && pane.id === (focusTargetForTab?.paneId ?? tab.focusedPaneId)}
-                  isOnlyPane={leaves.length <= 1}
-                  sessions={sessions}
-                  onMouseDownOverride={() => {
-                    if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id, pane.id)
-                  }}
-                  onClickOverride={() => {
-                    if (ownerWindowNumId !== undefined) focusDetachedPaneOptimistically(ownerWindowNumId, tab.id, pane.id)
-                    window.ipc?.invoke('window:focus-pane', tab.id, pane.id).catch(() => {})
-                  }}
-                />
-              ))}
-            </SidebarSection>
-          )
-        }
+        const tabIdx = visibleTabs.findIndex((candidate) => candidate.id === tab.id)
+        const isLastTab = tabIdx === visibleTabs.length - 1
 
         return (
           <SidebarSection
@@ -348,7 +220,7 @@ export function TabSections(): JSX.Element {
                 if (e.clientY - rect.top < rect.height / 2) {
                   setReorderInsertBeforeId(tab.id)
                 } else {
-                  setReorderInsertBeforeId(tabs[tabIdx + 1]?.id ?? null)
+                    setReorderInsertBeforeId(visibleTabs[tabIdx + 1]?.id ?? null)
                 }
                 return
               }
@@ -368,7 +240,7 @@ export function TabSections(): JSX.Element {
                 e.stopPropagation()
                 try {
                   const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-                  reorderTab(sourceTabId, reorderInsertBeforeId ?? null, 'all')
+                  reorderTab(sourceTabId, reorderInsertBeforeId ?? null)
                 } catch {}
                 setReorderInsertBeforeId(undefined)
                 return
@@ -407,13 +279,19 @@ export function TabSections(): JSX.Element {
       {tabMenu && (
         <TabContextMenu
           tabId={tabMenu.tabId}
-          tabs={tabs}
+          tabs={visibleTabs}
           x={tabMenu.x}
           y={tabMenu.y}
           onClose={() => setTabMenu(null)}
           onRename={(id) => { startRename(id); setTabMenu(null) }}
           onCloseTab={(id) => { closeTab(id); setTabMenu(null) }}
           onChangeDefaultDir={(id) => { setDirPickerTabId(id); setTabMenu(null) }}
+          isDetachedWindow={isDetachedWindow}
+          onMoveToNewWindow={(id) => { void moveTabToNewWindow(id); setTabMenu(null) }}
+          onReturnToMain={(id) => {
+            window.ipc?.invoke('tab:reattach-home', id).catch(console.error)
+            setTabMenu(null)
+          }}
           jiraMatch={jiraProjects[tabMenu.tabId] !== undefined}
           onRefreshJiraStatus={() => { void refreshJiraTab(tabMenu.tabId) }}
         />
@@ -457,7 +335,7 @@ export function TabSections(): JSX.Element {
           skipLabel="Cancel"
           onConfirm={(dir) => {
             const { tabId, choice, direction } = dirPickerSpawn
-            const tab = tabs.find((t) => t.id === tabId)
+            const tab = visibleTabs.find((t) => t.id === tabId)
             if (tab) spawnInProject(tab, { ...choice, cwd: dir, direction })
             setDirPickerSpawn(null)
           }}
@@ -954,6 +832,9 @@ function TabContextMenu({
   onRename,
   onCloseTab,
   onChangeDefaultDir,
+  isDetachedWindow,
+  onMoveToNewWindow,
+  onReturnToMain,
   jiraMatch,
   onRefreshJiraStatus,
 }: {
@@ -965,11 +846,13 @@ function TabContextMenu({
   onRename: (id: string) => void
   onCloseTab: (id: string) => void
   onChangeDefaultDir: (id: string) => void
+  isDetachedWindow: boolean
+  onMoveToNewWindow: (id: string) => void
+  onReturnToMain: (id: string) => void
   jiraMatch: boolean
   onRefreshJiraStatus: () => void
 }): JSX.Element {
   const tab = tabs.find((t) => t.id === tabId)
-  const isDetached = !!tab?.detached
   const defaultDirLabel = tab?.defaultCwd
     ? `Change Project Directory  (${tab.defaultCwd.split(/[\\/]/).pop()})`
     : 'Set Project Directory'
@@ -992,15 +875,20 @@ function TabContextMenu({
       <div style={menuStyles.backdrop} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
       <div style={{ ...menuStyles.panel, left: x, top: y, minWidth: 200 }}>
         {btn('Rename', () => { onRename(tabId); onClose() })}
-        {!isDetached && btn(defaultDirLabel, () => { onChangeDefaultDir(tabId); onClose() })}
+        {btn(defaultDirLabel, () => { onChangeDefaultDir(tabId); onClose() })}
         {jiraMatch && btn('Refresh Jira status', () => { onRefreshJiraStatus(); onClose() })}
-        {isDetached && (
+        {isDetachedWindow ? (
           <>
             <div style={{ ...menuStyles.separator, margin: '4px 0' }} />
-            {btn('Bring to This Window', () => {
-              window.ipc?.invoke('tab:bring-home', tabId).catch(console.error)
+            {btn('Bring to Main Window', () => {
+              onReturnToMain(tabId)
               onClose()
             })}
+          </>
+        ) : (
+          <>
+            <div style={{ ...menuStyles.separator, margin: '4px 0' }} />
+            {btn('Move Tab to New Window', () => { onMoveToNewWindow(tabId); onClose() })}
           </>
         )}
         <div style={{ ...menuStyles.separator, margin: '4px 0' }} />

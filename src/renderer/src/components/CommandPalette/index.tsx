@@ -21,7 +21,6 @@ export function CommandPalette(): JSX.Element {
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
   const addTab = usePanesStore((s) => s.addTab)
   const closeTab = usePanesStore((s) => s.closeTab)
-  const duplicateTab = usePanesStore((s) => s.duplicateTab)
   const setPaneCustomName = usePanesStore((s) => s.setPaneCustomName)
   const setPendingRenamePaneId = usePanesStore((s) => s.setPendingRenamePaneId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
@@ -66,7 +65,6 @@ export function CommandPalette(): JSX.Element {
     unzoom,
     addTab,
     closeTab,
-    duplicateTab,
     toggleSidebar,
     toggleSessionBrowser,
     openSettings,
