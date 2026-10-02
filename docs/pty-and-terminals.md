@@ -164,6 +164,15 @@ new output to scrollback. The setting is applied at construction and on registry
 metadata promotion and layout remounts cannot leave an old value behind. Shell panes retain the
 existing behavior because shell users may rely on cleared screens remaining in scrollback.
 
+### Codex fullscreen mouse capture
+
+Recent Codex releases default the transcript to a fullscreen TUI that enables terminal mouse
+reporting. Inside xterm this otherwise diverts ordinary drag selection and right-click events into
+Codex, leaving the app's Ctrl+C and context-menu copy paths with no xterm selection. Codex panes
+set xterm's `mouseEventsRequireAlt` option so unmodified mouse gestures remain owned by xterm
+and the app; holding Alt is the explicit override that sends mouse interaction to Codex. Keep the
+option applied both when an xterm is created and when a registry-owned instance is reattached.
+
 ### cwd fallback
 
 Agent panes must not fall back to `os.homedir()` when their saved cwd is missing.

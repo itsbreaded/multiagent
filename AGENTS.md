@@ -121,6 +121,8 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   retain `-c tui.animations=false -c tui.terminal_title=[]`.
 - Inline agent panes use viewport-only xterm ED2 (`scrollOnEraseInDisplay=false`) so TUI redraws
   do not turn the current viewport into duplicate scrollback; shell panes retain `true`.
+- Codex fullscreen mouse reporting must not block ordinary xterm selection or the terminal context
+  menu; keep `mouseEventsRequireAlt` enabled for Codex panes so Alt remains the TUI mouse override.
 - Shell CWD via OSC 633, sourcing the `<userData>`-materialized copy of
   `shellIntegration.{ps1,sh}`, **not** the raw asar path. Don't reintroduce `shellterm:*`/Bare
   Term. One process-snapshot mechanism per platform behind `snapshotProcesses()`; fails closed.

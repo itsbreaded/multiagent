@@ -13,7 +13,7 @@ import { agentLabel } from '../../utils/agents'
 import * as xtermRegistry from '../../utils/xtermRegistry'
 import { createDirectPtyDataHandler } from '../../terminal/ptyData'
 import { createPrimaryLinkActivator, installTerminalLinkHandling } from '../../terminal/links'
-import { scrollOnEraseInDisplayForPane } from '../../terminal/terminalOptions'
+import { mouseEventsRequireAltForPane, scrollOnEraseInDisplayForPane } from '../../terminal/terminalOptions'
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
@@ -61,6 +61,19 @@ const RESIZE_COL_DEBOUNCE_MS = 100
 const AGENT_RESIZE_COL_DEBOUNCE_MS = 400
 const RESIZE_DEBOUNCE_BUFFER_THRESHOLD = 200
 const ALT_ENTER_SEQUENCE = '\x1b\r'
+
+function copyTerminalSelection(selection: string): void {
+  // Use Electron's main-process clipboard first. Chromium's renderer
+  // clipboard API can be unavailable for an embedded terminal window even
+  // when the native Electron clipboard is healthy.
+  if (window.ipc) {
+    void window.ipc.invoke('shell:copy-to-clipboard', selection).catch(() => {
+      navigator.clipboard.writeText(selection).catch(() => {})
+    })
+    return
+  }
+  navigator.clipboard.writeText(selection).catch(() => {})
+}
 
 interface ContextMenu {
   x: number
@@ -136,7 +149,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     const xterm = xtermRef.current
     if (!xterm) return
     const selection = xterm.getSelection()
-    if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+    if (selection) copyTerminalSelection(selection)
     setContextMenu(null)
   }, [])
 
@@ -194,6 +207,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         cursorBlink: pane.paneType !== 'agent',
         scrollback: storeState.terminalScrollbackLines ?? DEFAULT_TERMINAL_SCROLLBACK_LINES,
         scrollOnEraseInDisplay: scrollOnEraseInDisplayForPane(pane.paneType),
+        mouseEventsRequireAlt: mouseEventsRequireAltForPane(pane.paneType, pane.agentKind),
         allowTransparency: false,
         minimumContrastRatio: storeState.terminalMinimumContrastRatio,
         rescaleOverlappingGlyphs: storeState.terminalRescaleOverlappingGlyphs,
@@ -251,6 +265,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     // settled (or a previously promoted shell), so keep the option in sync on
     // every attach as well as at construction time.
     xterm.options.scrollOnEraseInDisplay = scrollOnEraseInDisplayForPane(pane.paneType)
+    xterm.options.mouseEventsRequireAlt = mouseEventsRequireAltForPane(pane.paneType, pane.agentKind)
 
     // Re-attach the key handler on every mount so the closure captures fresh
     // refs. attachCustomKeyEventHandler replaces the previous handler.
@@ -292,7 +307,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           case 'clipboard-copy': {
             // Always consume. Silent no-op when nothing is selected.
             const selection = xterm.getSelection()
-            if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+            if (selection) copyTerminalSelection(selection)
             return stop()
           }
           case 'clipboard-paste': {
