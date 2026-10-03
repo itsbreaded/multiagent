@@ -148,6 +148,7 @@ test.describe('browser MCP Electron runtime', () => {
         ...process.env,
         MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
         MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
+        MULTIAGENT_E2E_MINIMIZED: '1',
         MULTIAGENT_E2E_BROWSER_MCP_TRACE: '1',
         MULTIAGENT_UI_AUTOMATION_PORT: '48127',
       },
@@ -319,6 +320,7 @@ test.describe('browser MCP Electron runtime', () => {
         ...process.env,
         MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
         MULTIAGENT_E2E_USER_DATA_DIR: secondUserDataDir,
+        MULTIAGENT_E2E_MINIMIZED: '1',
         MULTIAGENT_UI_AUTOMATION_PORT: '48128',
       },
     })

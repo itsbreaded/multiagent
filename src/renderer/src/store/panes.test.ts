@@ -35,6 +35,36 @@ function tabRoot(tabId: string): PaneNode | undefined {
   return usePanesStore.getState().tabs.find((t) => t.id === tabId)?.rootNode
 }
 
+describe('usePanesStore — sidebar tab transfer staging', () => {
+  it('restores a detached proxy and the previous active tab on rollback', () => {
+    const proxy = { id: 'transfer-tab', rootNode: makeLeaf('C:\\detached'), focusedPaneId: '' , detached: true } as Tab
+    proxy.focusedPaneId = proxy.rootNode!.id
+    const other = { id: 'other-tab', rootNode: makeLeaf('C:\\other'), focusedPaneId: '' } as Tab
+    other.focusedPaneId = other.rootNode!.id
+    const incoming = { ...proxy, detached: false, customLabel: 'Transferred' }
+    usePanesStore.setState({ tabs: [proxy, other], activeTabId: other.id, isDetachedWindow: false })
+
+    expect(usePanesStore.getState().receiveTab(incoming, 0, 'absorb-rollback')).toBe(true)
+    expect(usePanesStore.getState().tabs.find((tab) => tab.id === proxy.id)?.detached).toBe(false)
+    expect(usePanesStore.getState().activeTabId).toBe(proxy.id)
+    expect(usePanesStore.getState().rollbackReceivedTab(proxy.id, 'absorb-rollback')).toBe(true)
+    expect(usePanesStore.getState().tabs.find((tab) => tab.id === proxy.id)?.detached).toBe(true)
+    expect(usePanesStore.getState().activeTabId).toBe(other.id)
+    expect(usePanesStore.getState().tabs.filter((tab) => tab.id === proxy.id)).toHaveLength(1)
+  })
+
+  it('keeps a source tab until absorb commit and then marks primary ownership detached', () => {
+    const tab = { id: 'source-tab', rootNode: makeLeaf('C:\\source'), focusedPaneId: '' } as Tab
+    tab.focusedPaneId = tab.rootNode!.id
+    usePanesStore.setState({ tabs: [tab], activeTabId: tab.id, isDetachedWindow: false })
+
+    expect(usePanesStore.getState().stageTabAbsorbRelease(tab.id, 'absorb-commit')).toBe(true)
+    expect(usePanesStore.getState().tabs).toHaveLength(1)
+    expect(usePanesStore.getState().commitTabAbsorb(tab.id, 44, 'absorb-commit')).toBe(true)
+    expect(usePanesStore.getState().tabs[0].detached).toBe(true)
+  })
+})
+
 // Captured at module load: the pane:agent-event handler registered by wirePanesIpc
 // against the setup mock's window.ipc.on, before any test nulls window.ipc. The handler
 // closes over the live store, so it stays valid across the per-test state reset.

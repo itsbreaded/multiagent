@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { PaneLeaf, Session, SpawnInTabPayload, SplitDirection, Tab } from '../../../../shared/types'
 import { isTabVisibleInCurrentWindow, tabSidebarSectionId, usePanesStore } from '../../store/panes'
 import { useSessionsStore } from '../../store/sessions'
@@ -7,6 +7,7 @@ import { computeLabels, paneLabelText } from '../../utils/tabLabels'
 import { collectLeaves } from '../../../../shared/paneTree'
 import { displayGitBranch } from '../../utils/git'
 import { decodePaneDragPayload, paneDragSourceId, PANE_DRAG_MIME, setPaneDragData, type PaneDragPayload } from '../../utils/paneDrag'
+import { decodeTabDragPayload, setTabDragData, TAB_DRAG_MIME, type TabDragPayload } from '../../utils/tabDrag'
 import { DirPicker } from '../DirPicker'
 import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnChoiceMenu'
 import { useGitBranch } from '../../hooks/useGitBranch'
@@ -73,8 +74,14 @@ export function TabSections(): JSX.Element {
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [dropTabId, setDropTabId] = useState<string | null>(null)
+  const [tabDropTabId, setTabDropTabId] = useState<string | null>(null)
   // undefined = no reorder drag; null = insert at end; string = insert before that tab id
   const [reorderInsertBeforeId, setReorderInsertBeforeId] = useState<string | null | undefined>(undefined)
+  const draggedTabRef = useRef<Tab | null>(null)
+  const tabDragHandledRef = useRef(false)
+  const windowBoundsRef = useRef<Array<{ id: number; x: number; y: number; width: number; height: number }>>([])
+  const tabDragCleanupRef = useRef<(() => void) | null>(null)
+  const dragFocusWindowRef = useRef<number | null>(null)
 
   const dirPickerTab = dirPickerTabId ? visibleTabs.find((t) => t.id === dirPickerTabId) : null
   const spawnMenuTab = spawnMenu ? visibleTabs.find((t) => t.id === spawnMenu.tabId) : null
@@ -102,6 +109,85 @@ export function TabSections(): JSX.Element {
     window.ipc?.invoke('pane:transfer', { ...payload, targetTabId, targetWindowId }).catch(console.error)
   }
 
+  function tabPayloadFromEvent(event: React.DragEvent): TabDragPayload | null {
+    if (!event.dataTransfer.types.includes(TAB_DRAG_MIME)) return null
+    return decodeTabDragPayload(event.dataTransfer)
+  }
+
+  function isLocalTabDrag(payload: TabDragPayload): boolean {
+    return payload.sourceWindowId === (windowId ?? -1)
+  }
+
+  function focusWindowForTabDrag(payload: TabDragPayload | null): void {
+    if (!payload || payload.sourceWindowId < 0 || isLocalTabDrag(payload) || windowId === null || dragFocusWindowRef.current === windowId) return
+    dragFocusWindowRef.current = windowId
+    void window.ipc?.invoke('window:focus').catch(() => {
+      if (dragFocusWindowRef.current === windowId) dragFocusWindowRef.current = null
+    })
+  }
+
+  function dropIndexForInsertion(insertBeforeId = reorderInsertBeforeId): number {
+    if (insertBeforeId === null || insertBeforeId === undefined) return visibleTabs.length
+    const index = visibleTabs.findIndex((tab) => tab.id === insertBeforeId)
+    return index >= 0 ? index : visibleTabs.length
+  }
+
+  function insertionBeforeForHeader(event: React.DragEvent, tabId: string, tabIdx: number): string | null {
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (event.clientY - rect.top < rect.height / 2) return tabId
+    return visibleTabs[tabIdx + 1]?.id ?? null
+  }
+
+  function insertionBeforeForContainer(event: React.DragEvent): string | null {
+    const sections = Array.from(event.currentTarget.children) as HTMLElement[]
+    for (let index = 0; index < visibleTabs.length; index += 1) {
+      const section = sections[index]
+      if (!section) continue
+      if (event.clientY < section.getBoundingClientRect().top) return visibleTabs[index].id
+    }
+    return null
+  }
+
+  function absorbTab(payload: TabDragPayload, dropIndex: number): void {
+    if (windowId === null || payload.sourceWindowId === windowId || payload.sourceWindowId < 0) return
+    tabDragHandledRef.current = true
+    void window.ipc?.invoke(
+      'tab:absorb',
+      JSON.stringify(payload.tab),
+      payload.ptyIds,
+      payload.sourceWindowId,
+      dropIndex,
+    ).catch(console.error)
+  }
+
+  function handleTabDragEnd(event: React.DragEvent): void {
+    const tab = draggedTabRef.current
+    // Do not use dropEffect as the completion signal: native drag-and-drop may
+    // reset it when the pointer leaves every drop target. The pointer's screen
+    // position distinguishes a window drop from a tear-off; tabDragHandledRef
+    // covers drops whose destination explicitly handled them.
+    const handled = tabDragHandledRef.current
+    tabDragCleanupRef.current?.()
+    tabDragCleanupRef.current = null
+    draggedTabRef.current = null
+    tabDragHandledRef.current = false
+    setReorderInsertBeforeId(undefined)
+    setTabDropTabId(null)
+    if (!tab || handled) return
+
+    const x = event.screenX
+    const y = event.screenY
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return
+    const insideKnownWindow = windowBoundsRef.current.some((bounds) =>
+      x >= bounds.x && x <= bounds.x + bounds.width && y >= bounds.y && y <= bounds.y + bounds.height,
+    )
+    if (insideKnownWindow) return
+    // The existing tear-off protocol retains the source tab until detached-ready
+    // commits adoption and routing. Passing screen coordinates makes the new
+    // window open where the browser-like drag ended.
+    moveTabToNewWindow(tab.id, Number.isFinite(x) ? x : undefined, Number.isFinite(y) ? y : undefined)
+  }
+
   function projectCwd(tab: Tab): string {
     if (tab.defaultCwd) return tab.defaultCwd
     if (!tab.rootNode) return DEFAULT_CWD
@@ -125,36 +211,83 @@ export function TabSections(): JSX.Element {
     }
   }, [pendingRenameTabId, visibleTabs, startRename, setPendingRenameTabId])
 
-  if (visibleTabs.length === 0) return <></>
-
   return (
     <>
       {/* Container catches TAB_REORDER_MIME drops that land on section content or gaps,
           using the last insertion position set by onHeaderDragOver. */}
       <div
+        data-sidebar-tab-container="true"
+        // Keep the trailing part of the scroll area as a real append target.
+        style={{ minHeight: '100%' }}
         onDragEnter={(e) => {
-          if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+          // Drag-enter/over bubbles from section children. Only the empty
+          // trailing area should reset the insertion point to append.
+          if (e.target !== e.currentTarget) return
+          const payload = tabPayloadFromEvent(e)
+          if (payload) {
             e.preventDefault()
+            focusWindowForTabDrag(payload)
+            e.dataTransfer.dropEffect = 'move'
+            // Background gaps resolve to the next section; only the space
+            // below the last section resolves to append.
+            setReorderInsertBeforeId(insertionBeforeForContainer(e))
+            setTabDropTabId(null)
+          } else if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            setReorderInsertBeforeId(insertionBeforeForContainer(e))
+            setTabDropTabId(null)
           }
         }}
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+          if (e.target !== e.currentTarget) return
+          const payload = tabPayloadFromEvent(e)
+          if (payload) {
             e.preventDefault()
+            focusWindowForTabDrag(payload)
+            e.dataTransfer.dropEffect = 'move'
+            // Background gaps resolve to the next section; only the space
+            // below the last section resolves to append.
+            setReorderInsertBeforeId(insertionBeforeForContainer(e))
+            setTabDropTabId(null)
+          } else if (e.dataTransfer.types.includes(TAB_DRAG_MIME) || e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            setReorderInsertBeforeId(insertionBeforeForContainer(e))
+            setTabDropTabId(null)
           }
         }}
         onDrop={(e) => {
-          if (!e.dataTransfer.types.includes(TAB_REORDER_MIME) || reorderInsertBeforeId === undefined) return
+          if (e.target !== e.currentTarget) return
+          const insertBeforeId = insertionBeforeForContainer(e)
+          const payload = tabPayloadFromEvent(e)
+          if (payload) {
+            e.preventDefault()
+            e.stopPropagation()
+            tabDragHandledRef.current = true
+            if (isLocalTabDrag(payload)) {
+              reorderTab(payload.tab.id, insertBeforeId)
+            } else {
+              absorbTab(payload, dropIndexForInsertion(insertBeforeId))
+            }
+            setReorderInsertBeforeId(undefined)
+            setTabDropTabId(null)
+            return
+          }
+          if (!e.dataTransfer.types.includes(TAB_REORDER_MIME)) return
           e.preventDefault()
           e.stopPropagation()
+          tabDragHandledRef.current = true
           try {
             const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-            reorderTab(sourceTabId, reorderInsertBeforeId)
+            reorderTab(sourceTabId, insertBeforeId)
           } catch {}
           setReorderInsertBeforeId(undefined)
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node)) {
             setReorderInsertBeforeId(undefined)
+            dragFocusWindowRef.current = null
           }
         }}
       >
@@ -166,7 +299,6 @@ export function TabSections(): JSX.Element {
         const sectionId = tabSidebarSectionId(tab.id)
         const open = sidebarSectionOpen[sectionId] ?? sidebarSectionOpen[tab.id] ?? isActive
         const tabIdx = visibleTabs.findIndex((candidate) => candidate.id === tab.id)
-        const isLastTab = tabIdx === visibleTabs.length - 1
 
         return (
           <SidebarSection
@@ -190,11 +322,25 @@ export function TabSections(): JSX.Element {
             headerDraggable={!isRenaming}
             onHeaderDragStart={(e) => {
               e.dataTransfer.setData(TAB_REORDER_MIME, JSON.stringify({ tabId: tab.id }))
-              e.dataTransfer.effectAllowed = 'move'
+              const ptyIds = leaves
+                .map((leaf) => leaf.ptyId)
+                .filter((ptyId): ptyId is string => typeof ptyId === 'string')
+              setTabDragData(e.dataTransfer, { tab, ptyIds, sourceWindowId: windowId ?? -1 })
+              tabDragCleanupRef.current?.()
+              draggedTabRef.current = tab
+              tabDragHandledRef.current = false
+              const cleanup = (): void => {
+                window.removeEventListener('drop', cleanup, true)
+                window.removeEventListener('dragend', cleanup, true)
+              }
+              tabDragCleanupRef.current = cleanup
+              window.addEventListener('drop', cleanup, true)
+              window.addEventListener('dragend', cleanup, true)
+              void window.ipc?.invoke('window:get-all-bounds').then((bounds) => {
+                if (Array.isArray(bounds)) windowBoundsRef.current = bounds as Array<{ id: number; x: number; y: number; width: number; height: number }>
+              }).catch(() => {})
             }}
-            onHeaderDragEnd={() => {
-              setReorderInsertBeforeId(undefined)
-            }}
+            onHeaderDragEnd={handleTabDragEnd}
             headerActions={
               <SidebarHoverActions
                 menuTitle="Tab menu"
@@ -208,10 +354,61 @@ export function TabSections(): JSX.Element {
                 onClick={(e) => setSpawnMenu({ tabId: tab.id, x: e.clientX, y: e.clientY })}
               />
             }
-            headerDropActive={dropTabId === tab.id}
+            headerDropActive={dropTabId === tab.id || tabDropTabId === tab.id}
             headerInsertTop={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === tab.id}
-            sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === null && isLastTab}
+            sectionInsertBottom={reorderInsertBeforeId !== undefined && reorderInsertBeforeId === (visibleTabs[tabIdx + 1]?.id ?? null)}
+            onSectionDragOver={(e) => {
+              // Header drag-over owns the precise before/after split. The
+              // section body is the broad target for the tab represented by
+              // this section, so dropping in tab 1's panes means after tab 1.
+              const tabPayload = tabPayloadFromEvent(e)
+              const isTabDrag = Boolean(tabPayload) || e.dataTransfer.types.includes(TAB_REORDER_MIME)
+              if (!isTabDrag) return
+              e.preventDefault()
+              e.stopPropagation()
+              if (tabPayload) focusWindowForTabDrag(tabPayload)
+              setReorderInsertBeforeId(visibleTabs[tabIdx + 1]?.id ?? null)
+              if (tabPayload && !isLocalTabDrag(tabPayload)) setTabDropTabId(tab.id)
+              e.dataTransfer.dropEffect = 'move'
+            }}
+            onSectionDrop={(e) => {
+              const tabPayload = tabPayloadFromEvent(e)
+              const insertBeforeId = visibleTabs[tabIdx + 1]?.id ?? null
+              if (tabPayload) {
+                e.preventDefault()
+                e.stopPropagation()
+                tabDragHandledRef.current = true
+                if (isLocalTabDrag(tabPayload)) {
+                  reorderTab(tabPayload.tab.id, insertBeforeId)
+                } else {
+                  absorbTab(tabPayload, dropIndexForInsertion(insertBeforeId))
+                }
+                setReorderInsertBeforeId(undefined)
+                setTabDropTabId(null)
+                return
+              }
+              if (!e.dataTransfer.types.includes(TAB_REORDER_MIME)) return
+              e.preventDefault()
+              e.stopPropagation()
+              tabDragHandledRef.current = true
+              try {
+                const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
+                reorderTab(sourceTabId, insertBeforeId)
+              } catch {}
+              setReorderInsertBeforeId(undefined)
+            }}
             onHeaderDragOver={(e) => {
+              const tabPayload = tabPayloadFromEvent(e)
+              if (tabPayload && !isLocalTabDrag(tabPayload)) {
+                e.preventDefault()
+                e.stopPropagation()
+                focusWindowForTabDrag(tabPayload)
+                const rect = e.currentTarget.getBoundingClientRect()
+                setTabDropTabId(tab.id)
+                setReorderInsertBeforeId(e.clientY - rect.top < rect.height / 2 ? tab.id : (visibleTabs[tabIdx + 1]?.id ?? null))
+                e.dataTransfer.dropEffect = 'move'
+                return
+              }
               // Project reorder — MIME-type check prevents collision with pane drops
               if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
                 e.preventDefault()
@@ -222,6 +419,7 @@ export function TabSections(): JSX.Element {
                 } else {
                     setReorderInsertBeforeId(visibleTabs[tabIdx + 1]?.id ?? null)
                 }
+                e.dataTransfer.dropEffect = 'move'
                 return
               }
               // Pane drop
@@ -231,16 +429,35 @@ export function TabSections(): JSX.Element {
               setDropTabId(tab.id)
             }}
             onHeaderDragLeave={(e) => {
-              if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTabId(null)
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDropTabId(null)
+                setTabDropTabId(null)
+                dragFocusWindowRef.current = null
+              }
             }}
             onHeaderDrop={(e) => {
+              const tabPayload = tabPayloadFromEvent(e)
+              if (tabPayload) {
+                e.preventDefault()
+                e.stopPropagation()
+                tabDragHandledRef.current = true
+                if (isLocalTabDrag(tabPayload)) {
+                  reorderTab(tabPayload.tab.id, insertionBeforeForHeader(e, tab.id, tabIdx))
+                } else {
+                  absorbTab(tabPayload, dropIndexForInsertion(insertionBeforeForHeader(e, tab.id, tabIdx)))
+                }
+                setReorderInsertBeforeId(undefined)
+                setTabDropTabId(null)
+                return
+              }
               // Project reorder
               if (e.dataTransfer.types.includes(TAB_REORDER_MIME)) {
                 e.preventDefault()
                 e.stopPropagation()
+                tabDragHandledRef.current = true
                 try {
                   const { tabId: sourceTabId } = JSON.parse(e.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
-                  reorderTab(sourceTabId, reorderInsertBeforeId ?? null)
+                  reorderTab(sourceTabId, insertionBeforeForHeader(e, tab.id, tabIdx))
                 } catch {}
                 setReorderInsertBeforeId(undefined)
                 return

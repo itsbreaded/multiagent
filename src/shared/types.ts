@@ -649,6 +649,8 @@ export interface IPCChannels {
   'window:get-id': () => number | null
   'window:get-init-data': () => { mode: 'detached'; tab: Tab; ptyIds: string[]; transferId?: string } | null
   'window:get-all-bounds': () => { id: number; x: number; y: number; width: number; height: number }[]
+  // Renderer asks main to raise the window currently receiving a cross-window tab drag.
+  'window:focus': () => boolean
   'window:minimize': () => void
   'window:toggle-maximize': () => boolean
   'window:close': () => void
@@ -669,8 +671,9 @@ export interface IPCChannels {
   'tab:adopt': (ptyIds: string[], transferId?: string) => boolean
   // Source renderer cancels a pending tear-off before closing its local tab.
   'tab:tear-off-cancel': (transferId: string) => boolean
-  // Internal cross-window tab transfer path retained for pane/tab movement compatibility.
-  'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number) => boolean
+  // Sidebar cross-window tab transfer. Main asks the destination to apply the
+  // serialized tab before it releases/reroutes the source-owned PTYs.
+  'tab:absorb': (tabJson: string, ptyIds: string[], sourceWindowId: number, dropIndex?: number) => boolean
   // Main pushes to source window: remove the tab that was absorbed by another window
   'tab:release': (tabId: string, ownerWindowId?: number, releaseId?: string) => void
   // Main confirms to the source window that an absorb committed (PTYs transferred); only now
@@ -679,8 +682,11 @@ export interface IPCChannels {
   'tab:return': (tabId: string) => void
   'tab:detached-ready': (tabId: string, transferId?: string) => void
   'tab:tear-off-rolled-back': (tabId: string, transferId: string) => void
+  'tab:received': (tabJson: string, dropIndex: number | undefined, transferId: string) => void
+  'tab:transfer-rolledback': (tabId: string, transferId: string) => void
   'tab:closed': (tabId: string, windowId: number) => void
   'tab:release-applied': (releaseId: string) => void
+  'tab:received-applied': (transferId: string) => void
 
   // --- Multi-window: live sync & pane transfer ---
   // Detached window pushes its full tab list to main; main forwards to all other windows
@@ -793,6 +799,7 @@ export type InvokeChannels = ChannelSubset<
   | 'window:get-id'
   | 'window:get-init-data'
   | 'window:get-all-bounds'
+  | 'window:focus'
   | 'window:minimize'
   | 'window:toggle-maximize'
   | 'window:close'
@@ -834,6 +841,8 @@ export type EventChannels = ChannelSubset<
   | 'tab:absorb-committed'
   | 'tab:return'
   | 'tab:tear-off-rolled-back'
+  | 'tab:received'
+  | 'tab:transfer-rolledback'
   | 'tab:closed'
   | 'tab:state-sync'
   | 'pane:received'
@@ -862,6 +871,7 @@ export type SendChannels = ChannelSubset<
   | 'tab:state-sync'
   | 'tab:detached-ready'
   | 'tab:release-applied'
+  | 'tab:received-applied'
   | 'pane:focus-changed'
   | 'focus:target-report'
   | 'pane:received-applied'

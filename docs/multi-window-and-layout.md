@@ -48,13 +48,24 @@ main, source renderer, target renderer, and PTY routing.
 
 The sidebar is the only tab/folder navigation surface. Individual sidebar actions retain
 rename, project-directory, pane navigation, and close; duplicate, close-other, and close-to-
-right actions are not part of the interface. The primary sidebar starts a tokenized tear-off
-with `tab:tear-off`, but the source keeps its tab and PTY routes until the detached renderer
-has passed the `tab:adopt` preflight and sent `tab:detached-ready`. Main validates every PTY's
-source route, reroutes the complete set, records target ownership, and sends the existing
-`tab:absorb-committed` finalization event. Timeout, startup failure, source close, target close,
-or explicit source cancellation restores only routes still owned by the pending target and
-removes the target's optimistic row.
+right actions are not part of the interface. A section header carries both the local reorder
+MIME and the dedicated `TAB_DRAG_MIME` payload; pane rows keep their separate
+`PANE_DRAG_MIME`, so tab drags cannot be mistaken for pane drags. A same-window header drop
+uses the existing visible-tab reorder action. A drag that ends outside every known window
+starts the tokenized tear-off with the native screen coordinates, while a drop over another
+window invokes `tab:absorb`. While a valid cross-window tab payload enters or moves over a
+destination sidebar, that renderer asks main to focus the receiving window; the request is
+window-scoped and does not run for same-window reorder or pane drags.
+
+Tear-off source state is retained until the detached renderer has mounted the tab, passed the
+`tab:adopt` preflight, and sent `tab:detached-ready`. For an existing-window absorb, main first
+asks the destination to apply the serialized tab and waits for `tab:received-applied`; it then
+stages the source release and waits for `tab:release-applied`. Only after both acknowledgements
+and a fresh ownership/PTy-route validation does main record ownership, reroute every PTY, and
+send `tab:absorb-committed` to both renderers. The destination applies the tab idempotently and
+can restore a detached proxy on `tab:transfer-rolledback`; the source likewise keeps its last
+good copy until the commit. Target close, source close, timeout, stale sync, adoption failure,
+and route/generation races therefore leave one authoritative copy and no stale row.
 
 Returning a tab uses the explicit detached-sidebar return action. Native detached-window close
 is different: `WindowManager.unregister` invalidates pending tear-offs synchronously, retains

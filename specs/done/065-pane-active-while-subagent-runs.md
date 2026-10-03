@@ -1,8 +1,8 @@
 # Spec: Keep a Claude Pane Active While a Background Subagent Runs
 
-Status: review <!-- draft | ready | in-progress | review | done -->
+Status: done <!-- draft | ready | in-progress | review | done -->
 Created: 2026-08-10
-Completed: <!-- date when moved to specs/done/ -->
+Completed: 2026-10-02
 
 ## Problem
 

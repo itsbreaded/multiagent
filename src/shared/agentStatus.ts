@@ -316,14 +316,25 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
       const changed = Boolean(prev?.sessionId && sessionId && prev.sessionId !== sessionId)
       if (changed || !prev) return { status: 'idle', ...(sessionId ? { sessionId } : {}), event: 'session_start', updatedAt: now }
       if (latched) return { status: 'idle', ...(sessionId ? { sessionId } : {}), event: 'session_start', updatedAt: now }
-      if (!reportedSessionId && !prev.pendingInterrupt && !prev.recoveryGeneration && !prev.recoveryProvenance &&
-        !prev.suspensionBlocked && !prev.completedBackgroundSubagentIds) return prev
-      const next = clearRecovery(prev)
+      const hasTrackedBackground = Boolean(prev.activeBackgroundSubagents || prev.activeBackgroundSubagentIds?.length)
+      const hasResettableState = Boolean(
+        prev.pendingInterrupt || prev.recoveryGeneration || prev.recoveryProvenance ||
+        prev.suspensionBlocked || prev.completedBackgroundSubagentIds,
+      )
+      if (!reportedSessionId && !hasResettableState && !hasTrackedBackground) return prev
+      if (!hasTrackedBackground && !hasResettableState) {
+        const next = clearRecovery(prev)
+        next.sessionId = sessionId
+        next.event = prev.event ?? 'session_start'
+        return next
+      }
+      const next = clearWork(clearRecovery(prev))
       delete next.suspensionBlocked
       delete next.completedBackgroundSubagentIds
       next.sessionId = sessionId
-      if (activeWork(next)) next.status = 'working'
-      next.event = prev.event ?? 'session_start'
+      next.status = 'idle'
+      delete next.detail
+      next.event = 'session_start'
       return next
     }
 
@@ -449,7 +460,47 @@ export function eventToState(prev: AgentStatusState | undefined, input: AgentSta
         const crossTurn = isCrossTurnBackgroundEvent(current, input)
         const reconciled = reconcileSnapshot(current, input, now, 'ordinary_completion')
         const agentId = input.agentId?.trim() || undefined
-        const next = agentId ? rememberCompletedBackgroundId(reconciled, agentId) : reconciled
+        const trackedIds = current.activeBackgroundSubagentIds ?? []
+        const trackedCount = current.activeBackgroundSubagents ?? 0
+        // Evidence attached to a completion can describe the provider's aggregate
+        // work, but it cannot authorize clearing a tracked child unless the event
+        // identifies that child. Preserve anonymous/unknown tracking fail-safe.
+        if (trackedCount > 0 && (!agentId || !trackedIds.includes(agentId))) {
+          const protectedState = withBackgroundTracking({ ...reconciled, status: current.status === 'idle' ? 'working' : current.status, updatedAt: now }, trackedCount, trackedIds)
+          if (current.status !== 'waiting' && current.status !== 'error' && current.event !== 'terminal_error') {
+            protectedState.status = 'working'
+            protectedState.detail = current.detail ?? 'background subagent'
+          }
+          return protectedState
+        }
+        let next = agentId ? rememberCompletedBackgroundId(reconciled, agentId) : reconciled
+        if (agentId && trackedIds.includes(agentId)) {
+          const remainingIds = trackedIds.filter((id) => id !== agentId)
+          const nextTrackedCount = Math.max(0, trackedCount - 1)
+          if (next.activeWorkIds?.includes(agentId)) {
+            const remainingWorkIds = next.activeWorkIds.filter((id) => id !== agentId)
+            next.activeWorkIds = remainingWorkIds.length > 0 ? remainingWorkIds : undefined
+            next.activeWorkCount = Math.max(0, (next.activeWorkCount ?? 0) - 1)
+          } else if ((next.activeWorkCount ?? 0) > 0 && next.workSnapshot?.provider === 'claude') {
+            next.activeWorkCount = Math.max(0, (next.activeWorkCount ?? 0) - 1)
+          }
+          if (next.workSnapshot?.provider === 'claude' && next.workSnapshot.activeCount > 0) {
+            const snapshotIds = next.workSnapshot.activeIds?.filter((id) => id !== agentId)
+            next.workSnapshot = {
+              ...next.workSnapshot,
+              activeCount: Math.max(0, next.workSnapshot.activeCount - 1),
+              ...(snapshotIds && snapshotIds.length > 0 ? { activeIds: snapshotIds } : { activeIds: undefined }),
+            }
+          }
+          next = withBackgroundTracking(next, nextTrackedCount, remainingIds)
+        }
+        if (!crossTurn && next.activeBackgroundSubagents === undefined &&
+          !activeWork(next) && current.status === 'working' && current.event === 'stop') {
+          const cleared = clearWork(next)
+          delete cleared.detail
+          delete cleared.suspensionBlocked
+          return { ...cleared, status: 'idle', sessionId: current.sessionId, turnId: current.turnId, event: 'stop', updatedAt: now }
+        }
         if (crossTurn) {
           next.event = current.event
           next.turnId = current.turnId

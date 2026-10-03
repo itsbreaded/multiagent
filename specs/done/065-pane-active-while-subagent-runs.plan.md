@@ -1,7 +1,7 @@
 # Implementation Plan: Keep a Claude Pane Active While a Background Subagent Runs
 
 Plan Status: completed <!-- review | changes-requested | approved | in-progress | completed -->
-Source spec: specs/pending/065-pane-active-while-subagent-runs.md (Status: review)
+Source spec: specs/done/065-pane-active-while-subagent-runs.md (Status: done)
 
 ## Verified Repository Facts
 
@@ -663,3 +663,34 @@ unrecorded.
   during the run and returned to idle on completion. Two-subagent run: pane
   stayed working through the first (partial) completion and returned to idle
   only after the final completion.
+
+### Verification repair pass (2026-10-02)
+
+The first independent verification pass found three reducer gaps that were
+fixed without changing the spec contract: a completion carrying incomplete or
+missing child identity could clear the visible working override; an
+identity-matched completion carrying evidence did not decrement the tracked
+child; and a same-session `session_start` could retain active child tracking.
+`src/shared/agentStatus.ts` now preserves anonymous/unknown tracking
+fail-safe, decrements only the matching tracked identity even with evidence,
+and clears active child/work tracking on a fresh session start while preserving
+the existing explicit-unknown status boundary when no reset state exists.
+
+Repair evidence: the added reducer regression cases pass; the focused
+`src/shared/agentStatus.test.ts` and `src/renderer/src/store/panes.test.ts`
+run passes 2 files / 123 tests; `npm run typecheck` passes. The full suite
+was re-run before this repair was finalized and exposed the pre-existing
+explicit-unknown boundary regression caused by the first implementation of
+the fix; that boundary was corrected and the focused 123-test run is the
+current evidence. The final repair verification below satisfies the remaining
+full-suite gate.
+
+### Final repair verification (2026-10-02)
+
+The independent verifier re-ran the focused reducer/store checks (4 files / 115
+tests) and `npm run typecheck`; both passed, and it found no remaining failures
+in the three repaired cases. The repository-wide `npm run test` was then rerun
+after the repair and current feature work: 88 files / 925 tests passed. The
+existing live Claude evidence and offline lifecycle coverage recorded above are
+unchanged; exact raw hook payload/version capture remains an explicit manual
+evidence gap, not an invented observation.

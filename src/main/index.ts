@@ -56,6 +56,18 @@ let browserViewManager: BrowserViewManager | null = null
 let performShutdownSaveFn: (() => Promise<void>) | null = null
 let registerWindowHandlersFn: ((win: BrowserWindow) => void) | null = null
 
+function showMainWindow(win: BrowserWindow, maximize: boolean): void {
+  if (maximize) win.maximize()
+  if (process.env.MULTIAGENT_E2E_MINIMIZED === '1') {
+    // Keep local Electron E2E runs from taking focus while leaving the renderer
+    // fully loaded and available to Playwright.
+    win.showInactive()
+    win.minimize()
+    return
+  }
+  win.show()
+}
+
 async function createWindow(): Promise<void> {
   const state = loadWindowState()
 
@@ -90,8 +102,7 @@ async function createWindow(): Promise<void> {
   // short delay later, the coordinator shows it. See WindowShowCoordinator.
   const showCoordinator = new WindowShowCoordinator(
     () => {
-      if (state.isMaximized) mainWindow.maximize()
-      mainWindow.show()
+      showMainWindow(mainWindow, state.isMaximized)
     },
     () => mainWindow.isDestroyed(),
   )

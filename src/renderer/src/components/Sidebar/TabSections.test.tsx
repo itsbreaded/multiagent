@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../store/settings'
 import { useJiraStore } from '../../store/jira'
 import { isIdleAgentSuspensionEligible } from '../../store/idleAgentSuspension'
 import { TabSections } from './TabSections'
+import { TAB_DRAG_MIME } from '../../utils/tabDrag'
 
 const TEST_BASE_URL = 'https://jira.example.com'
 
@@ -209,6 +210,158 @@ describe('TabSections - ownership-scoped reorder', () => {
       detached.id,
       localBefore.id,
     ])
+  })
+
+  it('treats the space below the sidebar sections as an append target', () => {
+    const first = tabWithLabel('first-tab', 'First tab')
+    const second = tabWithLabel('second-tab', 'Second tab')
+    const third = tabWithLabel('third-tab', 'Third tab')
+    usePanesStore.setState({
+      tabs: [first, second, third],
+      activeTabId: first.id,
+      isDetachedWindow: false,
+      windowId: 1,
+    })
+
+    render(<TabSections />)
+    const transfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('First tab'), { dataTransfer: transfer })
+    const container = document.querySelector('[data-sidebar-tab-container="true"]') as HTMLElement
+
+    let dragOverEvent!: Event
+    act(() => { dragOverEvent = dispatchTabDrag(container, 'dragover', transfer, 9999) })
+    expect(dragOverEvent.defaultPrevented).toBe(true)
+    expect(transfer.dropEffect).toBe('move')
+    expect(container.querySelector('[data-sidebar-insertion-edge="bottom"]')).not.toBeNull()
+    act(() => { dispatchTabDrag(container, 'drop', transfer, 9999) })
+
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
+      second.id,
+      third.id,
+      first.id,
+    ])
+  })
+
+  it('treats a section body as the insertion point immediately after that tab', () => {
+    const first = tabWithLabel('first-tab', 'First tab')
+    const second = tabWithLabel('second-tab', 'Second tab')
+    const third = tabWithLabel('third-tab', 'Third tab')
+    usePanesStore.setState({
+      tabs: [first, second, third],
+      activeTabId: first.id,
+      isDetachedWindow: false,
+      windowId: 1,
+    })
+
+    render(<TabSections />)
+    const transfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('Third tab'), { dataTransfer: transfer })
+    const firstSection = tabHeader('First tab').parentElement as HTMLElement
+
+    let sectionDragOver!: Event
+    act(() => { sectionDragOver = dispatchTabDrag(firstSection, 'dragover', transfer, 9999) })
+    expect(sectionDragOver.defaultPrevented).toBe(true)
+    expect(firstSection.querySelector('[data-sidebar-insertion-edge="bottom"]')).not.toBeNull()
+    let sectionDrop!: Event
+    act(() => { sectionDrop = dispatchTabDrag(firstSection, 'drop', transfer, 9999) })
+    expect(sectionDrop.defaultPrevented).toBe(true)
+
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
+      first.id,
+      third.id,
+      second.id,
+    ])
+  })
+
+  it('resolves the background gap between sections to the following section', () => {
+    const first = tabWithLabel('first-tab', 'First tab')
+    const second = tabWithLabel('second-tab', 'Second tab')
+    const third = tabWithLabel('third-tab', 'Third tab')
+    usePanesStore.setState({
+      tabs: [first, second, third],
+      activeTabId: first.id,
+      isDetachedWindow: false,
+      windowId: 1,
+    })
+
+    render(<TabSections />)
+    const transfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('Third tab'), { dataTransfer: transfer })
+    const container = document.querySelector('[data-sidebar-tab-container="true"]') as HTMLElement
+    const sectionBounds = [
+      { top: 0, bottom: 80 },
+      { top: 120, bottom: 200 },
+      { top: 240, bottom: 320 },
+    ]
+    Array.from(container.children).forEach((section, index) => {
+      const bounds = sectionBounds[index]
+      Object.defineProperty(section, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({ top: bounds.top, bottom: bounds.bottom, height: bounds.bottom - bounds.top } as DOMRect),
+      })
+    })
+
+    act(() => { dispatchTabDrag(container, 'dragover', transfer, 100) })
+    expect(container.children[0].querySelector('[data-sidebar-insertion-edge="bottom"]')).not.toBeNull()
+    act(() => { dispatchTabDrag(container, 'drop', transfer, 100) })
+
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual([
+      first.id,
+      third.id,
+      second.id,
+    ])
+  })
+
+  it('sends a cross-window tab drop through the absorb protocol', () => {
+    const ipc = installMockIpc()
+    const target = tabWithLabel('target-tab', 'Target tab')
+    const incoming = tabWithLabel('incoming-tab', 'Incoming tab')
+    const pane = incoming.rootNode as PaneLeaf
+    pane.ptyId = 'pty-incoming'
+    usePanesStore.setState({
+      tabs: [target],
+      activeTabId: target.id,
+      isDetachedWindow: false,
+      windowId: 22,
+    })
+
+    render(<TabSections />)
+    const transfer = tabDataTransfer()
+    transfer.setData(TAB_DRAG_MIME, JSON.stringify({ tab: incoming, ptyIds: ['pty-incoming'], sourceWindowId: 11 }))
+    act(() => { dispatchTabDrag(tabHeader('Target tab'), 'dragover', transfer, 1) })
+    act(() => { dispatchTabDrag(tabHeader('Target tab'), 'drop', transfer, 1) })
+
+    expect(ipc.invoke).toHaveBeenCalledWith('window:focus')
+    expect(ipc.invoke).toHaveBeenCalledWith(
+      'tab:absorb',
+      JSON.stringify(incoming),
+      ['pty-incoming'],
+      11,
+      1,
+    )
+  })
+
+  it('starts a tear-off at the native drag end location when dropped outside windows', async () => {
+    const ipc = installMockIpc()
+    const tab = tabWithLabel('tear-off-tab', 'Tear off tab')
+    usePanesStore.setState({ tabs: [tab], activeTabId: tab.id, isDetachedWindow: false, windowId: 11 })
+
+    render(<TabSections />)
+    const transfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('Tear off tab'), { dataTransfer: transfer })
+    const dragEnd = new Event('dragend', { bubbles: true, cancelable: true })
+    Object.defineProperties(dragEnd, {
+      dataTransfer: { value: transfer },
+      screenX: { value: 1800 },
+      screenY: { value: 420 },
+    })
+    tabHeader('Tear off tab').dispatchEvent(dragEnd)
+    await act(async () => { await Promise.resolve() })
+
+    const tearOff = ipc.invoke.mock.calls.find((call: unknown[]) => call[0] === 'tab:tear-off')
+    expect(tearOff?.[3]).toBe(1800)
+    expect(tearOff?.[4]).toBe(420)
+    expect(usePanesStore.getState().tabs).toHaveLength(1)
   })
 })
 

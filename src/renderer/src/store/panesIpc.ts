@@ -11,6 +11,13 @@ import { isTerminalHostStatus } from './terminalHost'
 // store access inside wirePanesIpc/listener callbacks to preserve that ordering.
 let wired = false
 
+// Renderer store actions apply synchronously, but minimized/background Electron
+// windows may throttle requestAnimationFrame indefinitely. Transfer commits need
+// a liveness-safe acknowledgement after the store mutation, not a paint frame.
+function scheduleTransferAck(callback: () => void): void {
+  void Promise.resolve().then(callback)
+}
+
 /** Wire renderer listeners once. Store access is deferred to avoid the panes↔panesIpc import cycle. */
 export function wirePanesIpc(): void {
   if (wired || typeof window === 'undefined' || !window.ipc) return
@@ -197,7 +204,8 @@ export function wirePanesIpc(): void {
   window.ipc.on('tab:release', (tabId: unknown, ownerWindowId: unknown, releaseId: unknown) => {
     if (typeof tabId !== 'string') return
     if (typeof releaseId === 'string') {
-      window.ipc.send('tab:release-applied', releaseId)
+      const staged = usePanesStore.getState().stageTabAbsorbRelease(tabId, releaseId)
+      if (staged) window.ipc.send('tab:release-applied', releaseId)
       return
     }
     const store = usePanesStore.getState()
@@ -214,11 +222,13 @@ export function wirePanesIpc(): void {
     if (typeof tabId !== 'string') return
     const store = usePanesStore.getState()
     if (typeof transferId === 'string') {
-      if (store.isDetachedWindow) {
-        store.markTabTearOffCommitted(tabId, transferId)
-      } else {
-        store.commitTabTearOff(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined, transferId)
-      }
+      // The destination receives the same commit notification as the source.
+      // Clearing its pending incoming token is deliberately a no-op on the
+      // source, while the source-side absorb token finalizes removal/detach.
+      if (store.markReceivedTabCommitted(tabId, transferId)) return
+      if (store.commitTabAbsorb(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined, transferId)) return
+      if (store.isDetachedWindow) store.markTabTearOffCommitted(tabId, transferId)
+      else store.commitTabTearOff(tabId, typeof ownerWindowId === 'number' ? ownerWindowId : undefined, transferId)
       return
     }
     if (store.isDetachedWindow) {
@@ -231,6 +241,42 @@ export function wirePanesIpc(): void {
   window.ipc.on('tab:tear-off-rolled-back', (tabId: unknown, transferId: unknown) => {
     if (typeof tabId !== 'string' || typeof transferId !== 'string') return
     usePanesStore.getState().rollbackTabTearOff(tabId, transferId)
+  })
+
+  // Main sends a serialized tab only after the destination window has passed
+  // its liveness/ownership preflight. Apply it locally, hydrate the existing
+  // pane tree, then acknowledge the actual store application. Main will roll
+  // this copy back if the source release or ownership commit fails.
+  window.ipc.on('tab:received', (tabJson: unknown, dropIndex: unknown, transferId: unknown) => {
+    if (typeof tabJson !== 'string' || typeof transferId !== 'string') return
+    let tab: Tab
+    try {
+      tab = JSON.parse(tabJson) as Tab
+    } catch {
+      return
+    }
+    if (!tab || typeof tab.id !== 'string') return
+    const applied = usePanesStore.getState().receiveTab(
+      tab,
+      typeof dropIndex === 'number' && Number.isInteger(dropIndex) && dropIndex >= 0 ? dropIndex : undefined,
+      transferId,
+    )
+    if (!applied) return
+    // The store action is synchronous; acknowledge after it applies even when
+    // this destination window is minimized and not receiving animation frames.
+    scheduleTransferAck(() => {
+      if (usePanesStore.getState().tabs.some((candidate) => candidate.id === tab.id)) {
+        window.ipc.send('tab:received-applied', transferId)
+      }
+    })
+  })
+
+  window.ipc.on('tab:transfer-rolledback', (tabId: unknown, transferId: unknown) => {
+    if (typeof tabId !== 'string' || typeof transferId !== 'string') return
+    const store = usePanesStore.getState()
+    store.rollbackReceivedTab(tabId, transferId)
+    store.rollbackTabAbsorb(tabId, transferId)
+    store.rollbackTabTearOff(tabId, transferId)
   })
 
   window.ipc.on('tab:closed', (tabId: unknown, windowId: unknown) => {
@@ -403,10 +449,8 @@ export function wirePanesIpc(): void {
       // Ack only if the target tab existed and the pane was added. If it no-ops (tab vanished
       // mid-drag), staying silent makes main time out and discard instead of removing the source.
       if (ok && typeof transferId === 'string') {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            window.ipc.send('pane:received-applied', transferId)
-          })
+        scheduleTransferAck(() => {
+          window.ipc.send('pane:received-applied', transferId)
         })
       }
     } catch { /* ignore */ }
@@ -463,10 +507,8 @@ export function wirePanesIpc(): void {
     // Ack only on a real insert. A no-op insert (self-drop, or target vanished mid-drag) must not
     // ack — otherwise main proceeds to remove the source pane and it is lost.
     if (ok && typeof transferId === 'string') {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.ipc.send('renderer:insert-at-split-applied', transferId)
-        })
+      scheduleTransferAck(() => {
+        window.ipc.send('renderer:insert-at-split-applied', transferId)
       })
     }
   })
@@ -481,10 +523,8 @@ export function wirePanesIpc(): void {
     // Ack only on a real replace, so a swap where one side's pane vanished does not half-apply:
     // the unacked side triggers the main-side rollback of the side that did apply.
     if (ok && typeof transferId === 'string') {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.ipc.send('renderer:replace-pane-applied', transferId)
-        })
+      scheduleTransferAck(() => {
+        window.ipc.send('renderer:replace-pane-applied', transferId)
       })
     }
   })

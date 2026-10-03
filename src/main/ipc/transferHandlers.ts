@@ -9,6 +9,7 @@ let remoteSpawnRequestSeq = 0
 let focusTargetVersionSeq = 0
 let tabReleaseSeq = 0
 const tearOffTimers = new Map<string, NodeJS.Timeout>()
+const pendingTabAbsorbs = new Map<string, { tabId: string; targetWindowId: number }>()
 
 function trySend(win: BrowserWindow, channel: string, ...args: unknown[]): boolean {
   try {
@@ -233,7 +234,13 @@ export function registerTransferHandlers(deps: {
       activeTabId = typeof activeTabIdArg === 'string' ? activeTabIdArg : undefined
     }
     try {
-      const tabs = JSON.parse(tabsJson) as Array<{ id: string }>
+      let tabs = JSON.parse(tabsJson) as Array<{ id: string }>
+      const pendingForWindow = Array.from(pendingTabAbsorbs.values())
+        .filter((pending) => pending.targetWindowId === senderWin.id)
+      if (pendingForWindow.length > 0) {
+        const blockedIds = new Set(pendingForWindow.map((pending) => pending.tabId))
+        tabs = tabs.filter((tab) => !blockedIds.has(tab.id))
+      }
       const acceptedIds = windowManager.recordDetachedTabsForWindow(senderWin.id, tabs.map((t) => t.id), version)
       tabsJson = JSON.stringify(tabs.filter((t) => acceptedIds.includes(t.id)))
     } catch { /* ignore malformed */ }
@@ -385,9 +392,10 @@ export function registerTransferHandlers(deps: {
     return true
   })
 
-  registrar.handle('tab:absorb', async (e, tabJson: string, ptyIds: string[], sourceWindowId: number) => {
+  registrar.handle('tab:absorb', async (e, tabJson: string, ptyIds: string[], sourceWindowId: number, dropIndex?: number) => {
     const toWin = BrowserWindow.fromWebContents(e.sender)
-    if (!toWin) return false
+    if (!toWin || typeof sourceWindowId !== 'number' || sourceWindowId === toWin.id) return false
+    if (windowManager.isWindowClosing(toWin.id) || toWin.isDestroyed()) return false
     let tab: Tab
     try {
       tab = JSON.parse(tabJson) as Tab
@@ -395,35 +403,57 @@ export function registerTransferHandlers(deps: {
       return false
     }
 
+    if (!tab || typeof tab.id !== 'string' || !Array.isArray(ptyIds) || !ptyIds.every((id) => typeof id === 'string')) return false
+    if (new Set(ptyIds).size !== ptyIds.length) return false
     const sourceWin = windowManager.getWindowById(sourceWindowId)
-    if (!sourceWin || sourceWin.isDestroyed()) return false
+    if (!sourceWin || sourceWin.isDestroyed() || windowManager.isWindowClosing(sourceWin.id)) return false
     const sourceGeneration = windowManager.getOwnershipGeneration(tab.id)
     const sourceWebContentsId = sourceWin.webContents.id
+    const ownsAllPtys = (): boolean => ptyIds.every((ptyId) => windowManager.getPtyOwner(ptyId) === sourceWebContentsId)
+    if (!ownsAllPtys()) return false
 
-    const releaseId = `${Date.now()}:${++tabReleaseSeq}`
-    const released = await waitForAck(sourceWin, 'tab:release-applied', releaseId, () => {
+    const transferId = `absorb:${Date.now()}:${++tabReleaseSeq}`
+    pendingTabAbsorbs.set(transferId, { tabId: tab.id, targetWindowId: toWin.id })
+    const targetApplied = await waitForAck(toWin, 'tab:received-applied', transferId, () => {
+      trySend(toWin, 'tab:received', tabJson, Number.isInteger(dropIndex) && (dropIndex as number) >= 0 ? dropIndex : undefined, transferId)
+    }, 1500)
+    if (!targetApplied) {
+      // The apply may have succeeded while its ack raced a renderer/window
+      // teardown. Rollback is token-keyed and harmless when nothing applied.
+      trySend(toWin, 'tab:transfer-rolledback', tab.id, transferId)
+      pendingTabAbsorbs.delete(transferId)
+      return false
+    }
+
+    const released = await waitForAck(sourceWin, 'tab:release-applied', transferId, () => {
       trySend(sourceWin,
         'tab:release',
         tab.id,
         windowManager.isDetachedWindow(toWin.id) ? toWin.id : undefined,
-        releaseId,
+        transferId,
       )
-    })
+    }, 1500)
     // On failure the source has NOT yet touched its copy of the tab (it only acked the
     // release; finalize is deferred to tab:absorb-committed below), so there is nothing to
     // roll back here — the absorber discards its optimistic copy on the falsy result.
-    if (
-      !released ||
-      toWin.isDestroyed() ||
-      sourceWin.isDestroyed() ||
-      windowManager.isWindowClosing(sourceWin.id) ||
-      windowManager.isWindowClosing(toWin.id) ||
-      windowManager.getOwnershipGeneration(tab.id) !== sourceGeneration ||
-      ptyIds.some((ptyId) => windowManager.getPtyOwner(ptyId) !== sourceWebContentsId)
-    ) return false
+    const validBeforeCommit =
+      released &&
+      !toWin.isDestroyed() &&
+      !sourceWin.isDestroyed() &&
+      !windowManager.isWindowClosing(sourceWin.id) &&
+      !windowManager.isWindowClosing(toWin.id) &&
+      windowManager.getOwnershipGeneration(tab.id) === sourceGeneration &&
+      ownsAllPtys()
+    if (!validBeforeCommit) {
+      trySend(toWin, 'tab:transfer-rolledback', tab.id, transferId)
+      trySend(sourceWin, 'tab:transfer-rolledback', tab.id, transferId)
+      pendingTabAbsorbs.delete(transferId)
+      return false
+    }
 
     windowManager.unrecordTab(tab.id)
-    if (windowManager.isDetachedWindow(toWin.id)) {
+    const targetIsDetached = windowManager.isDetachedWindow(toWin.id)
+    if (targetIsDetached) {
       windowManager.recordDetachedTab(toWin.id, [tab.id])
     }
     for (const ptyId of ptyIds as string[]) {
@@ -433,13 +463,9 @@ export function registerTransferHandlers(deps: {
     // PTYs are now routed to the absorbing window; only now is it safe for the source to
     // drop/detach its copy. Without this commit the source either lost the tab before the
     // transfer was confirmed (data loss) or never released it at all.
-    if (!sourceWin.isDestroyed()) {
-      trySend(sourceWin,
-        'tab:absorb-committed',
-        tab.id,
-        windowManager.isDetachedWindow(toWin.id) ? toWin.id : undefined,
-      )
-    }
+    trySend(sourceWin, 'tab:absorb-committed', tab.id, targetIsDetached ? toWin.id : undefined, transferId)
+    trySend(toWin, 'tab:absorb-committed', tab.id, targetIsDetached ? toWin.id : undefined, transferId)
+    pendingTabAbsorbs.delete(transferId)
     return true
   })
 

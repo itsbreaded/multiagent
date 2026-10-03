@@ -24,6 +24,8 @@ interface SidebarSectionProps {
   onHeaderDragOver?: React.DragEventHandler<HTMLDivElement>
   onHeaderDragLeave?: React.DragEventHandler<HTMLDivElement>
   onHeaderDrop?: React.DragEventHandler<HTMLDivElement>
+  onSectionDragOver?: React.DragEventHandler<HTMLDivElement>
+  onSectionDrop?: React.DragEventHandler<HTMLDivElement>
   headerDropActive?: boolean
   headerInsertTop?: boolean
   sectionInsertBottom?: boolean
@@ -56,6 +58,8 @@ export function SidebarSection({
   onHeaderDragOver,
   onHeaderDragLeave,
   onHeaderDrop,
+  onSectionDragOver,
+  onSectionDrop,
   headerDropActive,
   headerInsertTop,
   sectionInsertBottom,
@@ -82,12 +86,18 @@ export function SidebarSection({
   }, [renaming])
 
   return (
-    <div style={{ position: 'relative', flexShrink: 0, ...style }}>
+    <div
+      style={{ position: 'relative', flexShrink: 0, ...style }}
+      onDragEnter={onSectionDragOver}
+      onDragOver={onSectionDragOver}
+      onDrop={onSectionDrop}
+    >
       <div
         onContextMenu={onContextMenu}
         draggable={headerDraggable}
         onDragStart={onHeaderDragStart}
         onDragEnd={onHeaderDragEnd}
+        onDragEnter={onHeaderDragOver}
         onDragOver={onHeaderDragOver}
         onDragLeave={onHeaderDragLeave}
         onDrop={onHeaderDrop}

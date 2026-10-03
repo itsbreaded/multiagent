@@ -39,6 +39,8 @@ const automaticSuspensionFailed = new Set<string>()
 const automaticSuspensionTokens = new Map<string, symbol>()
 const tabUnfocusedSince = new Map<string, number>()
 const pendingTabTransfers = new Map<string, string>()
+const pendingTabAbsorptions = new Map<string, string>()
+const pendingReceivedTabs = new Map<string, { tabId: string; previousTab?: Tab; previousActiveTabId: string }>()
 let idleCoordinatorCleanup: (() => void) | null = null
 const DEFAULT_AGENT_KIND: AgentKind = 'claude'
 
@@ -375,6 +377,12 @@ interface PanesStore {
   hydrateTab: (tabId: string) => void
   isTabHydrated: (tabId: string) => boolean
   initDetached: (tab: Tab, ptyIds: string[], transferId?: string) => void
+  receiveTab: (tab: Tab, atIndex?: number, transferId?: string) => boolean
+  markReceivedTabCommitted: (tabId: string, transferId: string) => boolean
+  rollbackReceivedTab: (tabId: string, transferId: string) => boolean
+  stageTabAbsorbRelease: (tabId: string, transferId: string) => boolean
+  commitTabAbsorb: (tabId: string, ownerWindowId: number | undefined, transferId: string) => boolean
+  rollbackTabAbsorb: (tabId: string, transferId: string) => boolean
   detachTab: (tabId: string, ownerWindowId?: number) => void
   returnTab: (tabId: string) => void
   removeTabLocally: (tabId: string) => void
@@ -407,7 +415,7 @@ interface PanesStore {
   setPendingRenameTabId: (id: string | null) => void
   setTabDefaultCwd: (tabId: string, cwd: string) => void
   closeTab: (tabId: string) => void
-  moveTabToNewWindow: (tabId: string) => void
+  moveTabToNewWindow: (tabId: string, screenX?: number, screenY?: number) => void
   commitTabTearOff: (tabId: string, ownerWindowId: number | undefined, transferId: string) => boolean
   markTabTearOffCommitted: (tabId: string, transferId: string) => boolean
   rollbackTabTearOff: (tabId: string, transferId: string) => boolean
@@ -719,6 +727,106 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     }
   },
 
+  receiveTab: (tab, atIndex, transferId) => {
+    if (transferId && pendingReceivedTabs.get(transferId)?.tabId === tab.id) return true
+    let applied = false
+    let previousTab: Tab | undefined
+    let previousActiveTabId = ''
+    set((s) => {
+      previousActiveTabId = s.activeTabId
+      const existing = s.tabs.find((candidate) => candidate.id === tab.id)
+      // A detached proxy is the primary's synchronized copy and may be claimed
+      // in place. A local copy in this renderer means a newer transfer already
+      // won the ownership race; never append a duplicate.
+      if (existing && !existing.detached) return s
+      previousTab = existing
+      const rest = s.tabs.filter((candidate) => candidate.id !== tab.id)
+      const base = seedInitialAgentStatusesInTab({ ...tab, detached: false })
+      let insertAt = rest.length
+      if (atIndex !== undefined && Number.isInteger(atIndex) && atIndex >= 0) {
+        let localCount = 0
+        for (let i = 0; i < rest.length; i++) {
+          if (!isTabVisibleInCurrentWindow(s.isDetachedWindow, rest[i])) continue
+          if (localCount === atIndex) { insertAt = i; break }
+          localCount++
+        }
+      } else {
+        for (let i = rest.length - 1; i >= 0; i--) {
+          if (isTabVisibleInCurrentWindow(s.isDetachedWindow, rest[i])) {
+            insertAt = i + 1
+            break
+          }
+        }
+      }
+      const tabs = [...rest]
+      tabs.splice(insertAt, 0, base)
+      applied = true
+      return {
+        tabs,
+        activeTabId: base.id,
+        hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [base.id]),
+        sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(base.id)]: true },
+        localFocusArmed: true,
+      }
+    })
+    if (!applied) return false
+    if (transferId) pendingReceivedTabs.set(transferId, { tabId: tab.id, previousTab, previousActiveTabId })
+    hydrateTabRuntime(tab.id, true)
+    reportCurrentFocusTarget()
+    return true
+  },
+
+  markReceivedTabCommitted: (tabId, transferId) => {
+    if (pendingReceivedTabs.get(transferId)?.tabId !== tabId) return false
+    pendingReceivedTabs.delete(transferId)
+    return true
+  },
+
+  rollbackReceivedTab: (tabId, transferId) => {
+    const pending = pendingReceivedTabs.get(transferId)
+    if (!pending || pending.tabId !== tabId) return false
+    pendingReceivedTabs.delete(transferId)
+    const previousTab = pending.previousTab
+    if (previousTab) {
+      set((s) => {
+        const currentIndex = s.tabs.findIndex((tab) => tab.id === tabId)
+        if (currentIndex < 0) return s
+        const tabs = [...s.tabs]
+        tabs[currentIndex] = previousTab
+        return {
+          tabs,
+          activeTabId: pending.previousActiveTabId,
+          hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tabId]),
+        }
+      })
+    } else if (get().tabs.some((tab) => tab.id === tabId)) {
+      get().removeTabLocally(tabId)
+    }
+    return true
+  },
+
+  stageTabAbsorbRelease: (tabId, transferId) => {
+    if (!get().tabs.some((tab) => tab.id === tabId)) return false
+    const existing = pendingTabAbsorptions.get(tabId)
+    if (existing && existing !== transferId) return false
+    pendingTabAbsorptions.set(tabId, transferId)
+    return true
+  },
+
+  commitTabAbsorb: (tabId, ownerWindowId, transferId) => {
+    if (pendingTabAbsorptions.get(tabId) !== transferId) return false
+    pendingTabAbsorptions.delete(tabId)
+    if (get().isDetachedWindow) get().removeTabLocally(tabId)
+    else get().detachTab(tabId, ownerWindowId)
+    return true
+  },
+
+  rollbackTabAbsorb: (tabId, transferId) => {
+    if (pendingTabAbsorptions.get(tabId) !== transferId) return false
+    pendingTabAbsorptions.delete(tabId)
+    return true
+  },
+
   detachTab: (tabId, ownerWindowId) => {
     const previousHydrated = get().hydratedTabIds
     // Mark as detached — keeps the tab in the store for sidebar navigation.
@@ -964,6 +1072,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   closeTab: (tabId) => {
+    // An absorb is between reversible renderer apply and main's ownership
+    // commit. Keep both copies alive until commit/rollback decides the result.
+    if (pendingTabAbsorptions.has(tabId) || Array.from(pendingReceivedTabs.values()).some((pending) => pending.tabId === tabId)) return
+    pendingTabAbsorptions.delete(tabId)
     const tab = get().tabs.find((t) => t.id === tabId)
     const pendingTransferId = pendingTabTransfers.get(tabId)
     const pendingDetachedClose = !!pendingTransferId && get().isDetachedWindow
@@ -1022,7 +1134,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
 
-  moveTabToNewWindow: (tabId) => {
+  moveTabToNewWindow: (tabId, screenXOverride, screenYOverride) => {
     const tab = get().tabs.find((candidate) => candidate.id === tabId)
     if (!tab || pendingTabTransfers.has(tabId) || typeof window === 'undefined' || !window.ipc) return
     const transferId = uuid()
@@ -1030,8 +1142,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     const ptyIds = tab.rootNode
       ? collectLeaves(tab.rootNode).map((leaf) => leaf.ptyId).filter((id): id is string => typeof id === 'string')
       : []
-    const screenX = window.screenX + Math.floor(window.outerWidth / 2)
-    const screenY = window.screenY + 40
+    const screenX = typeof screenXOverride === 'number' && Number.isFinite(screenXOverride)
+      ? screenXOverride
+      : window.screenX + Math.floor(window.outerWidth / 2)
+    const screenY = typeof screenYOverride === 'number' && Number.isFinite(screenYOverride)
+      ? screenYOverride
+      : window.screenY + 40
     void window.ipc.invoke('tab:tear-off', JSON.stringify(tab), ptyIds, screenX, screenY, transferId)
       .then((result) => {
         const returnedTransferId = typeof result === 'object' && result !== null && 'transferId' in result && typeof result.transferId === 'string'

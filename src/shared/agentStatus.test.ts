@@ -518,6 +518,35 @@ describe('eventToState -- background subagents (spec 065)', () => {
     expect(eventToState(started, { event: 'stop' }, NOW)?.status).toBe('working')
   })
 
+  it('keeps tracked work protected when a completion has evidence but no matching identity', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = stop(started)
+    const unchanged = eventToState(held, {
+      event: 'bg_subagent_completed', sessionId: BG_SESSION, turnId: BG_TURN,
+      evidence: {
+        provider: 'claude', completeness: 'incomplete', terminalState: 'completed',
+        activeCount: 0, scheduledCount: 0, sessionId: BG_SESSION, turnId: BG_TURN,
+      },
+    }, NOW + 1)!
+    expect(unchanged).toMatchObject({
+      status: 'working', activeBackgroundSubagents: 1, activeBackgroundSubagentIds: ['sub-a'],
+    })
+  })
+
+  it('removes the matching identity even when completion evidence is attached', () => {
+    const started = launch(undefined, 'sub-a')!
+    const held = stop(started)
+    const completed = eventToState(held, {
+      event: 'bg_subagent_completed', sessionId: BG_SESSION, turnId: BG_TURN, agentId: 'sub-a',
+      evidence: {
+        provider: 'claude', completeness: 'complete', terminalState: 'completed',
+        activeCount: 1, scheduledCount: 0, activeIds: ['sub-a'], sessionId: BG_SESSION, turnId: BG_TURN,
+      },
+    }, NOW + 1)!
+    expect(completed).toMatchObject({ status: 'idle', event: 'stop', completedBackgroundSubagentIds: ['sub-a'] })
+    expect(completed.activeBackgroundSubagents).toBeUndefined()
+  })
+
   it('preserves waiting and stop_failure precedence while a known subagent completes', () => {
     const waiting = eventToState(stop(launch(undefined, 'sub-a')!), {
       event: 'permission_request',
@@ -577,6 +606,14 @@ describe('eventToState -- background subagents (spec 065)', () => {
     const reset = eventToState(marked, { event: 'session_start', sessionId: BG_SESSION }, NOW + 1)!
     expect(reset.suspensionBlocked).toBeUndefined()
     expect(reset.completedBackgroundSubagentIds).toBeUndefined()
+  })
+
+  it('clears active child tracking on a fresh same-session start', () => {
+    const started = launch(undefined, 'sub-a')!
+    const reset = eventToState(started, { event: 'session_start', sessionId: BG_SESSION }, NOW + 1)!
+    expect(reset).toMatchObject({ status: 'idle', sessionId: BG_SESSION, event: 'session_start' })
+    expect(reset.activeBackgroundSubagents).toBeUndefined()
+    expect(reset.activeBackgroundSubagentIds).toBeUndefined()
   })
 })
 

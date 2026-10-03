@@ -22,6 +22,7 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
     MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
     MULTIAGENT_E2E_AGENT_COMMAND: `node "${join(repoRoot, 'e2e', 'fixtures', 'framed-agent.cjs')}"`,
     MULTIAGENT_E2E_FRAME_INTERVAL_MS: '2',
+    MULTIAGENT_E2E_MINIMIZED: '1',
     HOME: homeDir,
     USERPROFILE: homeDir,
   }
@@ -83,6 +84,17 @@ async function closeApp(target: ElectronApplication): Promise<void> {
     // Like app.close(), this must be an idempotent no-op on an already-closed app.
     return
   }
+  // localStorage is synchronous to the renderer but Chromium may defer its
+  // profile write. Flush the Electron session before exercising a relaunch so
+  // the next renderer observes the final settings state.
+  await target.evaluate(({ session }) => session.defaultSession.flushStorageData()).catch(() => {})
+  const processExit = new Promise<void>((resolve) => {
+    if (proc?.exitCode !== null || proc?.signalCode !== null) {
+      resolve()
+      return
+    }
+    proc?.once('exit', () => resolve())
+  })
   const hardKill = new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       try {
@@ -96,17 +108,52 @@ async function closeApp(target: ElectronApplication): Promise<void> {
     }, 5_000)
     timer.unref?.()
   })
+  // ElectronApplication.close() can release Playwright's connection before the
+  // child process has exited. Do not launch another app against the same profile
+  // until the previous process is gone; otherwise Chromium can expose stale
+  // localStorage state on the replacement renderer.
   await Promise.race([
-    target.close().catch(() => {}),
+    target.close().catch(() => {}).then(() => processExit),
     hardKill,
   ])
 }
 
 async function tearOffTab(app: ElectronApplication, page: Page, tabName: string): Promise<Page> {
+  const existingWindows = new Set(app.windows())
   await page.getByTitle(tabName, { exact: true }).click({ button: 'right' })
   await page.getByRole('button', { name: 'Move Tab to New Window', exact: true }).click()
-  await expect.poll(() => app.windows().length).toBe(2)
-  return app.windows().find((candidate) => candidate !== page)!
+  await expect.poll(() => app.windows().some((candidate) => !existingWindows.has(candidate))).toBe(true)
+  return app.windows().find((candidate) => !existingWindows.has(candidate))!
+}
+
+async function dragSidebarTabOutside(page: Page, tabName: string, screenX: number, screenY: number): Promise<void> {
+  await page.getByTitle(tabName, { exact: true }).locator('..').evaluate((header, point) => {
+    const dataTransfer = new DataTransfer()
+    header.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }))
+    header.dispatchEvent(new DragEvent('dragend', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+      screenX: point.screenX,
+      screenY: point.screenY,
+    }))
+  }, { screenX, screenY })
+}
+
+async function dropSidebarTab(
+  page: Page,
+  targetTabName: string,
+  tab: Record<string, unknown>,
+  ptyIds: string[],
+  sourceWindowId: number,
+): Promise<void> {
+  await page.getByTitle(targetTabName, { exact: true }).locator('..').evaluate((header, payload) => {
+    const dataTransfer = new DataTransfer()
+    dataTransfer.setData('application/x-multiagent-tab', JSON.stringify(payload))
+    const eventInit = { bubbles: true, cancelable: true, dataTransfer, clientY: 1 }
+    header.dispatchEvent(new DragEvent('dragover', eventInit))
+    header.dispatchEvent(new DragEvent('drop', eventInit))
+  }, { tab, ptyIds, sourceWindowId })
 }
 
 test.describe('cold-start layout restore', () => {
@@ -294,7 +341,6 @@ test.describe('cold-start layout restore', () => {
     await claudeCard.getByRole('checkbox', { name: 'Enabled' }).uncheck()
 
     await expect(page.getByText(/Provider settings could not be saved|Retry to keep this change/)).toHaveCount(0)
-
     await closeApp(app)
     await launchTestApp()
     await page.getByTitle('Settings').click()
@@ -624,6 +670,110 @@ test.describe('cold-start layout restore', () => {
     await expect(output).resolves.toContain('__sidebar_tearoff__')
   })
 
+  test('detaches a sidebar tab at drag-out and preserves its PTY output', async () => {
+    const { ptyId } = await spawnShell(page, userDataDir)
+    const detachedTab = JSON.parse(await readFile(join(userDataDir, 'layout.json'), 'utf8')) as { tabs: Array<Record<string, unknown>> }
+    const alpha = detachedTab.tabs.find((tab) => tab.customLabel === 'Alpha')!
+    await dragSidebarTabOutside(page, 'Alpha', 1800, 420)
+    await expect.poll(() => app.windows().length).toBe(2)
+    const detached = app.windows().find((candidate) => candidate !== page)!
+    await detached.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
+    await expect(detached.getByTitle('Alpha', { exact: true })).toHaveCount(1)
+    await expect(detached.locator('.tab-strip')).toHaveCount(0)
+
+    const output = detached.evaluate((id) => new Promise<string>((resolve, reject) => {
+      let text = ''
+      const timer = window.setTimeout(() => { unsubscribe(); reject(new Error('Timed out waiting for drag-out PTY output')) }, 15_000)
+      const unsubscribe = window.ipc.on('pty:data', (receivedId: unknown, chunk: unknown) => {
+        if (receivedId !== id || typeof chunk !== 'string') return
+        text += chunk
+        if (!text.includes('__sidebar_drag_out__')) return
+        window.clearTimeout(timer)
+        unsubscribe()
+        resolve(text)
+      })
+      window.ipc.send('pty:write', id, 'echo __sidebar_drag_out__\r')
+    }), ptyId)
+    await expect(output).resolves.toContain('__sidebar_drag_out__')
+    expect(alpha.id).toBeTruthy()
+  })
+
+  test('transfers a detached sidebar tab back to the primary window without duplicates', async () => {
+    const { tab, ptyId } = await spawnShell(page, userDataDir)
+    const sourceTab = JSON.parse(await readFile(join(userDataDir, 'layout.json'), 'utf8')) as { tabs: Array<Record<string, unknown>> }
+    const alpha = sourceTab.tabs.find((candidate) => candidate.id === tab.id || candidate.customLabel === 'Alpha')!
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+    const sourceWindowId = await detached.evaluate(() => window.ipc.invoke('window:get-id')) as number
+
+    // A destination no-op must time out and roll back without removing the
+    // source or appending a duplicate target row.
+    await dropSidebarTab(page, 'Beta', { ...alpha, id: 'tab-beta', customLabel: 'Alpha copy' }, [], sourceWindowId)
+    await expect(page.getByTitle('Beta', { exact: true })).toHaveCount(1)
+    await expect(detached.getByTitle('Alpha', { exact: true })).toHaveCount(1)
+
+    await dropSidebarTab(page, 'Beta', alpha, [ptyId], sourceWindowId)
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(1)
+    await expect(page.getByTitle('Beta', { exact: true })).toHaveCount(1)
+    await expect.poll(() => detached.isClosed()
+      ? 0
+      : detached.getByTitle('Alpha', { exact: true }).count().catch(() => 0)
+    ).toBe(0)
+
+    const output = page.evaluate((id) => new Promise<string>((resolve, reject) => {
+      let text = ''
+      const timer = window.setTimeout(() => { unsubscribe(); reject(new Error('Timed out waiting for returned PTY output')) }, 15_000)
+      const unsubscribe = window.ipc.on('pty:data', (receivedId: unknown, chunk: unknown) => {
+        if (receivedId !== id || typeof chunk !== 'string') return
+        text += chunk
+        if (!text.includes('__sidebar_return__')) return
+        window.clearTimeout(timer)
+        unsubscribe()
+        resolve(text)
+      })
+      window.ipc.send('pty:write', id, 'echo __sidebar_return__\r')
+    }), ptyId)
+    await expect(output).resolves.toContain('__sidebar_return__')
+  })
+
+  test('transfers a tab between detached sidebars and keeps ownership rows unique', async () => {
+    const source = JSON.parse(await readFile(join(userDataDir, 'layout.json'), 'utf8')) as { tabs: Array<Record<string, unknown>> }
+    const alpha = source.tabs.find((tab) => tab.customLabel === 'Alpha')!
+    const alphaWindow = await tearOffTab(app, page, 'Alpha')
+    await alphaWindow.waitForLoadState('domcontentloaded')
+    const betaWindow = await tearOffTab(app, page, 'Beta')
+    await betaWindow.waitForLoadState('domcontentloaded')
+    const sourceWindowId = await alphaWindow.evaluate(() => window.ipc.invoke('window:get-id')) as number
+
+    await dropSidebarTab(betaWindow, 'Beta', alpha, [], sourceWindowId)
+    await expect(betaWindow.getByTitle('Alpha', { exact: true })).toHaveCount(1)
+    await expect.poll(() => alphaWindow.isClosed()
+      ? 0
+      : alphaWindow.getByTitle('Alpha', { exact: true }).count().catch(() => 0)
+    ).toBe(0)
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
+    await expect(betaWindow.locator('.tab-strip')).toHaveCount(0)
+  })
+
+  test('keeps pane drag-and-drop separate from sidebar tab dragging', async () => {
+    await spawnShell(page, userDataDir)
+    const saved = JSON.parse(await readFile(join(userDataDir, 'layout.json'), 'utf8')) as {
+      tabs: Array<{ customLabel?: string; rootNode?: { id?: string; ptyId?: string } }>
+    }
+    const alpha = saved.tabs.find((tab) => tab.customLabel === 'Alpha')!
+    const paneId = alpha.rootNode?.id
+    expect(paneId).toBeTruthy()
+    await page.locator(`[data-pane-id="${paneId}"]`).first().dragTo(page.getByTitle('Beta', { exact: true }).locator('..'))
+    await expect.poll(async () => {
+      const layout = JSON.parse(await readFile(join(userDataDir, 'layout.json'), 'utf8')) as {
+        tabs: Array<{ customLabel?: string; rootNode?: { ptyId?: string } }>
+      }
+      return layout.tabs.find((tab) => tab.customLabel === 'Beta')?.rootNode?.ptyId ?? ''
+    }).not.toBe('')
+  })
+
   test('returns a detached tab to the primary sidebar', async () => {
     const detached = await tearOffTab(app, page, 'Alpha')
     await detached.waitForLoadState('domcontentloaded')
@@ -835,7 +985,9 @@ test.describe('cold-start layout restore', () => {
     await expect(page.locator(`[data-pane-id="${trackedPaneId}"] .xterm`)).toHaveCount(1)
     await page.evaluate(() => window.e2ePtyTrace?.reset())
 
-    for (let i = 0; i < 100; i += 1) {
+    // Keep this as a repeated-layout check without making every E2E run spend
+    // minutes spawning and tearing down a fresh PTY for each iteration.
+    for (let i = 0; i < 5; i += 1) {
       const shellPane = page.locator('[data-pane-id="restored-shell"]').last()
       const trackedPane = page.locator(`[data-pane-id="${trackedPaneId}"]`).last()
       if (i === 0) {
@@ -852,14 +1004,30 @@ test.describe('cold-start layout restore', () => {
       await page.getByTitle('Split horizontal').nth(2).click()
       await expect(page.locator('.xterm')).toHaveCount(3)
       if (i === 0) {
-        const trackedBox = await trackedPane.boundingBox()
-        const newPane = page.locator('[data-pane-id]').filter({ hasNot: page.locator('[data-never-matches]') }).evaluateAll(
+        const renderedPanes = page.locator('[data-pane-id]').filter({ has: page.locator('.xterm') })
+        const newPane = renderedPanes.evaluateAll(
           (nodes) => nodes
             .map((node) => node.getAttribute('data-pane-id'))
             .find((id) => id !== 'restored-shell' && id !== 'restored-agent') ?? ''
         )
         const newPaneId = await newPane
-        const newBox = await page.locator(`[data-pane-id="${newPaneId}"]`).last().boundingBox()
+        const newPaneLocator = page
+          .locator(`[data-pane-id="${newPaneId}"]`)
+          .filter({ has: page.locator('.xterm') })
+          .last()
+        await expect
+          .poll(
+            async () => {
+              const currentTrackedBox = await trackedPane.boundingBox()
+              const currentNewBox = await newPaneLocator.boundingBox()
+              if (!currentTrackedBox || !currentNewBox) return Number.NEGATIVE_INFINITY
+              return currentNewBox.y - (currentTrackedBox.y + currentTrackedBox.height * 0.8)
+            },
+            { timeout: 5_000 }
+          )
+          .toBeGreaterThan(0)
+        const trackedBox = await trackedPane.boundingBox()
+        const newBox = await newPaneLocator.boundingBox()
         expect(trackedBox).toBeTruthy()
         expect(newBox).toBeTruthy()
         expect(Math.abs(newBox!.x - trackedBox!.x)).toBeLessThan(4)

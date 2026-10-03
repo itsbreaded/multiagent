@@ -82,8 +82,13 @@ nonzero scoped ratchets in `vitest.config.ts` as their measured baselines improv
 
 `e2e/startup.spec.ts` launches the compiled app with a temporary user-data/home profile. It
 covers cold layout restore, the real SQLite FTS index, shell `pty:ready` plus direct seq=0
-output, cross-window `tab:absorb`, and Claude deferred spawning through an isolated fake
-agent command.
+output, sidebar tab reorder and drag-out, primary/detached and detached/detached
+`tab:absorb` transfers, destination-ack rollback/no-duplicate behavior, terminal output after
+ownership changes, detached-window cleanup, pane drag/drop isolation, and Claude deferred
+spawning through an isolated fake agent command. The drag helpers dispatch the same typed
+sidebar MIME payloads as the renderer and leave the existing pane MIME path separate. E2E-launched
+primary and detached windows set `MULTIAGENT_E2E_MINIMIZED=1`, so local runs keep their renderer
+available to Playwright without taking over the desktop.
 
 ## Coverage ratchets
 
