@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { usePanesStore } from '../../store/panes'
+import { installMockIpc } from '../../../../../tests/mockIpc'
 import { CommandPalette } from './index'
 
 beforeEach(() => {
@@ -36,6 +37,19 @@ describe('CommandPalette - filtering and enabled gates', () => {
     expect(screen.getByText('No results')).toBeInTheDocument()
   })
 
+  it('resets query and selection when a new owner instance mounts', async () => {
+    const user = userEvent.setup()
+    const mounted = render(<CommandPalette />)
+    await user.type(screen.getByPlaceholderText('Search commands…'), 'preferences')
+    expect(screen.getByText('Open Settings')).toBeInTheDocument()
+
+    mounted.unmount()
+    render(<CommandPalette />)
+
+    expect(screen.getByPlaceholderText('Search commands…')).toHaveValue('')
+    expect(screen.getByText('New Shell Pane')).toBeInTheDocument()
+  })
+
   it('does not offer focused-pane commands when no pane is focused', async () => {
     const user = userEvent.setup()
     render(<CommandPalette />)
@@ -46,30 +60,40 @@ describe('CommandPalette - filtering and enabled gates', () => {
     expect(screen.getByText('No results')).toBeInTheDocument()
   })
 
-  it('hides main-window-only commands in a detached window', async () => {
+  it('offers window-local settings and session commands in a detached window', async () => {
     const user = userEvent.setup()
     usePanesStore.setState({ isDetachedWindow: true })
     render(<CommandPalette />)
 
     await user.type(screen.getByPlaceholderText('Search commands…'), 'Open Settings')
 
-    expect(screen.queryByText('Open Settings')).toBeNull()
-    expect(screen.getByText('No results')).toBeInTheDocument()
+    expect(screen.getByText('Open Settings')).toBeInTheDocument()
+
+    const input = screen.getByRole('textbox')
+    await user.clear(input)
+    await user.type(input, 'Session Browser')
+    expect(screen.getByText('Open Session Browser')).toBeInTheDocument()
   })
 })
 
 describe('CommandPalette - interaction', () => {
   it('runs the selected command with Enter and closes the palette', async () => {
     const user = userEvent.setup()
-    usePanesStore.setState({ commandPaletteOpen: true })
+    const ipc = installMockIpc()
+    ipc.invoke.mockImplementation(async (channel: string) => channel === 'overlay:request'
+      ? { status: 'opened', kind: 'settings', ownerWindowId: 1, generation: 2, requestToken: 2, settingsSection: null }
+      : undefined)
+    usePanesStore.setState({ commandPaletteOpen: true, activeOverlayKind: 'command-palette', activeOverlayGeneration: 1, windowId: 1 })
     render(<CommandPalette />)
 
     await user.type(screen.getByPlaceholderText('Search commands…'), 'Open Settings')
     await user.keyboard('{Enter}')
 
-    const state = usePanesStore.getState()
-    expect(state.settingsOpen).toBe(true)
-    expect(state.commandPaletteOpen).toBe(false)
+    await waitFor(() => {
+      const state = usePanesStore.getState()
+      expect(state.settingsOpen).toBe(true)
+      expect(state.commandPaletteOpen).toBe(false)
+    })
   })
 
   it('closes on Escape', async () => {

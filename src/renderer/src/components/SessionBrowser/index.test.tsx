@@ -147,4 +147,36 @@ describe('SessionBrowser - deep mode', () => {
     expect(screen.queryByText('1 match')).toBeNull()
     expect(screen.getByText('Type to search across all transcript content.')).toBeInTheDocument()
   })
+
+  it('discards an in-flight deep-search response after the owner unmounts', async () => {
+    const user = userEvent.setup()
+    const staleResult: SessionSearchResult = {
+      session: session('stale'),
+      score: 3,
+      matchCount: 1,
+      matches: [{
+        transcriptPath: 'stale.jsonl',
+        lineNumber: 4,
+        timestamp: null,
+        role: 'assistant',
+        snippet: 'stale owner result',
+      }],
+    }
+    let resolveSearch!: (result: SessionSearchResult[]) => void
+    ipc.invoke.mockImplementation(() => new Promise<SessionSearchResult[]>((resolve) => { resolveSearch = resolve }))
+
+    const mounted = render(<SessionBrowser />)
+    await user.click(screen.getByRole('button', { name: 'Deep' }))
+    await user.type(screen.getByPlaceholderText('Search sessions...'), 'stale')
+    await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('sessions:search-deep', { query: 'stale' }))
+
+    mounted.unmount()
+    resolveSearch([staleResult])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    render(<SessionBrowser />)
+    expect(screen.queryByText('1 match')).toBeNull()
+    expect(screen.queryByText('stale owner result')).toBeNull()
+  })
 })

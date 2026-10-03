@@ -35,6 +35,116 @@ function tabRoot(tabId: string): PaneNode | undefined {
   return usePanesStore.getState().tabs.find((t) => t.id === tabId)?.rootNode
 }
 
+describe('usePanesStore singleton overlay projection', () => {
+  it('mounts only the main-approved generation and routes toggles through IPC', async () => {
+    const ipc = installMockIpc()
+    ipc.invoke.mockResolvedValue({
+      status: 'opened', kind: 'command-palette', ownerWindowId: 1, generation: 7, requestToken: 9,
+    })
+    usePanesStore.setState({ windowId: 1 })
+    usePanesStore.getState().toggleCommandPalette()
+    await Promise.resolve()
+
+    expect(ipc.invoke).toHaveBeenCalledWith('overlay:request', { action: 'toggle', kind: 'command-palette' })
+    expect(usePanesStore.getState()).toMatchObject({
+      activeOverlayKind: 'command-palette', activeOverlayGeneration: 7, commandPaletteOpen: true,
+      sessionBrowserOpen: false, settingsOpen: false,
+    })
+  })
+
+  it('clears a stale non-owner projection when main focuses another window', async () => {
+    const ipc = installMockIpc()
+    ipc.invoke.mockResolvedValue({
+      status: 'focused', kind: 'settings', ownerWindowId: 1, generation: 3, requestToken: 4,
+    })
+    usePanesStore.setState({ windowId: 2, activeOverlayKind: 'settings', activeOverlayGeneration: 2, settingsOpen: true })
+    usePanesStore.getState().toggleSettings()
+    await Promise.resolve()
+
+    expect(usePanesStore.getState()).toMatchObject({
+      activeOverlayKind: null, activeOverlayGeneration: null, settingsOpen: false,
+      commandPaletteOpen: false, sessionBrowserOpen: false,
+    })
+  })
+
+  it('does not let a late close clear a newer local generation', () => {
+    usePanesStore.getState().mountOverlay('session-browser', 12)
+    usePanesStore.getState().clearOverlayLocally('session-browser', 11)
+    expect(usePanesStore.getState()).toMatchObject({
+      activeOverlayKind: 'session-browser', activeOverlayGeneration: 12, sessionBrowserOpen: true,
+    })
+  })
+
+  it('ignores an older delayed approval after a newer request has mounted', async () => {
+    const ipc = installMockIpc()
+    let resolveOld!: (result: unknown) => void
+    ipc.invoke
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({ status: 'opened', kind: 'command-palette', ownerWindowId: 1, generation: 8, requestToken: 8 })
+    usePanesStore.setState({ windowId: 1 })
+
+    usePanesStore.getState().toggleSettings()
+    usePanesStore.getState().toggleCommandPalette()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(usePanesStore.getState().activeOverlayKind).toBe('command-palette')
+
+    resolveOld({ status: 'opened', kind: 'settings', ownerWindowId: 1, generation: 7, requestToken: 7 })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(usePanesStore.getState()).toMatchObject({
+      activeOverlayKind: 'command-palette', activeOverlayGeneration: 8, commandPaletteOpen: true,
+      settingsOpen: false,
+    })
+  })
+
+  it('does not remount an approval that arrives after a local close', async () => {
+    const ipc = installMockIpc()
+    let resolveOpen!: (result: unknown) => void
+    ipc.invoke.mockImplementationOnce(() => new Promise((resolve) => { resolveOpen = resolve }))
+    usePanesStore.setState({ windowId: 1 })
+
+    usePanesStore.getState().toggleSettings()
+    usePanesStore.getState().closeOverlays()
+    resolveOpen({ status: 'opened', kind: 'settings', ownerWindowId: 1, generation: 1, requestToken: 1 })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(usePanesStore.getState()).toMatchObject({
+      activeOverlayKind: null,
+      activeOverlayGeneration: null,
+      settingsOpen: false,
+    })
+  })
+
+  it('does not remount a generation revoked by the main-process close event', () => {
+    usePanesStore.getState().revokeOverlayLocally('settings', 4)
+    usePanesStore.getState().mountOverlay('settings', 4, null, 4)
+    expect(usePanesStore.getState().activeOverlayKind).toBeNull()
+  })
+})
+
+describe('usePanesStore — detached local chrome state', () => {
+  it('toggles the detached sidebar without changing ownership or focus', () => {
+    const tab = { id: 'detached-tab', rootNode: makeLeaf('C:\\detached'), focusedPaneId: '' } as Tab
+    tab.focusedPaneId = tab.rootNode!.id
+    usePanesStore.setState({
+      tabs: [tab],
+      activeTabId: tab.id,
+      isDetachedWindow: true,
+      sidebarOpen: true,
+    })
+
+    usePanesStore.getState().toggleSidebar()
+    expect(usePanesStore.getState().sidebarOpen).toBe(false)
+    expect(usePanesStore.getState().tabs).toEqual([tab])
+    expect(usePanesStore.getState().activeTabId).toBe(tab.id)
+
+    usePanesStore.getState().toggleSidebar()
+    expect(usePanesStore.getState().sidebarOpen).toBe(true)
+  })
+})
+
 describe('usePanesStore — sidebar tab transfer staging', () => {
   it('restores a detached proxy and the previous active tab on rollback', () => {
     const proxy = { id: 'transfer-tab', rootNode: makeLeaf('C:\\detached'), focusedPaneId: '' , detached: true } as Tab

@@ -1,4 +1,4 @@
-import type { AgentLifecycleEvent, CwdRepairMapping, FocusTarget, PaneLeaf, Tab, TerminalHostStatus } from '../../../shared/types'
+import type { AgentLifecycleEvent, CwdRepairMapping, FocusTarget, OverlayKind, PaneLeaf, Tab, TerminalHostStatus } from '../../../shared/types'
 import { normalizeAgentEventMeta } from '../../../shared/agentStatusEvidence'
 import { collectLeaves, findLeafByPtyId } from '../../../shared/paneTree'
 import { eventToState } from '../../../shared/agentStatus'
@@ -11,6 +11,11 @@ import { isTerminalHostStatus } from './terminalHost'
 // store access inside wirePanesIpc/listener callbacks to preserve that ordering.
 let wired = false
 
+const overlayKinds: readonly OverlayKind[] = ['settings', 'session-browser', 'search', 'command-palette']
+function isOverlayKind(value: unknown): value is OverlayKind {
+  return typeof value === 'string' && overlayKinds.includes(value as OverlayKind)
+}
+
 // Renderer store actions apply synchronously, but minimized/background Electron
 // windows may throttle requestAnimationFrame indefinitely. Transfer commits need
 // a liveness-safe acknowledgement after the store mutation, not a paint frame.
@@ -22,6 +27,18 @@ function scheduleTransferAck(callback: () => void): void {
 export function wirePanesIpc(): void {
   if (wired || typeof window === 'undefined' || !window.ipc) return
   wired = true
+
+  window.ipc.on('overlay:close', (kind: unknown, generation: unknown) => {
+    if (!isOverlayKind(kind) || typeof generation !== 'number') return
+    usePanesStore.getState().revokeOverlayLocally(kind, generation)
+    window.ipc.send('overlay:closed', kind, generation)
+  })
+
+  window.ipc.on('overlay:focus', (kind: unknown, generation: unknown) => {
+    if (!isOverlayKind(kind) || typeof generation !== 'number') return
+    usePanesStore.getState().focusOverlay(kind, generation)
+  })
+
   window.ipc.on('git:branch-updated', (cwdKeys: unknown, branch: unknown) => {
     if (!Array.isArray(cwdKeys) || !cwdKeys.every((key) => typeof key === 'string')) return
     const value = typeof branch === 'string' && branch.trim() ? branch : null

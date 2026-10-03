@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection, TerminalHostStatus } from '../../../shared/types'
+import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, OverlayKind, OverlayRequestResult, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection, TerminalHostStatus } from '../../../shared/types'
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
@@ -402,6 +402,12 @@ interface PanesStore {
   commandPaletteOpen: boolean
   settingsOpen: boolean
   settingsInitialSection: SettingsSection | null
+  activeOverlayKind: OverlayKind | null
+  activeOverlayGeneration: number | null
+  overlayRequestToken: number
+  overlayRequestSequence: number
+  overlayRevokedGeneration: number
+  overlayFocusNonce: number
   pendingRenamePaneId: string | null
   dirPickerTabId: string | null
   vsCodeAvailable: boolean
@@ -474,6 +480,10 @@ interface PanesStore {
   toggleSettings: () => void
   openSettings: (section?: SettingsSection) => void
   closeOverlays: () => void
+  mountOverlay: (kind: OverlayKind, generation: number, settingsSection?: string | null, requestToken?: number) => void
+  clearOverlayLocally: (kind?: OverlayKind, generation?: number) => void
+  revokeOverlayLocally: (kind: OverlayKind, generation: number) => void
+  focusOverlay: (kind: OverlayKind, generation: number) => void
   setPendingRenamePaneId: (id: string | null) => void
   openDirPickerForTab: (tabId: string) => void
   closeDirPicker: () => void
@@ -515,6 +525,47 @@ type PanesGet = () => PanesStore
 type PanesSet = (
   partial: Partial<PanesStore> | PanesStore | ((state: PanesStore) => Partial<PanesStore> | PanesStore)
 ) => void
+
+function applyOverlayRequestResult(result: OverlayRequestResult): void {
+  const store = usePanesStore.getState()
+  if (result.status === 'opened') {
+    if (result.requestToken < store.overlayRequestToken || result.generation <= store.overlayRevokedGeneration) return
+    store.mountOverlay(result.kind, result.generation, result.settingsSection, result.requestToken)
+    return
+  }
+  if (result.status === 'closed') {
+    if (result.requestToken < store.overlayRequestToken) return
+    store.revokeOverlayLocally(result.kind, result.generation)
+    return
+  }
+  if (result.status === 'focused') {
+    if (result.requestToken < store.overlayRequestToken || result.generation <= store.overlayRevokedGeneration) return
+    // A same-owner open request returns focused too. A non-owner request must
+    // clear any stale local projection rather than hiding a duplicate.
+    const isCurrentLocalOwner = store.activeOverlayKind === result.kind &&
+      store.activeOverlayGeneration === result.generation &&
+      (store.windowId === result.ownerWindowId || store.windowId === null)
+    if (!isCurrentLocalOwner) {
+      store.clearOverlayLocally()
+    } else {
+      store.focusOverlay(result.kind, result.generation)
+    }
+  }
+}
+
+function requestOverlay(action: 'open' | 'toggle', kind: OverlayKind, settingsSection?: SettingsSection): void {
+  if (typeof window === 'undefined' || !window.ipc) return
+  const requestSequence = usePanesStore.getState().overlayRequestSequence + 1
+  usePanesStore.setState({ overlayRequestSequence: requestSequence })
+  void window.ipc.invoke('overlay:request', {
+    action,
+    kind,
+    ...(kind === 'settings' ? { settingsSection: settingsSection ?? null } : {}),
+  }).then((result) => {
+    if (usePanesStore.getState().overlayRequestSequence !== requestSequence) return
+    applyOverlayRequestResult(result)
+  }).catch(() => {})
+}
 
 interface SpawnPaneCoreArgs {
   tabId: string
@@ -1013,6 +1064,12 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   commandPaletteOpen: false,
   settingsOpen: false,
   settingsInitialSection: null,
+  activeOverlayKind: null,
+  activeOverlayGeneration: null,
+  overlayRequestToken: 0,
+  overlayRequestSequence: 0,
+  overlayRevokedGeneration: 0,
+  overlayFocusNonce: 0,
   pendingRenamePaneId: null,
   dirPickerTabId: null,
   vsCodeAvailable: false,
@@ -1114,6 +1171,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
   },
 
   removeClosedDetachedTab: (tabId, windowId) => {
+    const closedTab = get().tabs.find((tab) => tab.id === tabId)
+    if (closedTab?.rootNode && closedTab.detached) {
+      collectLeafIds(closedTab.rootNode).forEach((paneId) => xtermRegistry.dispose(paneId))
+    }
     const previousHydrated = get().hydratedTabIds
     set((s) => {
       const tabs = s.tabs.filter((tab) => tab.id !== tabId)
@@ -1129,7 +1190,20 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       )
       const detachedWindowActiveTabIds = { ...s.detachedWindowActiveTabIds }
       if (windowId !== undefined) delete detachedWindowActiveTabIds[String(windowId)]
-      return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen, detachedWindowTabIds, detachedWindowActiveTabIds }
+      const closedFocusWindow = windowId !== undefined
+        ? (target: { windowId: number } | null): boolean => target?.windowId === windowId
+        : () => false
+      return {
+        tabs,
+        activeTabId,
+        hydratedTabIds,
+        sidebarSectionOpen,
+        detachedWindowTabIds,
+        detachedWindowActiveTabIds,
+        activeWindowId: s.activeWindowId === windowId ? null : s.activeWindowId,
+        pendingFocusTarget: closedFocusWindow(s.pendingFocusTarget) ? null : s.pendingFocusTarget,
+        confirmedFocusTarget: closedFocusWindow(s.confirmedFocusTarget) ? null : s.confirmedFocusTarget,
+      }
     })
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
@@ -2362,14 +2436,74 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     return found
   },
 
-  toggleSidebar: () => set((s) => s.isDetachedWindow ? s : ({ sidebarOpen: !s.sidebarOpen })),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setSidebarPanelSize: (panelId, size) => set((s) => ({ sidebarPanelSizes: { ...s.sidebarPanelSizes, [panelId]: size } })),
-  toggleSessionBrowser: () => set((s) => ({ sessionBrowserOpen: !s.sessionBrowserOpen, commandPaletteOpen: false, settingsOpen: false })),
-  toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen, sessionBrowserOpen: false, settingsOpen: false })),
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, sessionBrowserOpen: false, commandPaletteOpen: false })),
-  openSettings: (section) => set({ settingsOpen: true, settingsInitialSection: section ?? null, sessionBrowserOpen: false, commandPaletteOpen: false }),
-  closeOverlays: () => set({ sessionBrowserOpen: false, commandPaletteOpen: false, settingsOpen: false }),
+  toggleSessionBrowser: () => requestOverlay('toggle', 'session-browser'),
+  toggleCommandPalette: () => requestOverlay('toggle', 'command-palette'),
+  toggleSettings: () => requestOverlay('toggle', 'settings'),
+  openSettings: (section) => requestOverlay('open', 'settings', section),
+  closeOverlays: () => {
+    const current = get()
+    const kind = current.activeOverlayKind
+    const generation = current.activeOverlayGeneration
+    set((s) => ({
+      overlayRequestSequence: s.overlayRequestSequence + 1,
+      overlayRevokedGeneration: generation === null ? s.overlayRevokedGeneration : Math.max(s.overlayRevokedGeneration, generation),
+      activeOverlayKind: null,
+      activeOverlayGeneration: null,
+      sessionBrowserOpen: false,
+      commandPaletteOpen: false,
+      settingsOpen: false,
+      settingsInitialSection: null,
+    }))
+    if (kind && generation !== null && typeof window !== 'undefined' && window.ipc) {
+      void window.ipc.invoke('overlay:release', kind, generation).catch(() => {})
+    }
+  },
+  mountOverlay: (kind, generation, settingsSection, requestToken = 0) => set((s) => {
+    if (requestToken < s.overlayRequestToken || generation <= s.overlayRevokedGeneration) return s
+    return {
+      activeOverlayKind: kind,
+      activeOverlayGeneration: generation,
+      overlayRequestToken: Math.max(s.overlayRequestToken, requestToken),
+      sessionBrowserOpen: kind === 'session-browser' || kind === 'search',
+      commandPaletteOpen: kind === 'command-palette',
+      settingsOpen: kind === 'settings',
+      settingsInitialSection: kind === 'settings' ? (settingsSection as SettingsSection | null ?? null) : null,
+    }
+  }),
+  clearOverlayLocally: (kind, generation) => set((s) => {
+    if (kind && (s.activeOverlayKind !== kind || (generation !== undefined && s.activeOverlayGeneration !== generation))) return s
+    return {
+      activeOverlayKind: null,
+      activeOverlayGeneration: null,
+      sessionBrowserOpen: false,
+      commandPaletteOpen: false,
+      settingsOpen: false,
+      settingsInitialSection: null,
+    }
+  }),
+  revokeOverlayLocally: (kind, generation) => set((s) => {
+    if (generation <= s.overlayRevokedGeneration) return s
+    const isCurrent = s.activeOverlayKind === kind && s.activeOverlayGeneration === generation
+    return {
+      overlayRevokedGeneration: generation,
+      ...(isCurrent ? {
+        activeOverlayKind: null,
+        activeOverlayGeneration: null,
+        sessionBrowserOpen: false,
+        commandPaletteOpen: false,
+        settingsOpen: false,
+        settingsInitialSection: null,
+      } : {}),
+    }
+  }),
+  focusOverlay: (kind, generation) => set((s) => (
+    s.activeOverlayKind === kind && s.activeOverlayGeneration === generation
+      ? { overlayFocusNonce: s.overlayFocusNonce + 1 }
+      : s
+  )),
   setPendingRenamePaneId: (id) => set({ pendingRenamePaneId: id }),
   openDirPickerForTab: (tabId) => set({ dirPickerTabId: tabId }),
   closeDirPicker: () => set({ dirPickerTabId: null }),

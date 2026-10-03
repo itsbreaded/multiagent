@@ -24,7 +24,7 @@ import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, IdleAgentSuspensionSettings, McpSettings, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, IdleAgentSuspensionSettings, McpSettings, OverlayRequest, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -219,8 +219,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       windowManager.unroutePty(ptyId)
       ptyOutputRouter.releasePty(ptyId)
       ptyAgentKind.delete(ptyId)
-      await spawner?.disposePty(ptyId)
       ptyManager.kill(ptyId)
+      await spawner?.disposePty(ptyId)
     }))
   })
 
@@ -332,6 +332,21 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   // --- IPC handlers ---
 
   registrar.handle('terminal-host:get-status', () => currentTerminalHostStatus)
+
+  registrar.handle('overlay:request', (e, request: OverlayRequest) => {
+    const sender = BrowserWindow.fromWebContents(e.sender)
+    return windowManager.requestOverlay(sender?.id ?? null, request)
+  })
+
+  registrar.handle('overlay:release', (e, kind, generation) => {
+    const sender = BrowserWindow.fromWebContents(e.sender)
+    return windowManager.releaseOverlay(sender?.id ?? null, kind, generation)
+  })
+
+  registrar.on('overlay:closed', (e, kind, generation) => {
+    const sender = BrowserWindow.fromWebContents(e.sender)
+    windowManager.acknowledgeOverlayClosed(sender?.id ?? null, kind, generation)
+  })
 
   registrar.handle('sessions:search', (_e, query: string) => {
     try {

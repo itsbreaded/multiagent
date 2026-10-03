@@ -156,6 +156,7 @@ test.describe('browser MCP Electron runtime', () => {
     // Let the main window finish loading before teardown can close the session index.
     // The app sends its initial session snapshot from this load callback.
     await (await app.firstWindow()).waitForLoadState('load')
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual([true])
   })
 
   test.afterEach(async () => {
@@ -326,6 +327,7 @@ test.describe('browser MCP Electron runtime', () => {
     })
     try {
       await (await second.firstWindow()).waitForLoadState('load')
+      await expect.poll(() => second.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual([true])
       const attached = await callBrowserTool(48127, 'ui_attach_target', { endpoint: 'http://127.0.0.1:48128/mcp' })
       expect(attached.isError).toBe(false)
       const targetId = (JSON.parse(attached.text) as { target_id: string }).target_id

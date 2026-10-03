@@ -25,6 +25,7 @@ export function CommandPalette(): JSX.Element {
   const setPendingRenamePaneId = usePanesStore((s) => s.setPendingRenamePaneId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
   const openDirPickerForTab = usePanesStore((s) => s.openDirPickerForTab)
+  const overlayFocusNonce = usePanesStore((s) => s.overlayFocusNonce)
   const activeTabId = usePanesStore((s) => s.activeTabId)
   const tabs = usePanesStore((s) => s.tabs)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
@@ -42,7 +43,7 @@ export function CommandPalette(): JSX.Element {
 
   useEffect(() => {
     inputRef.current?.focus()
-  }, [])
+  }, [overlayFocusNonce])
 
   const focusedPane = getFocusedPane()
   const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -126,6 +127,8 @@ export function CommandPalette(): JSX.Element {
 
   return (
     <div
+      role="dialog"
+      aria-label="Command Palette"
       style={{
         ...overlayStyles.backdropLight,
         zIndex: ui.z.overlay,

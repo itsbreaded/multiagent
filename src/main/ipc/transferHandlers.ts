@@ -32,6 +32,11 @@ export function registerTransferHandlers(deps: {
   registerWindowHandlers: (win: BrowserWindow) => void
 }): void {
   const { registrar, ack, windowManager, getPrimaryWindow, flushDirectOutput, registerWindowHandlers } = deps
+  windowManager.configurePendingTabTransferCleanup((transferId) => {
+    const timer = tearOffTimers.get(transferId)
+    if (timer) clearTimeout(timer)
+    tearOffTimers.delete(transferId)
+  })
   registrar.handle('tab:tear-off', async (e, tabJson: string, ptyIds: string[], screenX: number, screenY: number, transferId: string) => {
     const fromWin = BrowserWindow.fromWebContents(e.sender) ?? getPrimaryWindow()
     if (!fromWin || typeof transferId !== 'string' || !transferId) return null

@@ -56,7 +56,6 @@ const COMMANDS: Command[] = [
     title: 'Open Settings',
     category: 'General',
     keywords: ['preferences', 'config', 'configuration'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings() },
   },
   {
@@ -64,7 +63,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: Appearance',
     category: 'General',
     keywords: ['preferences', 'config', 'theme', 'git', 'branch', 'tabs', 'overflow'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('appearance') },
   },
   {
@@ -72,7 +70,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: Hotkeys',
     category: 'General',
     keywords: ['preferences', 'config', 'keyboard', 'shortcuts', 'bindings', 'keybindings'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('hotkeys') },
   },
   {
@@ -80,7 +77,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: MCP',
     category: 'General',
     keywords: ['preferences', 'config', 'model context protocol', 'servers'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('mcp') },
   },
   {
@@ -88,7 +84,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: Providers',
     category: 'General',
     keywords: ['preferences', 'config', 'api', 'openai', 'anthropic', 'model', 'provider'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('providers') },
   },
   {
@@ -96,7 +91,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: Jira',
     category: 'General',
     keywords: ['preferences', 'config', 'jira', 'ticket', 'status', 'atlassian', 'api token', 'issue prefix'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('jira') },
   },
   {
@@ -104,7 +98,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: Terminal',
     category: 'General',
     keywords: ['preferences', 'config', 'gpu', 'webgl', 'renderer', 'acceleration', 'performance', 'contrast', 'glyphs', 'scrolling', 'scrollback', 'history'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('terminal') },
   },
   {
@@ -112,7 +105,6 @@ const COMMANDS: Command[] = [
     title: 'Settings: Updates',
     category: 'General',
     keywords: ['preferences', 'config', 'version', 'update', 'auto update', 'release', 'upgrade'],
-    enabled: (ctx) => !ctx.isDetachedWindow,
     run: (ctx) => { ctx.openSettings('updates') },
   },
 
@@ -324,7 +316,6 @@ const COMMANDS: Command[] = [
     title: 'Open Session Browser',
     category: 'View',
     shortcut: (ctx) => buildHotkeys(ctx.hotkeyOverrides).sessionBrowser.display,
-    enabled: (ctx) => !ctx.isDetachedWindow,
     // toggleSessionBrowser already closes the command palette overlay atomically
     run: (ctx) => { ctx.toggleSessionBrowser() },
   },

@@ -39,8 +39,32 @@ Terminal scrollback default + the terminal renderer decision live in `docs/pty-a
 
 Every window owns its own sidebar navigation rows. The primary renderer filters out detached
 ownership records, while a detached renderer shows only its local tabs. The top chrome remains for
-window controls and non-tab actions, but the top tab strip is no longer rendered. Detached
-sidebars stay open in this first version; their collapse state is not independently persisted.
+window controls and non-tab actions, but the top tab strip is no longer rendered. Both primary and
+detached renderers expose the same local sidebar, Session Browser, command-palette, and Settings
+controls. Sidebar collapse state belongs to the renderer that toggled it and is not independently
+persisted into the primary layout.
+
+Settings, Session Browser (including its current summary/deep Search surface), and Command Palette
+are main-owned, mutually exclusive workspace singletons. A renderer requests `open`/`toggle` through
+the typed `overlay:*` IPC protocol; the main-process `OverlayCoordinator` records the kind, owner
+window, generation, and request token. A same-kind request from another window focuses the existing
+owner and sends `overlay:focus`; it never mounts a second copy. A different kind sends
+`overlay:close` to the old owner and waits for the renderer's actual `overlay:closed` acknowledgement
+before approving the next generation. Same-owner close gestures release only the matching generation,
+and stale close/release/ack messages are ignored. The renderer treats its Zustand fields as a
+projection: `App.tsx` renders only the locally approved kind/generation, while revocation clears the
+local state before acknowledging. Query/selection state therefore belongs to the mounted instance;
+Session Browser invalidates in-flight deep-search generations on unmount, and Command Palette resets
+on a new mount. The directory-picker overlay remains window-local because it edits a tab-scoped
+choice rather than being one of the workspace singletons.
+
+`WindowManager.unregister()` releases ownership before removing a native window, so a detached close
+cannot leave a zombie owner and the next surviving-window request can claim a fresh generation.
+Main focus uses the normal BrowserWindow restore/focus path. Settings persistence and Jira credential
+handling remain governed by their existing stores/main-owned IPC rules; a handoff does not introduce
+a renderer credential cache. Jira sidebar status synchronization and network lookups remain
+primary-owned, and a detached renderer may hydrate the Settings form without starting duplicate
+status work.
 Multi-window tab and pane movement should preserve a single coherent ownership model across
 main, source renderer, target renderer, and PTY routing.
 
@@ -71,7 +95,15 @@ Returning a tab uses the explicit detached-sidebar return action. Native detache
 is different: `WindowManager.unregister` invalidates pending tear-offs synchronously, retains
 closed-window tombstones so stale sync cannot reclaim ownership, removes primary detached
 ownership records
-with `tab:closed`, and cleans PTYs routed to the closing window. It never emits `tab:return`.
+with `tab:closed`, and cleans every PTY still attributable to the closing window, including
+PTYs staged before the detached renderer completes its ownership handshake. Pending tear-off
+timers and ownership waiters are canceled/resolved, and a PTY that has already been rerouted to
+another live window is left alone. Main then kills the user-facing process and disposes any
+provider observer; this cleanup is idempotent and never deletes transcript/session-index data.
+For Codex, observer teardown is keyed by the provider session id, and a later same-session resume
+waits for confirmed unsubscribe/transport/sidecar cleanup. An unconfirmed teardown is a
+protective failure: resume does not create a second provider owner in the same app process.
+It never emits `tab:return`.
 
 ### Atomic focus transitions
 

@@ -123,6 +123,9 @@ async function tearOffTab(app: ElectronApplication, page: Page, tabName: string)
   await page.getByTitle(tabName, { exact: true }).click({ button: 'right' })
   await page.getByRole('button', { name: 'Move Tab to New Window', exact: true }).click()
   await expect.poll(() => app.windows().some((candidate) => !existingWindows.has(candidate))).toBe(true)
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual(
+    new Array(app.windows().length).fill(true),
+  )
   return app.windows().find((candidate) => !existingWindows.has(candidate))!
 }
 
@@ -179,6 +182,7 @@ test.describe('cold-start layout restore', () => {
     if (expectedInitialTab) {
       await expect(page.getByText(expectedInitialTab, { exact: true }).first()).toBeVisible()
     }
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual([true])
   }
 
   test.beforeEach(async () => {
@@ -457,6 +461,162 @@ test.describe('cold-start layout restore', () => {
     await expect.poll(detachedAlphaCount).toBe(0)
     await page.waitForTimeout(5_500)
     expect(await detachedAlphaCount()).toBe(0)
+  })
+
+  test('closing the detached native window closes its owned tab and kills its process', async () => {
+    const { ptyId } = await spawnShell(page, userDataDir)
+    const ready = await page.evaluate((id) => window.ipc.invoke('pty:get-ready', id), ptyId) as { pid: number }
+    const pid = ready.pid
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+    await expect(detached.getByTitle('Alpha', { exact: true })).toBeVisible()
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
+
+    await detached.evaluate(() => window.ipc.invoke('window:close')).catch(() => {})
+    await expect(page.getByTitle('Alpha', { exact: true })).toHaveCount(0)
+    await expect.poll(() => app.evaluate((_electron, childPid) => {
+      try { process.kill(childPid, 0); return true } catch { return false }
+    }, pid)).toBe(false)
+    await expect.poll(() => app.windows().length).toBe(1)
+  })
+
+  test('opens the command palette from a detached window with the local shortcut', async () => {
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+
+    await detached.keyboard.press('Control+Shift+P')
+    await expect(detached.getByRole('textbox')).toBeVisible()
+    await detached.keyboard.press('Escape')
+    await expect(detached.getByRole('textbox')).toHaveCount(0)
+  })
+
+  test('renders and uses the shared local controls in a detached window', async () => {
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+
+    await expect(detached.getByTitle(/Collapse sidebar/)).toBeVisible()
+    await expect(detached.getByTitle(/Session browser/)).toBeVisible()
+    await expect(detached.getByTitle(/Command palette/)).toBeVisible()
+    await expect(detached.getByTitle('Settings', { exact: true })).toBeVisible()
+    await expect(detached.locator('.tab-strip')).toHaveCount(0)
+
+    await detached.getByTitle(/Collapse sidebar/).click()
+    await expect(detached.getByTitle(/Open sidebar/)).toBeVisible()
+    await expect(detached.getByTitle('Alpha', { exact: true })).toHaveCount(0)
+    await detached.getByTitle(/Open sidebar/).click()
+    await expect(detached.getByTitle('Alpha', { exact: true })).toBeVisible()
+    await detached.keyboard.press('Control+B')
+    await expect(detached.getByTitle(/Open sidebar/)).toBeVisible()
+    await detached.keyboard.press('Control+B')
+    await expect(detached.getByTitle('Alpha', { exact: true })).toBeVisible()
+
+    await detached.getByTitle('Settings', { exact: true }).click()
+    await expect(detached.getByRole('dialog', { name: 'Settings' })).toBeVisible()
+    await expect(detached.getByPlaceholder('Search settings')).toBeFocused()
+    await detached.keyboard.press('Escape')
+    await expect(detached.getByRole('dialog', { name: 'Settings' })).toHaveCount(0)
+    await detached.getByTitle('Settings', { exact: true }).click()
+    await expect(detached.getByRole('dialog', { name: 'Settings' })).toBeVisible()
+    await detached.keyboard.press('Escape')
+
+    await detached.getByTitle(/Session browser/).click()
+    await expect(detached.getByPlaceholder('Search sessions...')).toBeVisible()
+    await detached.getByPlaceholder('Search sessions...').press('Escape')
+    await expect(detached.getByPlaceholder('Search sessions...')).toHaveCount(0)
+    await detached.keyboard.press('Control+Shift+O')
+    await expect(detached.getByPlaceholder('Search sessions...')).toBeVisible()
+    await detached.keyboard.press('Escape')
+    await detached.getByTitle(/Session browser/).click()
+    await expect(detached.getByPlaceholder('Search sessions...')).toBeVisible()
+    await detached.keyboard.press('Escape')
+
+    await detached.keyboard.press('Control+Shift+P')
+    const commandSearch = detached.getByRole('textbox')
+    await expect(commandSearch).toBeVisible()
+    await commandSearch.fill('Open Settings')
+    await detached.keyboard.press('Enter')
+    await expect(detached.getByRole('dialog', { name: 'Settings' })).toBeVisible()
+    await detached.keyboard.press('Escape')
+  })
+
+  test('keeps workspace overlays globally singleton across primary and detached windows', async () => {
+    test.setTimeout(90_000)
+    const detached = await tearOffTab(app, page, 'Alpha')
+    await detached.waitForLoadState('domcontentloaded')
+
+    const only = async (name: 'Settings' | 'Session Browser' | 'Command Palette', owner: Page, other: Page): Promise<void> => {
+      await expect(owner.getByRole('dialog', { name, exact: true })).toBeVisible()
+      if (owner !== other) await expect(other.getByRole('dialog', { name, exact: true })).toHaveCount(0)
+      for (const otherName of ['Settings', 'Session Browser', 'Command Palette'] as const) {
+        if (otherName !== name) {
+          await expect(owner.getByRole('dialog', { name: otherName, exact: true })).toHaveCount(0)
+          if (owner !== other) await expect(other.getByRole('dialog', { name: otherName, exact: true })).toHaveCount(0)
+        }
+      }
+    }
+
+    // Button path from primary, then the same button from detached: the first
+    // renderer remains the only mounted owner and receives focus again.
+    await page.getByTitle('Settings', { exact: true }).click()
+    await only('Settings', page, detached)
+    await expect(page.getByPlaceholder('Search settings')).toBeFocused()
+
+    // Commit a real Settings edit, hand ownership to the detached command
+    // palette, then reopen Settings in the primary and verify the persisted
+    // value survived the unmount/handoff.
+    await page.getByText('Terminal', { exact: true }).click()
+    const scrollbackRow = page.getByText('Scrollback lines', { exact: true }).locator('..').locator('..')
+    const scrollbackInput = scrollbackRow.locator('input')
+    await scrollbackInput.fill('500,000')
+    await scrollbackInput.blur()
+    await expect(scrollbackInput).toHaveValue('500000')
+    await detached.getByTitle(/Command palette/).click()
+    await only('Command Palette', detached, page)
+    await detached.keyboard.press('Escape')
+    await page.getByTitle('Settings', { exact: true }).click()
+    await only('Settings', page, detached)
+    await page.getByText('Terminal', { exact: true }).click()
+    await expect(page.getByText('Scrollback lines', { exact: true }).locator('..').locator('..').locator('input')).toHaveValue('500000')
+
+    await detached.getByTitle('Settings', { exact: true }).click()
+    await only('Settings', page, detached)
+    await expect(page.getByPlaceholder('Search settings')).toBeFocused()
+
+    // Escape releases the owner. The detached button can then claim a new
+    // generation, and a primary open request focuses it instead of mounting a copy.
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toHaveCount(0)
+    await detached.getByTitle('Settings', { exact: true }).click()
+    await only('Settings', detached, page)
+    await page.getByTitle('Settings', { exact: true }).click()
+    await only('Settings', detached, page)
+    await expect(detached.getByPlaceholder('Search settings')).toBeFocused()
+
+    // Switching kinds is an exclusive, close-before-mount handoff. Exercise
+    // the command-palette shortcut in the primary and the session-browser
+    // button/shortcut from the detached window.
+    await page.keyboard.press('Control+Shift+P')
+    await only('Command Palette', page, detached)
+    await expect(page.getByPlaceholder('Search commands…')).toBeFocused()
+    await detached.getByTitle(/Session browser/).click()
+    await only('Session Browser', detached, page)
+    await expect(detached.getByPlaceholder('Search sessions...')).toBeFocused()
+
+    // The current product's Search surface is Session Browser's search field;
+    // query ownership follows the same singleton and does not duplicate it.
+    await detached.getByPlaceholder('Search sessions...').fill('fixture')
+    await page.keyboard.press('Control+Shift+O')
+    await only('Session Browser', detached, page)
+    await expect(detached.getByPlaceholder('Search sessions...')).toHaveValue('fixture')
+
+    // Native close of the detached owner releases the global record. The
+    // primary can immediately claim the next generation without a zombie UI.
+    await detached.evaluate(() => window.ipc.invoke('window:close')).catch(() => {})
+    await expect.poll(() => app.windows().length).toBe(1)
+    await page.getByTitle(/Session browser/).click()
+    await only('Session Browser', page, page)
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog', { name: 'Session Browser', exact: true })).toHaveCount(0)
   })
 
   test('surfaces a missing PTY worker instead of leaving a shell pane hanging', async () => {

@@ -52,6 +52,47 @@ describe('SessionSpawner launch commands (spec 047 phase 4)', () => {
     expect(command.join(' ')).not.toContain('--remote')
     expect(command.join(' ')).toContain('codex')
   })
+
+  it('reproduces the detached-close resume race before preparing a replacement Codex owner', async () => {
+    const events: string[] = []
+    const createDeferred = vi.fn((_cwd: string, _command: string[], ..._rest: unknown[]) => {
+      events.push('pty')
+      return 'pty-2'
+    })
+    const waitForSessionCleanup = vi.fn(async () => {
+      events.push('cleanup')
+    })
+    const prepare = vi.fn(async () => {
+      events.push('prepare')
+      return { observerReady: true as const }
+    })
+    const ptyManager = { createDeferred } as unknown as PtyManager
+    const codexAppServer = { prepare, waitForSessionCleanup } as unknown as CodexAppServerManager
+    const spawner = new SessionSpawner(ptyManager, { codexAppServer })
+
+    await spawner.spawnResume('codex', 'thread-detached-close', process.cwd())
+
+    // This is the deterministic form of the reported provider error: without
+    // a cleanup barrier, prepare/PTY launch wins the race with the old owner.
+    expect(events).toEqual(['cleanup', 'prepare', 'pty'])
+  })
+
+  it('fails closed before preparing a replacement owner when Codex cleanup is unconfirmed', async () => {
+    const waitForSessionCleanup = vi.fn(async () => {
+      throw new Error('Codex session cleanup could not be confirmed: thread-stuck')
+    })
+    const prepare = vi.fn()
+    const createDeferred = vi.fn()
+    const spawner = new SessionSpawner(
+      { createDeferred } as unknown as PtyManager,
+      { codexAppServer: { prepare, waitForSessionCleanup } as unknown as CodexAppServerManager },
+    )
+
+    await expect(spawner.spawnResume('codex', 'thread-stuck', process.cwd())).rejects.toThrow('cleanup could not be confirmed')
+    expect(waitForSessionCleanup).toHaveBeenCalledWith('thread-stuck')
+    expect(prepare).not.toHaveBeenCalled()
+    expect(createDeferred).not.toHaveBeenCalled()
+  })
 })
 
 describe('agentEnv MULTIAGENT_SESSION_ID bail (spec 047 phase 4)', () => {

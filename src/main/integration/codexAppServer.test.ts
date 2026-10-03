@@ -308,7 +308,7 @@ describe('Codex App Server status observer', () => {
   it('makes concurrent pane disposal await the same sidecar teardown', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'multiagent-codex-dispose-'))
     const state: FakeProtocolState = {
-      background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0,
+      background: [], threads: [{ id: 'thread-1', status: { type: 'idle' } }], failBackground: false, responseDelay: 0, requests: [],
     }
     let server: FakeProcess | undefined
     const manager = new CodexAppServerManager({
@@ -336,6 +336,8 @@ describe('Codex App Server status observer', () => {
       expect(secondSettled).toBe(false)
       await Promise.all([first, second])
       expect(server?.kill).toHaveBeenCalled()
+      expect(state.requests).toContainEqual({ method: 'thread/unsubscribe', params: { threadId: 'thread-1' } })
+      await expect(manager.waitForSessionCleanup('thread-1')).resolves.toBeUndefined()
     } finally {
       state.responseDelay = 0
       await manager.dispose()

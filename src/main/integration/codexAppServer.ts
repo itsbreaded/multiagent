@@ -138,6 +138,10 @@ interface PaneObserver {
   disposing: boolean
 }
 
+interface SessionCleanupResult {
+  ok: boolean
+}
+
 export interface CodexPreparedPane {
   observerReady: true
 }
@@ -145,6 +149,8 @@ export interface CodexPreparedPane {
 export class CodexAppServerManager {
   private readonly panes = new Map<string, PaneObserver>()
   private readonly disposals = new Map<string, Promise<void>>()
+  private readonly sessionCleanups = new Map<string, Promise<SessionCleanupResult>>()
+  private readonly failedSessionCleanups = new Map<string, string>()
   private readonly preparations = new Map<string, Promise<CodexPreparedPane | null>>()
   private readonly spawnProcess: SpawnFn
   private readonly command: string
@@ -166,6 +172,21 @@ export class CodexAppServerManager {
     } finally {
       if (this.preparations.get(ptyId) === preparation) this.preparations.delete(ptyId)
     }
+  }
+
+  /**
+   * Wait for a previous observer for this provider session to disconnect. A
+   * failed/timeout teardown remains protective for the rest of this process so
+   * a later resume cannot create a second live owner against an unknown
+   * provider lock. Restarting the application is the explicit recovery path.
+   */
+  async waitForSessionCleanup(sessionId: string): Promise<void> {
+    const failure = this.failedSessionCleanups.get(sessionId)
+    if (failure) throw new Error(failure)
+    const cleanup = this.sessionCleanups.get(sessionId)
+    if (!cleanup) return
+    const result = await cleanup
+    if (!result.ok) throw new Error(`Codex session cleanup could not be confirmed: ${sessionId}`)
   }
 
   private async prepareInternal(ptyId: string, cwd: string, env: Record<string, string>): Promise<CodexPreparedPane | null> {
@@ -239,20 +260,32 @@ export class CodexAppServerManager {
     }
     if (pane.disposing) return
     pane.disposing = true
-    const disposal = (async () => {
+    const sessionId = pane.sessionId
+    const disposal = (async (): Promise<SessionCleanupResult> => {
       await pane.binding
-      if (pane.sessionId) {
-        try { await pane.rpc.request('thread/unsubscribe', { threadId: pane.sessionId }) } catch { /* connection may already be gone */ }
+      if (sessionId) {
+        try { await pane.rpc.request('thread/unsubscribe', { threadId: sessionId }) } catch { /* disconnect below is the fallback cleanup */ }
       }
       pane.rpc.close()
       try { if (pane.sidecar.exitCode === null) pane.sidecar.kill() } catch { /* already closed */ }
-      await waitForExit(pane.sidecar, 1000)
-    })().finally(() => {
+      const exited = await waitForExit(pane.sidecar, 1000)
+      return { ok: exited }
+    })().catch(() => ({ ok: false })).finally(() => {
       if (this.panes.get(ptyId) === pane) this.panes.delete(ptyId)
       this.disposals.delete(ptyId)
     })
-    this.disposals.set(ptyId, disposal)
-    await disposal
+    const disposalPromise = disposal.then(() => undefined)
+    this.disposals.set(ptyId, disposalPromise)
+    if (sessionId) {
+      const previous = this.sessionCleanups.get(sessionId)
+      const sessionCleanup = previous ? previous.then(() => disposal) : disposal
+      this.sessionCleanups.set(sessionId, sessionCleanup)
+      void sessionCleanup.then((result) => {
+        if (!result.ok) this.failedSessionCleanups.set(sessionId, `Codex session cleanup could not be confirmed: ${sessionId}`)
+        if (this.sessionCleanups.get(sessionId) === sessionCleanup) this.sessionCleanups.delete(sessionId)
+      })
+    }
+    await disposalPromise
   }
 
   async dispose(): Promise<void> {
@@ -508,10 +541,17 @@ function threadStatus(value: Record<string, unknown>): string {
   return isRecord(status) && typeof status.type === 'string' ? status.type : ''
 }
 
-function waitForExit(process: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
-  if (process.exitCode !== null || process.signalCode !== null) return Promise.resolve()
+function waitForExit(process: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+  if (process.exitCode !== null || process.signalCode !== null) return Promise.resolve(true)
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs)
-    process.once('close', () => { clearTimeout(timer); resolve() })
+    let settled = false
+    const finish = (exited: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(exited)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    process.once('close', () => finish(true))
   })
 }

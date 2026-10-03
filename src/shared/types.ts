@@ -415,6 +415,46 @@ export interface FocusTarget {
   version: number
 }
 
+// Cross-window singleton workspace overlays. `search` is reserved for a future
+// explicit search entry point; the current search surface is Session Browser.
+export type OverlayKind = 'settings' | 'session-browser' | 'search' | 'command-palette'
+export type OverlayRequestAction = 'open' | 'toggle'
+export type OverlayCloseReason = 'handoff' | 'release' | 'window-close'
+
+export interface OverlayRequest {
+  action: OverlayRequestAction
+  kind: OverlayKind
+  settingsSection?: string | null
+}
+
+export type OverlayRequestResult =
+  | {
+      status: 'opened'
+      kind: OverlayKind
+      ownerWindowId: number
+      generation: number
+      requestToken: number
+      settingsSection?: string | null
+    }
+  | {
+      status: 'focused'
+      kind: OverlayKind
+      ownerWindowId: number
+      generation: number
+      requestToken: number
+    }
+  | {
+      status: 'closed'
+      kind: OverlayKind
+      ownerWindowId: number
+      generation: number
+      requestToken: number
+    }
+  | {
+      status: 'rejected'
+      reason: 'invalid-request' | 'invalid-window' | 'owner-close-timeout' | 'owner-unavailable'
+    }
+
 export interface PaneTransferPayload {
   pane: PaneLeaf
   sourceTabId: string
@@ -664,6 +704,18 @@ export interface IPCChannels {
   'window:focus-for-tab': (tabId: string) => boolean
   'window:became-active': (windowId: number) => void
 
+  // --- Cross-window singleton overlays ---
+  // Main approves the only renderer allowed to mount a singleton overlay.
+  'overlay:request': (request: OverlayRequest) => OverlayRequestResult
+  // The current owner releases an overlay after a local close gesture.
+  'overlay:release': (kind: OverlayKind, generation: number) => boolean
+  // Main revokes the current renderer before a handoff or lifecycle cleanup.
+  'overlay:close': (kind: OverlayKind, generation: number, reason: OverlayCloseReason) => void
+  // Main asks the existing owner to reveal/focus its already-mounted overlay.
+  'overlay:focus': (kind: OverlayKind, generation: number) => void
+  // Renderer acknowledges that it actually cleared the requested generation.
+  'overlay:closed': (kind: OverlayKind, generation: number) => void
+
   // --- Multi-window: tab transfer ---
   // Renderer asks main to create a detached window carrying a tab
   'tab:tear-off': (tabJson: string, ptyIds: string[], screenX: number, screenY: number, transferId: string) => { windowId: number; transferId: string } | null
@@ -818,7 +870,9 @@ export type InvokeChannels = ChannelSubset<
   | 'window:focus-pane'
   | 'tab:spawn-in-project'
   | 'pane:split-transfer'
-  | 'pane:swap-transfer'>
+  | 'pane:swap-transfer'
+  | 'overlay:request'
+  | 'overlay:release'>
 
 export type EventChannels = ChannelSubset<
   | 'sessions:updated'
@@ -858,6 +912,8 @@ export type EventChannels = ChannelSubset<
   | 'pane:focus-changed'
   // Broadcast by main whenever a BrowserWindow gains OS focus
   | 'window:became-active'
+  | 'overlay:close'
+  | 'overlay:focus'
   | 'settings:idle-agent-suspension-changed'
   | 'focus:target-changed'
   // Shutdown layout collection: main requests state snapshots for a final authoritative save
@@ -879,6 +935,7 @@ export type SendChannels = ChannelSubset<
   | 'tab:spawn-in-project-applied'
   | 'renderer:insert-at-split-applied'
   | 'renderer:replace-pane-applied'
+  | 'overlay:closed'
   // Shutdown layout collection responses
   | 'layout:state-response'
   | 'layout:detached-state-response'

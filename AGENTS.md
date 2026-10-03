@@ -157,12 +157,15 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   `setActiveTab()` + `focusPane()`.
 - PTY routing must not move ahead of renderer ownership: destination commits/acks before main
   reroutes; source keeps its last good copy until committed/rollbackable (esp. `tab:absorb`).
+- Detached native close must cancel pending transfers, close owned tabs, clean every still-attributable
+  PTY/provider owner exactly once, and make same-session Codex resume wait for confirmed teardown.
+- Settings, Session Browser/Search, and Command Palette are main-owned cross-window singletons; render only the approved owner/generation, acknowledge close before handoff, and release on native close.
 - Transfer ack must reflect **actual** apply (store actions return boolean); a no-op apply
   stays silent so main times out/rolls back. Guard self-drops at the drop site, the IPC
   handler, and the store action. Detached sync/focus messages are versioned/generation-checked.
 - Each window’s sidebar shows only its owned tabs; detached windows keep the sidebar, the top
-  tab strip is not a navigation surface, and closing a detached window closes its owned tabs
-  instead of returning them.
+  tab strip is not a navigation surface, local chrome/overlay controls stay window-owned, and
+  closing a detached window closes its owned tabs instead of returning them.
 
 ### UI & command registry
 

@@ -69,6 +69,7 @@ export class SessionSpawner {
 
   async spawnResume(agentKind: AgentKind, sessionId: string, cwd: string): Promise<{ ptyId: string }> {
     assertUsableAgentCwd(cwd)
+    if (agentKind === 'codex') await this.options.codexAppServer?.waitForSessionCleanup(sessionId)
     const requestedId = agentKind === 'codex' ? randomUUID() : undefined
     const extraEnv = agentEnv(agentKind, agentKind === 'claude' ? sessionId : undefined)
     // The App Server sidecar is an observer only; keep the user-facing PTY on the direct CLI.

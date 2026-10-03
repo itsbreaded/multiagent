@@ -35,11 +35,14 @@ describe('TabBar - sidebar-first chrome', () => {
     expect(screen.queryByText('Away')).toBeNull()
   })
 
-  it('keeps detached chrome tab-free and does not expose the primary sidebar toggle', () => {
+  it('keeps detached chrome tab-free while exposing the same local controls', () => {
     usePanesStore.setState({ isDetachedWindow: true, sidebarOpen: true })
     render(<TabBar />)
 
-    expect(screen.queryByTitle(/Collapse sidebar/)).toBeNull()
+    expect(screen.getByTitle(/Collapse sidebar/)).toBeInTheDocument()
+    expect(screen.getByTitle(/Session browser/)).toBeInTheDocument()
+    expect(screen.getByTitle(/Command palette/)).toBeInTheDocument()
+    expect(screen.getByTitle('Settings')).toBeInTheDocument()
     expect(screen.queryByText('One')).toBeNull()
     expect(screen.queryByText('Away')).toBeNull()
   })

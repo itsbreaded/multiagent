@@ -59,6 +59,12 @@ export function SettingsPanel(): JSX.Element {
   const [hotkeyTerminalWarning, setHotkeyTerminalWarning] = useState<string | null>(null)
   const terminalKeyBindings = useSettingsStore((s) => s.terminalKeyBindings)
   const mouseDownOnOverlay = useRef(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const overlayFocusNonce = usePanesStore((s) => s.overlayFocusNonce)
+
+  useEffect(() => {
+    searchInputRef.current?.focus()
+  }, [overlayFocusNonce])
 
   // Lazily read diagnostics only when Terminal section is active to avoid any probe
   // being triggered before the section opens.
@@ -280,8 +286,9 @@ export function SettingsPanel(): JSX.Element {
             }}
           >
             <span style={{ color: '#6b7280', fontSize: 14, marginRight: 8 }}>{'>'}</span>
-            <input
-              value={query}
+              <input
+                ref={searchInputRef}
+                value={query}
               onChange={(e) => { setRecording(null); setQuery(e.target.value) }}
               autoFocus
               placeholder="Search settings"

@@ -91,6 +91,7 @@ export default function App(): JSX.Element {
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
+  const activeOverlayKind = usePanesStore((s) => s.activeOverlayKind)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
   const dirPickerTabId = usePanesStore((s) => s.dirPickerTabId)
   const closeDirPicker = usePanesStore((s) => s.closeDirPicker)
@@ -106,16 +107,16 @@ export default function App(): JSX.Element {
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
   const sidebarSectionOpen = usePanesStore((s) => s.sidebarSectionOpen)
 
-  // Jira is coordinated from App rather than Sidebar so startup lookup still
-  // happens when the sidebar is collapsed. Detached renderers never perform
-  // Jira lookups remain primary-owned; detached sidebars do not initiate them.
+  // Jira is coordinated from App rather than Sidebar so settings hydration and
+  // primary-window lookup stay independent of sidebar visibility. Detached
+  // renderers hydrate the settings form but never initiate Jira status lookups.
   const jiraHydrated = useJiraStore((s) => s.hydrated)
   const hydrateJiraSettings = useJiraStore((s) => s.hydrateSettings)
   const syncJiraProjects = useJiraStore((s) => s.syncProjects)
   const jiraLabels = useMemo(() => computeLabels(tabs, sessions), [tabs, sessions])
   useEffect(() => {
-    if (!isDetachedWindow && !jiraHydrated) void hydrateJiraSettings()
-  }, [isDetachedWindow, jiraHydrated, hydrateJiraSettings])
+    if (!jiraHydrated) void hydrateJiraSettings()
+  }, [jiraHydrated, hydrateJiraSettings])
   useEffect(() => {
     if (isDetachedWindow || !layoutReady || !jiraHydrated) return
     syncJiraProjects(Array.from(jiraLabels.entries()).map(([tabId, label]) => ({ tabId, label })))
@@ -322,11 +323,14 @@ export default function App(): JSX.Element {
           </div>
       </>
 
-      {/* Overlays — workspace tools only shown in the primary window */}
-      {!isDetachedWindow && sessionBrowserOpen && <SessionBrowser />}
-      {!isDetachedWindow && commandPaletteOpen && <CommandPalette />}
-      {!isDetachedWindow && settingsOpen && <SettingsPanel />}
-      {!isDetachedWindow && dirPickerTabId && (
+      {/* Main approves one owner/generation; these local booleans are only the
+          projection used by the approved renderer. Jira status synchronization
+          remains primary-owned above. */}
+      {activeOverlayKind === 'session-browser' && sessionBrowserOpen && <SessionBrowser />}
+      {activeOverlayKind === 'search' && sessionBrowserOpen && <SessionBrowser />}
+      {activeOverlayKind === 'command-palette' && commandPaletteOpen && <CommandPalette />}
+      {activeOverlayKind === 'settings' && settingsOpen && <SettingsPanel />}
+      {dirPickerTabId && (
         <DirPicker
           title="Change project directory"
           description="New sessions and shells in this tab will start here by default."

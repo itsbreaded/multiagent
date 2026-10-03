@@ -350,6 +350,12 @@ transport and the same pane-scoped environment identity as its PTY. The user-fac
 always remains a direct CLI session; the sidecar is only the status observer. Sidecar setup may
 fall back to direct CLI before PTY creation. Once the live PTY exists, observer loss is
 incomplete/protected and does not kill/recreate the user's pane. Sidecar cleanup is awaited for
-kill, PTY exit/error, host recovery, replacement, and shutdown. Direct CLI Codex and the
+kill, PTY exit/error, host recovery, replacement, and shutdown. Disposal sends the provider's
+thread unsubscribe when a session is bound, closes the JSONL transport, kills the sidecar, and
+waits for bounded process exit. The manager publishes a session-keyed cleanup barrier before
+awaiting teardown; `SessionSpawner.spawnResume` consumes it before preparing a replacement
+observer. A timeout/failure stays protective for the rest of the app lifetime so a second
+same-session owner is never created without confirmed cleanup; it does not delete transcripts or
+pretend that the provider completed work. Direct CLI Codex and the
 independently researched OpenCode plugin each retain their own provider evidence rules; no
 provider semantics are copied across adapters.

@@ -213,27 +213,25 @@ export function TabBar(): JSX.Element {
         ...appRegion('drag'),
       }}
     >
-      {!isDetachedWindow && (
-        <div
-          style={{
-            width: chromeWidth,
-            minWidth: chromeWidth,
-            height: chromeHeight - 1,
-            backgroundColor: ui.chrome.background,
-            paddingLeft: isMac ? 80 : leftChromePadding,
-            paddingRight: leftChromePadding,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 0,
-            borderRight: border.default,
-            overflow: 'hidden',
-            flexShrink: 0,
-            ...appRegion('drag'),
-          }}
-        >
-          <ChromeButtonCluster />
-        </div>
-      )}
+      <div
+        style={{
+          width: chromeWidth,
+          minWidth: chromeWidth,
+          height: chromeHeight - 1,
+          backgroundColor: isDetachedWindow ? ui.chrome.backgroundDetached : ui.chrome.background,
+          paddingLeft: isMac && !isDetachedWindow ? 80 : leftChromePadding,
+          paddingRight: leftChromePadding,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0,
+          borderRight: border.default,
+          overflow: 'hidden',
+          flexShrink: 0,
+          ...appRegion('drag'),
+        }}
+      >
+        <ChromeButtonCluster />
+      </div>
 
       <div style={{ flex: 1, minWidth: 24, height: '100%', ...appRegion('drag') }} />
       {nativeWindowControlsWidth > 0 && (

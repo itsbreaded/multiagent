@@ -48,9 +48,15 @@ export function SessionBrowser(): JSX.Element {
   const mouseDownOnOverlay = useRef(false)
   const searchGenRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const overlayFocusNonce = usePanesStore((s) => s.overlayFocusNonce)
 
   useEffect(() => {
     inputRef.current?.focus()
+  }, [overlayFocusNonce])
+
+  useEffect(() => () => {
+    searchGenRef.current += 1
+    if (debounceRef.current) clearTimeout(debounceRef.current)
   }, [])
 
   // Reset project selection when mode or query changes
@@ -158,6 +164,8 @@ export function SessionBrowser(): JSX.Element {
 
   return (
     <div
+      role="dialog"
+      aria-label="Session Browser"
       style={{
         ...overlayStyles.backdrop,
         zIndex: ui.z.sessionOverlay,
