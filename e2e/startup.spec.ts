@@ -507,6 +507,10 @@ test.describe('cold-start layout restore', () => {
     const detached = await tearOffTab(app, page, 'Alpha')
     await detached.waitForLoadState('domcontentloaded')
 
+    // The E2E harness deliberately creates windows without taking desktop focus.
+    // Activate this target explicitly because the behavior under test is a
+    // keyboard shortcut handled by the detached renderer.
+    await detached.bringToFront()
     await detached.keyboard.press('Control+Shift+P')
     await expect(detached.getByRole('textbox')).toBeVisible()
     await detached.keyboard.press('Escape')
