@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { installMockIpc } from '../../../../tests/mockIpc'
 import { defaultAgentProviderSettings } from '../../../shared/agentProviderSettings'
-import { useSettingsStore } from './settings'
+import { loadSettings, useSettingsStore } from './settings'
 
 afterEach(() => {
   useSettingsStore.setState({ agentProviders: defaultAgentProviderSettings() })
@@ -39,5 +39,29 @@ describe('provider settings persistence', () => {
     const persisted = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as Record<string, unknown>
     expect(persisted).not.toHaveProperty('tabOverflowMode')
     expect(useSettingsStore.getState()).not.toHaveProperty('tabOverflowMode')
+  })
+
+  it('ignores retired terminal renderer preferences and omits them from canonical saves', () => {
+    localStorage.setItem('multiagent:settings', JSON.stringify({
+      optimizedTerminalRenderer: false,
+      terminalRescaleOverlappingGlyphs: false,
+      terminalMinimumContrastRatio: 21,
+      terminalGpuAcceleration: 'auto',
+    }))
+
+    const loaded = loadSettings()
+    expect(loaded).not.toHaveProperty('optimizedTerminalRenderer')
+    expect(loaded).not.toHaveProperty('terminalRescaleOverlappingGlyphs')
+    expect(loaded).not.toHaveProperty('terminalMinimumContrastRatio')
+
+    useSettingsStore.getState().setTerminalGpuAcceleration('auto')
+
+    const persisted = JSON.parse(localStorage.getItem('multiagent:settings') ?? '{}') as Record<string, unknown>
+    expect(persisted).not.toHaveProperty('optimizedTerminalRenderer')
+    expect(persisted).not.toHaveProperty('terminalRescaleOverlappingGlyphs')
+    expect(persisted).not.toHaveProperty('terminalMinimumContrastRatio')
+    expect(useSettingsStore.getState()).not.toHaveProperty('optimizedTerminalRenderer')
+    expect(useSettingsStore.getState()).not.toHaveProperty('terminalRescaleOverlappingGlyphs')
+    expect(useSettingsStore.getState()).not.toHaveProperty('terminalMinimumContrastRatio')
   })
 })

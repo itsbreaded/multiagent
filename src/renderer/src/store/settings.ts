@@ -34,8 +34,6 @@ const SETTINGS_KEY = 'multiagent:settings'
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 250_000
 export const MIN_TERMINAL_SCROLLBACK_LINES = 1_000
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000
-export const MIN_CONTRAST_RATIO = 1
-export const MAX_CONTRAST_RATIO = 21
 
 const DEFAULT_MCP_SETTINGS: McpSettings = {
   builtinBrowserEnabled: true,
@@ -71,16 +69,9 @@ function defaultAgentProviderSettings(): AgentProviderSettings {
 interface SettingsState {
   showGitBranchBadges: boolean
   setShowGitBranchBadges: (value: boolean) => void
-  // Terminal renderer settings (apply on next pane mount)
-  optimizedTerminalRenderer: boolean
-  setOptimizedTerminalRenderer: (value: boolean) => void
+  // Terminal renderer setting (apply on next pane mount)
   terminalGpuAcceleration: GpuAccelerationPref
   setTerminalGpuAcceleration: (value: GpuAccelerationPref) => void
-  // Terminal display options (hot-apply to live panes)
-  terminalMinimumContrastRatio: number
-  setTerminalMinimumContrastRatio: (value: number) => void
-  terminalRescaleOverlappingGlyphs: boolean
-  setTerminalRescaleOverlappingGlyphs: (value: boolean) => void
   terminalScrollbackLines: number
   setTerminalScrollbackLines: (value: number) => void
   autoUpdateEnabled: boolean
@@ -137,10 +128,7 @@ type Persisted = Pick<SettingsState,
   | 'agentStatusScraping'
   | 'idleAgentSuspension'
   | 'showGitBranchBadges'
-  | 'optimizedTerminalRenderer'
   | 'terminalGpuAcceleration'
-  | 'terminalMinimumContrastRatio'
-  | 'terminalRescaleOverlappingGlyphs'
   | 'terminalScrollbackLines'
   | 'hotkeyOverrides'
   | 'terminalKeyBindings'
@@ -156,10 +144,7 @@ function defaultSettings(): Persisted {
     agentStatusScraping: true,
     idleAgentSuspension: { ...DEFAULT_IDLE_AGENT_SUSPENSION },
     showGitBranchBadges: true,
-    optimizedTerminalRenderer: true,
     terminalGpuAcceleration: 'auto',
-    terminalMinimumContrastRatio: 1,
-    terminalRescaleOverlappingGlyphs: true,
     terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
     hotkeyOverrides: {},
     terminalKeyBindings: defaultTerminalKeyBindings(),
@@ -167,12 +152,6 @@ function defaultSettings(): Persisted {
     mcpSettings: DEFAULT_MCP_SETTINGS,
     agentProviders: defaultAgentProviderSettings(),
   }
-}
-
-export function normalizeContrastRatio(value: unknown): number {
-  const n = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(n)) return 1
-  return Math.min(MAX_CONTRAST_RATIO, Math.max(MIN_CONTRAST_RATIO, Math.round(n)))
 }
 
 function coerceGpuAcceleration(value: unknown): GpuAccelerationPref {
@@ -189,7 +168,7 @@ export function normalizeTerminalScrollbackLines(value: unknown): number {
   )
 }
 
-function loadSettings(): Persisted {
+export function loadSettings(): Persisted {
   if (typeof localStorage === 'undefined') {
     return defaultSettings()
   }
@@ -209,10 +188,7 @@ function loadSettings(): Persisted {
       agentStatusScraping: parsed.agentStatusScraping !== false,
       idleAgentSuspension: normalizeIdleAgentSuspensionSettings(parsed.idleAgentSuspension),
       showGitBranchBadges: parsed.showGitBranchBadges !== false,
-      optimizedTerminalRenderer: parsed.optimizedTerminalRenderer !== false,
       terminalGpuAcceleration: coerceGpuAcceleration(parsed.terminalGpuAcceleration),
-      terminalMinimumContrastRatio: normalizeContrastRatio(parsed.terminalMinimumContrastRatio),
-      terminalRescaleOverlappingGlyphs: parsed.terminalRescaleOverlappingGlyphs !== false,
       terminalScrollbackLines: normalizeTerminalScrollbackLines(parsed.terminalScrollbackLines),
       hotkeyOverrides: (parsed.hotkeyOverrides as Partial<Record<HotkeyId, HotkeyOverride>>) ?? {},
       terminalKeyBindings: mergeBindings(parsed.terminalKeyBindings as TerminalKeyBinding[] | undefined, {
@@ -247,10 +223,7 @@ function saveSettings(state: Persisted): void {
     agentStatusScraping: state.agentStatusScraping,
     idleAgentSuspension: state.idleAgentSuspension,
     showGitBranchBadges: state.showGitBranchBadges,
-    optimizedTerminalRenderer: state.optimizedTerminalRenderer,
     terminalGpuAcceleration: state.terminalGpuAcceleration,
-    terminalMinimumContrastRatio: state.terminalMinimumContrastRatio,
-    terminalRescaleOverlappingGlyphs: state.terminalRescaleOverlappingGlyphs,
     terminalScrollbackLines: state.terminalScrollbackLines,
     hotkeyOverrides: state.hotkeyOverrides,
     terminalKeyBindings: state.terminalKeyBindings,
@@ -319,26 +292,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     saveSettings(get())
   },
 
-  setOptimizedTerminalRenderer: (value) => {
-    set({ optimizedTerminalRenderer: value })
-    saveSettings(get())
-  },
-
   setTerminalGpuAcceleration: (value) => {
     set({ terminalGpuAcceleration: value })
-    saveSettings(get())
-  },
-
-  setTerminalMinimumContrastRatio: (value) => {
-    const terminalMinimumContrastRatio = normalizeContrastRatio(value)
-    set({ terminalMinimumContrastRatio })
-    xtermRegistry.applyTerminalOptions({ minimumContrastRatio: terminalMinimumContrastRatio })
-    saveSettings(get())
-  },
-
-  setTerminalRescaleOverlappingGlyphs: (value) => {
-    set({ terminalRescaleOverlappingGlyphs: value })
-    xtermRegistry.applyTerminalOptions({ rescaleOverlappingGlyphs: value })
     saveSettings(get())
   },
 

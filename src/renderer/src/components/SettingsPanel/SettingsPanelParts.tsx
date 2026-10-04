@@ -4,11 +4,8 @@ import { useSettingsStore, type SettingsSection } from '../../store/settings'
 import { DEFAULT_HOTKEYS, buildHotkeys, type HotkeyId, type HotkeyOverride } from '../../utils/hotkeys'
 import { SectionLabel } from '../common/SectionLabel'
 import { matchesSettingQuery } from './settingsSearch'
-import { ContrastRatioSetting } from './settings/ContrastRatioSetting'
 import { GitBranchBadgesSetting } from './settings/GitBranchBadgesSetting'
 import { GpuAccelerationSetting } from './settings/GpuAccelerationSetting'
-import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
-import { RescaleGlyphsSetting } from './settings/RescaleGlyphsSetting'
 import { ScrollbackSetting } from './settings/ScrollbackSetting'
 import { IdleAgentSuspensionSetting } from './settings/IdleAgentSuspensionSetting'
 
@@ -19,10 +16,7 @@ const UPDATE_KEYWORDS = ['update', 'version', 'auto update', 'release', 'upgrade
 export function SearchResults({
   normalizedQuery,
   showBranchSetting,
-  showOptimizedRendererSetting,
   showGpuAccelSetting,
-  showContrastSetting,
-  showRescaleSetting,
   showScrollbackSetting,
   showIdleSuspensionSetting,
   showJiraSetting,
@@ -39,10 +33,7 @@ export function SearchResults({
 }: {
   normalizedQuery: string
   showBranchSetting: boolean
-  showOptimizedRendererSetting: boolean
   showGpuAccelSetting: boolean
-  showContrastSetting: boolean
-  showRescaleSetting: boolean
   showScrollbackSetting: boolean
   showIdleSuspensionSetting: boolean
   showJiraSetting: boolean
@@ -126,10 +117,7 @@ export function SearchResults({
       {anyTerminalSetting && (
         <>
           <SectionLabel>Terminal</SectionLabel>
-          {showOptimizedRendererSetting && <OptimizedRendererSetting />}
           {showGpuAccelSetting && <GpuAccelerationSetting />}
-          {showContrastSetting && <ContrastRatioSetting />}
-          {showRescaleSetting && <RescaleGlyphsSetting />}
           {showScrollbackSetting && <ScrollbackSetting />}
           {showIdleSuspensionSetting && <IdleAgentSuspensionSetting />}
         </>

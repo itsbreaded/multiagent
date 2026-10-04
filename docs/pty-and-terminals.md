@@ -188,8 +188,8 @@ the single decision point: `auto` picks WebGL only when `caps.webgl && !caps.sof
 `off` is always DOM, `on` is WebGL when available. Software-rendered WebGL (SwiftShader / WARP /
 llvmpipe) was the documented CPU-spike trap (50–60% on a keypress) and is now auto-detected by
 probing `UNMASKED_RENDERER_WEBGL` on a throwaway canvas — the `auto` setting avoids it. The
-master `optimizedTerminalRenderer` flag reverts to the legacy unconditional-WebGL try/catch
-path when false. The per-renderer-process `webglDemoted` latch in `backends.ts` prevents
+The environment-aware backend registry is the sole renderer-selection path. The per-renderer-process
+`webglDemoted` latch in `backends.ts` prevents
 context-loss/reattach thrash: once a WebGL context is lost in a renderer process, all
 subsequent panes in that process use DOM. Do not add flow control or ack/seq/pause to the
 renderer pipeline.

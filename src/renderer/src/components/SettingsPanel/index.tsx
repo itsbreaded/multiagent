@@ -19,14 +19,11 @@ import { matchesSettingQuery } from './settingsSearch'
 import { EmptyMessage, SearchResults } from './SearchResults'
 import { HotkeyRow } from './HotkeyRow'
 import { UpdatesSection } from './UpdatesSection'
-import { ContrastRatioSetting } from './settings/ContrastRatioSetting'
 import { CliSessionLinkingSetting } from './settings/CliSessionLinkingSetting'
 import { AgentStatusScrapingSetting } from './settings/AgentStatusScrapingSetting'
 import { IdleAgentSuspensionSetting } from './settings/IdleAgentSuspensionSetting'
 import { GitBranchBadgesSetting } from './settings/GitBranchBadgesSetting'
 import { GpuAccelerationSetting } from './settings/GpuAccelerationSetting'
-import { OptimizedRendererSetting } from './settings/OptimizedRendererSetting'
-import { RescaleGlyphsSetting } from './settings/RescaleGlyphsSetting'
 import { ScrollbackSetting } from './settings/ScrollbackSetting'
 import { AgentProvidersSection } from './AgentProvidersSection'
 import { TerminalBindingsSection } from './TerminalBindingsSection'
@@ -171,14 +168,11 @@ export function SettingsPanel(): JSX.Element {
   const normalizedQuery = query.trim().toLowerCase()
   const isSearching = normalizedQuery !== ''
   const showBranchSetting = matchesSettingQuery(normalizedQuery, 'git branch badges tabs panes')
-  const showOptimizedRendererSetting = matchesSettingQuery(normalizedQuery, 'optimized terminal renderer feature flag webgl dom')
   const showGpuAccelSetting = matchesSettingQuery(normalizedQuery, 'gpu acceleration webgl renderer auto on off')
-  const showContrastSetting = matchesSettingQuery(normalizedQuery, 'minimum contrast ratio color accuracy')
-  const showRescaleSetting = matchesSettingQuery(normalizedQuery, 'rescale overlapping glyphs wide ambiguous')
   const showScrollbackSetting = matchesSettingQuery(normalizedQuery, 'terminal scrollback lines history memory buffer maximum')
   const showIdleSuspensionSetting = matchesSettingQuery(normalizedQuery, 'idle agent session suspension resume timeout unfocused tab')
   const showJiraSetting = matchesSettingQuery(normalizedQuery, 'jira jira cloud status issue ticket base url api token prefix')
-  const anyTerminalSetting = showOptimizedRendererSetting || showGpuAccelSetting || showContrastSetting || showRescaleSetting || showScrollbackSetting || showIdleSuspensionSetting
+  const anyTerminalSetting = showGpuAccelSetting || showScrollbackSetting || showIdleSuspensionSetting
 
   const effectiveHotkeys = buildHotkeys(hotkeyOverrides)
   const visibleHotkeys = HOTKEY_ORDER.filter((id) =>
@@ -419,7 +413,6 @@ export function SettingsPanel(): JSX.Element {
                 {activeSection === 'terminal' && (
                   <>
                     <SectionLabel>Renderer</SectionLabel>
-                    {showOptimizedRendererSetting && <OptimizedRendererSetting />}
                     {showGpuAccelSetting && <GpuAccelerationSetting />}
 
                     {/* Diagnostics readout — only in section mode, never in search results */}
@@ -446,8 +439,6 @@ export function SettingsPanel(): JSX.Element {
                     )}
 
                     <div style={{ marginTop: 8 }}><SectionLabel>Display</SectionLabel></div>
-                    {showContrastSetting && <ContrastRatioSetting />}
-                    {showRescaleSetting && <RescaleGlyphsSetting />}
                     {showScrollbackSetting && <ScrollbackSetting />}
 
                     <div style={{ marginTop: 8 }}><SectionLabel>Session detection</SectionLabel></div>
@@ -483,10 +474,7 @@ export function SettingsPanel(): JSX.Element {
               <SearchResults
                 normalizedQuery={normalizedQuery}
                 showBranchSetting={showBranchSetting}
-                showOptimizedRendererSetting={showOptimizedRendererSetting}
                 showGpuAccelSetting={showGpuAccelSetting}
-                showContrastSetting={showContrastSetting}
-                showRescaleSetting={showRescaleSetting}
                 showScrollbackSetting={showScrollbackSetting}
                 showIdleSuspensionSetting={showIdleSuspensionSetting}
                 showJiraSetting={showJiraSetting}

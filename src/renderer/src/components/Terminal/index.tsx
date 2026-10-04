@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { PaneLeaf, PtyReadyMetadata } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -209,8 +208,8 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         scrollOnEraseInDisplay: scrollOnEraseInDisplayForPane(pane.paneType),
         mouseEventsRequireAlt: mouseEventsRequireAltForPane(pane.paneType, pane.agentKind),
         allowTransparency: false,
-        minimumContrastRatio: storeState.terminalMinimumContrastRatio,
-        rescaleOverlappingGlyphs: storeState.terminalRescaleOverlappingGlyphs,
+        minimumContrastRatio: 1,
+        rescaleOverlappingGlyphs: true,
         windowOptions: {
           getWinSizePixels: true,
           getCellSizePixels: true,
@@ -224,23 +223,11 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       xterm.loadAddon(fitAddon)
       installTerminalLinkHandling(xterm, openExternalLink)
 
-      const backendHandle = (() => {
-        if (storeState.optimizedTerminalRenderer) {
-          const { handle } = applyBackend(xterm, storeState.terminalGpuAcceleration, getCapabilities())
-          return handle
-        }
-        // Legacy path: unconditional WebGL attempt with try/catch fallback
-        try {
-          const webglAddon = new WebglAddon({ customGlyphs: true })
-          webglAddon.onContextLoss(() => {
-            try { webglAddon.dispose() } catch { /* ignore */ }
-          })
-          xterm.loadAddon(webglAddon)
-          return { dispose() { try { webglAddon.dispose() } catch { /* ignore */ } } }
-        } catch {
-          return { dispose() {} }
-        }
-      })()
+      const { handle: backendHandle } = applyBackend(
+        xterm,
+        storeState.terminalGpuAcceleration,
+        getCapabilities(),
+      )
 
       return { xterm, fitAddon, backendHandle }
     }

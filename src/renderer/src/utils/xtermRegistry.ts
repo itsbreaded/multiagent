@@ -14,11 +14,6 @@ export interface TerminalEntry {
   backendHandle?: BackendHandle
 }
 
-export interface TerminalDisplayOptions {
-  minimumContrastRatio?: number
-  rescaleOverlappingGlyphs?: boolean
-}
-
 const registry = new Map<string, TerminalEntry>()
 let offscreen: HTMLDivElement | null = null
 
@@ -97,18 +92,6 @@ export function focus(paneId: string): boolean {
 export function setScrollbackLines(lines: number): void {
   for (const entry of registry.values()) {
     entry.xterm.options.scrollback = lines
-  }
-}
-
-/** Hot-apply cheap xterm display options to every live instance. */
-export function applyTerminalOptions(opts: TerminalDisplayOptions): void {
-  for (const entry of registry.values()) {
-    if (opts.minimumContrastRatio !== undefined) {
-      entry.xterm.options.minimumContrastRatio = opts.minimumContrastRatio
-    }
-    if (opts.rescaleOverlappingGlyphs !== undefined) {
-      entry.xterm.options.rescaleOverlappingGlyphs = opts.rescaleOverlappingGlyphs
-    }
   }
 }
 

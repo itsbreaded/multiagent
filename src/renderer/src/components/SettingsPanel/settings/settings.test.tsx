@@ -2,7 +2,6 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { useSettingsStore } from '../../../store/settings'
 import { GitBranchBadgesSetting } from './GitBranchBadgesSetting'
-import { ContrastRatioSetting } from './ContrastRatioSetting'
 import { ScrollbackSetting } from './ScrollbackSetting'
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES } from '../../../store/settings'
 import { IdleAgentSuspensionSetting } from './IdleAgentSuspensionSetting'
@@ -13,14 +12,6 @@ describe('store-connected setting controls', () => {
     render(<GitBranchBadgesSetting />)
     fireEvent.click(screen.getByRole('checkbox'))
     expect(useSettingsStore.getState().showGitBranchBadges).toBe(false)
-  })
-
-  it('normalizes draft input on blur', () => {
-    render(<ContrastRatioSetting />)
-    const input = screen.getByRole('textbox')
-    fireEvent.change(input, { target: { value: '99' } })
-    fireEvent.blur(input)
-    expect(useSettingsStore.getState().terminalMinimumContrastRatio).toBe(21)
   })
 
   it('accepts comma-formatted scrollback and restores the default for an empty draft', () => {

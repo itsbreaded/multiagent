@@ -97,7 +97,7 @@ const COMMANDS: Command[] = [
     id: 'settings.open.terminal',
     title: 'Settings: Terminal',
     category: 'General',
-    keywords: ['preferences', 'config', 'gpu', 'webgl', 'renderer', 'acceleration', 'performance', 'contrast', 'glyphs', 'scrolling', 'scrollback', 'history'],
+    keywords: ['preferences', 'config', 'gpu', 'webgl', 'renderer', 'acceleration', 'performance', 'glyphs', 'scrolling', 'scrollback', 'history'],
     run: (ctx) => { ctx.openSettings('terminal') },
   },
   {

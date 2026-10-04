@@ -335,6 +335,22 @@ test.describe('cold-start layout restore', () => {
     await expect(input).toHaveValue('500000')
   })
 
+  test('keeps renderer implementation switches and contrast defaults out of Terminal settings', async () => {
+    await page.getByTitle('Settings').click()
+    await page.getByText('Terminal', { exact: true }).click()
+    await expect(page.getByText('Optimized renderer', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Rescale overlapping glyphs', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Minimum contrast ratio', { exact: true })).toHaveCount(0)
+
+    const search = page.getByPlaceholder('Search settings')
+    await search.fill('optimized')
+    await expect(page.getByText('Optimized renderer', { exact: true })).toHaveCount(0)
+    await search.fill('rescale')
+    await expect(page.getByText('Rescale overlapping glyphs', { exact: true })).toHaveCount(0)
+    await search.fill('contrast')
+    await expect(page.getByText('Minimum contrast ratio', { exact: true })).toHaveCount(0)
+  })
+
   test('persists a provider selection made in Settings through a normal restart', async () => {
     await page.getByTitle('Settings').click()
     await page.getByText('Providers', { exact: true }).click()
@@ -629,7 +645,6 @@ test.describe('cold-start layout restore', () => {
       await launchTestApp()
       await page.evaluate(() => {
         localStorage.setItem('multiagent:settings', JSON.stringify({
-          optimizedTerminalRenderer: true,
           terminalGpuAcceleration: 'off',
         }))
       })
@@ -762,7 +777,6 @@ test.describe('cold-start layout restore', () => {
   test('spawns a shell pane and exposes its pty:ready metadata', async () => {
     await page.evaluate(() => {
       localStorage.setItem('multiagent:settings', JSON.stringify({
-        optimizedTerminalRenderer: true,
         terminalGpuAcceleration: 'off',
       }))
     })
@@ -988,7 +1002,6 @@ test.describe('cold-start layout restore', () => {
     const url = 'https://example.com/api/v2/resources/a1b2c3d4e5f6/items?filter=status%3Aactive&sort=created_at&order=desc&page=1&per_page=50&fields=id,name,description,tags,metadata'
     await page.evaluate(() => {
       localStorage.setItem('multiagent:settings', JSON.stringify({
-        optimizedTerminalRenderer: true,
         terminalGpuAcceleration: 'off',
       }))
     })
