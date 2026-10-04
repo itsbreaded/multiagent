@@ -223,10 +223,6 @@ export class OverlayCoordinator {
   private focusWindow(win: OverlayWindowLike | null): boolean {
     if (!this.isUsableWindow(win)) return false
     try {
-      // Electron E2E windows are intentionally minimized and backgrounded. The
-      // renderer still receives overlay:focus below, while this harness-only
-      // branch prevents an assertion/helper from stealing the desktop focus.
-      if (process.env.MULTIAGENT_E2E_MINIMIZED === '1') return true
       if (win.isMinimized()) win.restore()
       win.focus()
       return true

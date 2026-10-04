@@ -539,16 +539,7 @@ export class WindowManager {
       },
     })
 
-    win.once('ready-to-show', () => {
-      if (process.env.MULTIAGENT_E2E_MINIMIZED === '1') {
-        // Keep local Electron E2E runs from taking focus when a test creates a
-        // detached window, while leaving its renderer available to Playwright.
-        win.showInactive()
-        win.minimize()
-      } else {
-        win.show()
-      }
-    })
+    win.once('ready-to-show', () => win.show())
 
     this.register(win)
     this.detachedWindowIds.add(win.id)

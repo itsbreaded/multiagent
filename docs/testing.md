@@ -87,12 +87,9 @@ output, sidebar tab reorder and drag-out, primary/detached and detached/detached
 ownership changes, detached-window cleanup, pane drag/drop isolation, and Claude deferred
 spawning through an isolated fake agent command. The drag helpers dispatch the same typed
 sidebar MIME payloads as the renderer and leave the existing pane MIME path separate. E2E-launched
-primary and detached windows set `MULTIAGENT_E2E_MINIMIZED=1`. The main process shows them inactive,
-minimizes them where the host window manager supports it, and keeps `backgroundThrottling: false`,
-so renderer IPC and Playwright remain live without taking over the desktop. Linux CI uses Xvfb,
-which has no window manager, so its E2E helpers do not assert native minimized state. Window-focus handlers, including the cross-window singleton-overlay
-coordinator, preserve that minimized/background contract in this harness-only mode while still
-sending the renderer its focus/reveal notification; production focus behavior is unchanged.
+primary and detached windows use the same ordinary show, restore, and focus lifecycle as production.
+Their renderers keep `backgroundThrottling: false` so covered windows continue to paint while
+cross-window terminal and overlay behavior is exercised.
 
 ## Coverage ratchets
 

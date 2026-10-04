@@ -57,15 +57,6 @@ async function listBrowserTools(port: number): Promise<string[]> {
   return (payload.result?.tools ?? []).map((tool) => tool.name).sort()
 }
 
-async function expectE2eWindowsMinimized(app: ElectronApplication, count: number): Promise<void> {
-  // Xvfb provides a display but no window manager, so Linux cannot report
-  // native minimized state even though the harness still uses showInactive().
-  if (process.platform === 'linux') return
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual(
-    new Array(count).fill(true),
-  )
-}
-
 async function startFixtureServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const html = await readFile(join(repoRoot, 'e2e', 'fixtures', 'browser-async-toggle.html'))
   const server = createServer((_request, response) => {
@@ -157,7 +148,6 @@ test.describe('browser MCP Electron runtime', () => {
         ...process.env,
         MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
         MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
-        MULTIAGENT_E2E_MINIMIZED: '1',
         MULTIAGENT_E2E_BROWSER_MCP_TRACE: '1',
         MULTIAGENT_UI_AUTOMATION_PORT: '48127',
       },
@@ -165,7 +155,6 @@ test.describe('browser MCP Electron runtime', () => {
     // Let the main window finish loading before teardown can close the session index.
     // The app sends its initial session snapshot from this load callback.
     await (await app.firstWindow()).waitForLoadState('load')
-    await expectE2eWindowsMinimized(app, 1)
   })
 
   test.afterEach(async () => {
@@ -330,13 +319,11 @@ test.describe('browser MCP Electron runtime', () => {
         ...process.env,
         MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
         MULTIAGENT_E2E_USER_DATA_DIR: secondUserDataDir,
-        MULTIAGENT_E2E_MINIMIZED: '1',
         MULTIAGENT_UI_AUTOMATION_PORT: '48128',
       },
     })
     try {
       await (await second.firstWindow()).waitForLoadState('load')
-      await expectE2eWindowsMinimized(second, 1)
       const attached = await callBrowserTool(48127, 'ui_attach_target', { endpoint: 'http://127.0.0.1:48128/mcp' })
       expect(attached.isError).toBe(false)
       const targetId = (JSON.parse(attached.text) as { target_id: string }).target_id

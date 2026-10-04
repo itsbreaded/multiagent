@@ -22,19 +22,9 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
     MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
     MULTIAGENT_E2E_AGENT_COMMAND: `node "${join(repoRoot, 'e2e', 'fixtures', 'framed-agent.cjs')}"`,
     MULTIAGENT_E2E_FRAME_INTERVAL_MS: '2',
-    MULTIAGENT_E2E_MINIMIZED: '1',
     HOME: homeDir,
     USERPROFILE: homeDir,
   }
-}
-
-async function expectE2eWindowsMinimized(app: ElectronApplication, count: number): Promise<void> {
-  // Xvfb provides a display but no window manager, so Linux cannot report
-  // native minimized state even though the harness still uses showInactive().
-  if (process.platform === 'linux') return
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual(
-    new Array(count).fill(true),
-  )
 }
 
 interface SavedPaneNode {
@@ -132,7 +122,6 @@ async function tearOffTab(app: ElectronApplication, page: Page, tabName: string)
   await page.getByTitle(tabName, { exact: true }).click({ button: 'right' })
   await page.getByRole('button', { name: 'Move Tab to New Window', exact: true }).click()
   await expect.poll(() => app.windows().some((candidate) => !existingWindows.has(candidate))).toBe(true)
-  await expectE2eWindowsMinimized(app, app.windows().length)
   return app.windows().find((candidate) => !existingWindows.has(candidate))!
 }
 
@@ -189,7 +178,6 @@ test.describe('cold-start layout restore', () => {
     if (expectedInitialTab) {
       await expect(page.getByText(expectedInitialTab, { exact: true }).first()).toBeVisible()
     }
-    await expectE2eWindowsMinimized(app, 1)
   }
 
   test.beforeEach(async () => {
@@ -507,10 +495,6 @@ test.describe('cold-start layout restore', () => {
     const detached = await tearOffTab(app, page, 'Alpha')
     await detached.waitForLoadState('domcontentloaded')
 
-    // The E2E harness deliberately creates windows without taking desktop focus.
-    // Activate this target explicitly because the behavior under test is a
-    // keyboard shortcut handled by the detached renderer.
-    await detached.bringToFront()
     await detached.keyboard.press('Control+Shift+P')
     await expect(detached.getByRole('textbox')).toBeVisible()
     await detached.keyboard.press('Escape')

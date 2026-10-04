@@ -766,8 +766,6 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   registrar.handle('window:focus', (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win || win.isDestroyed()) return false
-    // Keep the E2E harness backgrounded; production drag-over focus remains real.
-    if (process.env.MULTIAGENT_E2E_MINIMIZED === '1') return true
     if (win.isMinimized()) win.restore()
     win.focus()
     return true
