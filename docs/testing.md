@@ -88,9 +88,9 @@ ownership changes, detached-window cleanup, pane drag/drop isolation, and Claude
 spawning through an isolated fake agent command. The drag helpers dispatch the same typed
 sidebar MIME payloads as the renderer and leave the existing pane MIME path separate. E2E-launched
 primary and detached windows set `MULTIAGENT_E2E_MINIMIZED=1`. The main process shows them inactive,
-minimizes them, and keeps `backgroundThrottling: false`, so renderer IPC and Playwright remain live
-without taking over the desktop. Linux CI runs a lightweight Openbox window manager inside Xvfb
-because Xvfb alone cannot apply or report native minimized-window state. Window-focus handlers, including the cross-window singleton-overlay
+minimizes them where the host window manager supports it, and keeps `backgroundThrottling: false`,
+so renderer IPC and Playwright remain live without taking over the desktop. Linux CI uses Xvfb,
+which has no window manager, so its E2E helpers do not assert native minimized state. Window-focus handlers, including the cross-window singleton-overlay
 coordinator, preserve that minimized/background contract in this harness-only mode while still
 sending the renderer its focus/reveal notification; production focus behavior is unchanged.
 

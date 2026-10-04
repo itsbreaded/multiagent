@@ -28,6 +28,15 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
   }
 }
 
+async function expectE2eWindowsMinimized(app: ElectronApplication, count: number): Promise<void> {
+  // Xvfb provides a display but no window manager, so Linux cannot report
+  // native minimized state even though the harness still uses showInactive().
+  if (process.platform === 'linux') return
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual(
+    new Array(count).fill(true),
+  )
+}
+
 interface SavedPaneNode {
   type?: 'leaf' | 'split'
   id?: string
@@ -123,9 +132,7 @@ async function tearOffTab(app: ElectronApplication, page: Page, tabName: string)
   await page.getByTitle(tabName, { exact: true }).click({ button: 'right' })
   await page.getByRole('button', { name: 'Move Tab to New Window', exact: true }).click()
   await expect.poll(() => app.windows().some((candidate) => !existingWindows.has(candidate))).toBe(true)
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual(
-    new Array(app.windows().length).fill(true),
-  )
+  await expectE2eWindowsMinimized(app, app.windows().length)
   return app.windows().find((candidate) => !existingWindows.has(candidate))!
 }
 
@@ -182,7 +189,7 @@ test.describe('cold-start layout restore', () => {
     if (expectedInitialTab) {
       await expect(page.getByText(expectedInitialTab, { exact: true }).first()).toBeVisible()
     }
-    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.isMinimized()))).toEqual([true])
+    await expectE2eWindowsMinimized(app, 1)
   }
 
   test.beforeEach(async () => {
