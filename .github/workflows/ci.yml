@@ -39,7 +39,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libudev-dev libgtk-3-0 libnss3 libasound2t64 libgbm1 libxss1
+          sudo apt-get install -y libudev-dev libgtk-3-0 libnss3 libasound2t64 libgbm1 libxss1 openbox
 
       - name: Install dependencies
         # postinstall downloads Electron + rebuilds better-sqlite3 (and node-pty on mac/linux)
@@ -54,7 +54,9 @@ jobs:
 
       - name: Electron E2E (xvfb on Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a npm run test:e2e
+        # Xvfb supplies pixels but no window manager, so Electron minimize() is
+        # a no-op and the harness cannot verify its backgrounded-window contract.
+        run: xvfb-run -a sh -c 'openbox --replace >/tmp/multiagent-openbox.log 2>&1 & exec npm run test:e2e'
 
       - name: Electron E2E
         if: runner.os != 'Linux'
