@@ -10,6 +10,10 @@ import { McpInjector } from './McpInjector'
 
 const SETTINGS_FILE = 'mcp-settings.json'
 
+interface PersistedMcpSettings extends Partial<McpSettings> {
+  builtinBrowserSettingExplicitlyConfigured?: boolean
+}
+
 export const BUILTIN_TOOLS = [
   'browser_navigate', 'browser_click', 'browser_click_text', 'browser_click_at',
   'browser_type', 'browser_screenshot', 'browser_evaluate', 'browser_get_content',
@@ -21,7 +25,7 @@ export const BUILTIN_TOOLS = [
 ]
 
 const DEFAULT_SETTINGS: McpSettings = {
-  builtinBrowserEnabled: true,
+  builtinBrowserEnabled: false,
   builtinUiAutomationEnabled: false,
   customServers: [],
 }
@@ -29,6 +33,7 @@ const DEFAULT_SETTINGS: McpSettings = {
 export class McpManager {
   private _injector = new McpInjector()
   private _browserServer: BrowserMcpServer | null = null
+  private _browserFactory: (() => BrowserViewManager) | null = null
   private _port: number | null = null
   private _browserPort: number | null = null
   private _running = false
@@ -36,14 +41,17 @@ export class McpManager {
   private _uiError: string | undefined
   private _uiServer: AppUiMcpServer | null = null
   private _settings: McpSettings = { ...DEFAULT_SETTINGS }
+  private _reconcilePromise: Promise<void> = Promise.resolve()
 
   loadSettings(): McpSettings {
     try {
       const path = join(app.getPath('userData'), SETTINGS_FILE)
       const raw = readFileSync(path, 'utf-8')
-      const parsed = JSON.parse(raw) as Partial<McpSettings>
+      const parsed = JSON.parse(raw) as PersistedMcpSettings
       this._settings = {
-        builtinBrowserEnabled: parsed.builtinBrowserEnabled !== false,
+        // Older releases defaulted this on, so a persisted `true` alone does not
+        // prove the user opted in. Require the marker written by the current toggle.
+        builtinBrowserEnabled: parsed.builtinBrowserSettingExplicitlyConfigured === true && parsed.builtinBrowserEnabled === true,
         builtinUiAutomationEnabled: parsed.builtinUiAutomationEnabled === true,
         customServers: Array.isArray(parsed.customServers) ? parsed.customServers : [],
       }
@@ -53,15 +61,15 @@ export class McpManager {
     return this._settings
   }
 
-  saveSettings(settings: McpSettings): void {
+  saveSettings(settings: McpSettings): Promise<void> {
     this._settings = settings
     try {
       const path = join(app.getPath('userData'), SETTINGS_FILE)
-      writeFileSync(path, JSON.stringify(settings, null, 2), 'utf-8')
+      writeFileSync(path, JSON.stringify({ ...settings, builtinBrowserSettingExplicitlyConfigured: true }, null, 2), 'utf-8')
     } catch (err) {
       console.error('[McpManager] Failed to save settings:', err)
     }
-    void this.reconcileUiAutomation()
+    return this.scheduleReconcile()
   }
 
   private uiAutomationEnabled(): boolean {
@@ -73,8 +81,52 @@ export class McpManager {
   }
 
   private updateInjector(): void {
-    if (this._browserPort === null) return
-    this._injector.updateSettings(`http://127.0.0.1:${this._browserPort}/sse`, `http://127.0.0.1:${this._browserPort}/mcp`, this._settings, this.uiUrl())
+    const browserUrl = this._browserPort === null ? null : `http://127.0.0.1:${this._browserPort}/mcp`
+    this._injector.updateSettings(browserUrl, this._settings, this.uiUrl())
+  }
+
+  private scheduleReconcile(): Promise<void> {
+    const work = this._reconcilePromise.then(async () => {
+      try {
+        await this.reconcileBrowserServer()
+      } catch (error) {
+        console.error('[McpManager] Browser MCP server failed to reconcile:', error)
+      }
+      await this.reconcileUiAutomation()
+    })
+    this._reconcilePromise = work.catch(() => {})
+    return work
+  }
+
+  private async reconcileBrowserServer(): Promise<void> {
+    if (!this._settings.builtinBrowserEnabled) {
+      const server = this._browserServer
+      this._browserServer = null
+      this._browserPort = null
+      this._port = null
+      this._running = false
+      await server?.close()
+      return
+    }
+
+    if (this._browserServer && this._browserPort !== null) return
+    if (!this._browserFactory) return
+
+    const server = new BrowserMcpServer(this._browserFactory())
+    this._browserServer = server
+    try {
+      const port = await server.startHttp()
+      this._browserPort = port
+      this._port = port
+      this._running = true
+    } catch (error) {
+      if (this._browserServer === server) this._browserServer = null
+      await server.close()
+      this._browserPort = null
+      this._port = null
+      this._running = false
+      throw error
+    }
   }
 
   private async reconcileUiAutomation(): Promise<void> {
@@ -106,27 +158,17 @@ export class McpManager {
     this.updateInjector()
   }
 
-  async start(browser: BrowserViewManager): Promise<void> {
+  async start(browserFactory: () => BrowserViewManager): Promise<void> {
     this.loadSettings()
-    const server = new BrowserMcpServer(browser)
-    this._browserServer = server
-    const port = await server.startHttp()
-    this._browserPort = port
-    this._port = port
-    this._running = true
-    this._injector.inject(
-      `http://127.0.0.1:${port}/sse`,
-      `http://127.0.0.1:${port}/mcp`,
-      this._settings,
-    )
-    await this.reconcileUiAutomation()
+    this._browserFactory = browserFactory
+    await this.scheduleReconcile()
   }
 
   getStatus(): McpStatus {
     return {
       port: this._port,
       running: this._running,
-      tools: this._settings.builtinBrowserEnabled ? BUILTIN_TOOLS : [],
+      tools: this._running && this._settings.builtinBrowserEnabled ? BUILTIN_TOOLS : [],
       uiAutomation: { enabled: this.uiAutomationEnabled(), running: this._uiPort !== null, port: this._uiPort, tools: this._uiPort ? ['ui_targets', 'ui_attach_target', 'ui_windows', 'ui_content', 'ui_click', 'ui_type', 'ui_scroll', 'ui_keyboard', 'ui_drag', 'ui_wait_for', 'ui_screenshot', 'ui_evaluate', 'ui_console', 'ui_network'] : [], ...(this._uiError ? { error: this._uiError } : {}) },
     }
   }
@@ -136,6 +178,7 @@ export class McpManager {
   }
 
   async cleanup(): Promise<void> {
+    await this._reconcilePromise.catch(() => {})
     this._injector.cleanup()
     const uiServer = this._uiServer
     const browserServer = this._browserServer
@@ -149,6 +192,7 @@ export class McpManager {
     this._browserPort = null
     this._port = null
     this._running = false
+    this._browserFactory = null
   }
 }
 

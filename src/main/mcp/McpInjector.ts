@@ -30,24 +30,16 @@ export function currentUiMcpUrl(): string | null {
 }
 
 export class McpInjector {
-  inject(sseUrl: string, streamableHttpUrl: string, settings?: McpSettings, uiUrl?: string | null): void {
-    void sseUrl
+  inject(browserUrl: string | null, settings?: McpSettings, uiUrl?: string | null): void {
     activeMcpSettings = settings
-    const port = portFromUrl(streamableHttpUrl)
-    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings, uiUrl)
-    codexMcpUrl = buildCodexMcpUrl(port)
-    opencodeMcpUrl = buildCodexMcpUrl(port)
+    claudeMcpConfigPath = writeClaudeMcpConfig(browserUrl, settings, uiUrl)
+    codexMcpUrl = browserUrl
+    opencodeMcpUrl = browserUrl
     uiMcpUrl = uiUrl ?? null
   }
 
-  updateSettings(sseUrl: string, streamableHttpUrl: string, settings: McpSettings, uiUrl?: string | null): void {
-    void sseUrl
-    activeMcpSettings = settings
-    const port = portFromUrl(streamableHttpUrl)
-    claudeMcpConfigPath = writeClaudeMcpConfig(port, settings, uiUrl)
-    codexMcpUrl = buildCodexMcpUrl(port)
-    opencodeMcpUrl = buildCodexMcpUrl(port)
-    uiMcpUrl = uiUrl ?? null
+  updateSettings(browserUrl: string | null, settings: McpSettings, uiUrl?: string | null): void {
+    this.inject(browserUrl, settings, uiUrl)
   }
 
   cleanup(): void {
@@ -59,13 +51,13 @@ export class McpInjector {
   }
 }
 
-function buildMcpConfig(port: string, settings?: McpSettings, uiUrl?: string | null): Record<string, unknown> {
+function buildMcpConfig(browserUrl: string | null, settings?: McpSettings, uiUrl?: string | null): Record<string, unknown> {
   const mcpServers: Record<string, unknown> = {}
 
-  if (!settings || settings.builtinBrowserEnabled !== false) {
+  if (browserUrl && settings?.builtinBrowserEnabled === true) {
     mcpServers['multiagent-browser'] = {
       type: 'http',
-      url: `http://127.0.0.1:${port}/mcp`,
+      url: browserUrl,
     }
   }
   if (uiUrl && (settings?.builtinUiAutomationEnabled || process.env['MULTIAGENT_UI_AUTOMATION_PORT'] !== undefined)) {
@@ -94,10 +86,11 @@ function buildMcpConfig(port: string, settings?: McpSettings, uiUrl?: string | n
   return { mcpServers }
 }
 
-function writeClaudeMcpConfig(port: string, settings?: McpSettings, uiUrl?: string | null): string {
+function writeClaudeMcpConfig(browserUrl: string | null, settings?: McpSettings, uiUrl?: string | null): string | null {
   cleanupClaudeMcpConfig()
+  const config = buildMcpConfig(browserUrl, settings, uiUrl)
+  if (!Object.keys(config.mcpServers as Record<string, unknown>).length) return null
   const configPath = join(tmpdir(), `multiagent-claude-mcp-${process.pid}.json`)
-  const config = buildMcpConfig(port, settings, uiUrl)
   writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
   return configPath
 }
@@ -108,12 +101,4 @@ function cleanupClaudeMcpConfig(): void {
     if (existsSync(claudeMcpConfigPath)) unlinkSync(claudeMcpConfigPath)
   } catch { /* ignore */ }
   claudeMcpConfigPath = null
-}
-
-function buildCodexMcpUrl(port: string): string {
-  return `http://127.0.0.1:${port}/mcp`
-}
-
-function portFromUrl(url: string): string {
-  return new URL(url).port
 }

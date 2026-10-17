@@ -147,5 +147,10 @@ get_content/url/elements/links, evaluate, wait_for/wait_for_text/wait_for_load, 
 go_forward, reload, set_cookies). The renderer shows/hides it via `browser:toggle`. The tool
 surface and recommended selection order are documented with the MCP server itself — keep that
 list in sync with `BrowserMcpServer.ts`/`BrowserViewManager.ts`, not in `AGENTS.md` or here.
+The built-in browser MCP setting defaults off. `McpManager` reads it at startup and creates the
+browser manager and HTTP server only when enabled; changing the setting starts or stops the
+server. A legacy saved `true` without an explicit opt-in marker is treated as off because older
+releases enabled this setting by default. Custom MCP servers and the separate UI automation
+server remain independently managed.
 To override JS dialogs (`alert`/`confirm`/`prompt`), use `browser_evaluate` to patch
 `window.confirm = () => true` etc. after navigation.

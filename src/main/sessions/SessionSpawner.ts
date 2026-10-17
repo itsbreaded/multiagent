@@ -309,7 +309,7 @@ export function agentEnv(agentKind: AgentKind, claudeSessionId?: string): Record
     const mcpUrl = currentOpencodeMcpUrl()
     const mcpSettings = currentMcpSettings()
     const mcp: Record<string, unknown> = {}
-    if (mcpUrl && (!mcpSettings || mcpSettings.builtinBrowserEnabled !== false)) {
+    if (mcpUrl && mcpSettings?.builtinBrowserEnabled === true) {
       mcp['multiagent-browser'] = { type: 'remote', url: mcpUrl, enabled: true }
     }
     const uiUrl = currentUiMcpUrl()
@@ -383,7 +383,7 @@ function codexCliArgs(): string {
   const mcpUrl = currentCodexMcpUrl()
 
   // Built-in browser server
-  if (mcpUrl && (!settings || settings.builtinBrowserEnabled !== false)) {
+  if (mcpUrl && settings?.builtinBrowserEnabled === true) {
     args.push(
       '-c',
       psSingleQuoted(`mcp_servers.multiagent-browser.url=${tomlLit(mcpUrl)}`),

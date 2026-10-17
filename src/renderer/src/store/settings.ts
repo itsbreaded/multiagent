@@ -36,7 +36,7 @@ export const MIN_TERMINAL_SCROLLBACK_LINES = 1_000
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000
 
 const DEFAULT_MCP_SETTINGS: McpSettings = {
-  builtinBrowserEnabled: true,
+  builtinBrowserEnabled: false,
   builtinUiAutomationEnabled: false,
   customServers: [],
 }
@@ -110,7 +110,7 @@ interface SettingsState {
   updateCustomTerminalKeyBinding: (id: string, label: string, trigger: Trigger, text: string) => BindingEditResult
   removeTerminalKeyBinding: (id: string) => void
   mcpSettings: McpSettings
-  setMcpSettings: (settings: McpSettings) => void
+  setMcpSettings: (settings: McpSettings) => Promise<void>
   hydrateMcpSettings: (settings: McpSettings) => void
   agentProviders: AgentProviderSettings
   setAgentProviders: (settings: AgentProviderSettings) => void
@@ -196,7 +196,7 @@ export function loadSettings(): Persisted {
       }),
       terminalKeyBindingsVersion: TERMINAL_KEY_BINDINGS_VERSION,
       mcpSettings: {
-        builtinBrowserEnabled: (parsed.mcpSettings as McpSettings | undefined)?.builtinBrowserEnabled !== false,
+        builtinBrowserEnabled: (parsed.mcpSettings as McpSettings | undefined)?.builtinBrowserEnabled === true,
         builtinUiAutomationEnabled: (parsed.mcpSettings as McpSettings | undefined)?.builtinUiAutomationEnabled === true,
         customServers: Array.isArray((parsed.mcpSettings as McpSettings | undefined)?.customServers)
           ? (parsed.mcpSettings as McpSettings).customServers
@@ -410,7 +410,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setMcpSettings: (mcpSettings) => {
     set({ mcpSettings })
     saveSettings(get())
-    window.ipc.invoke('mcp:save-settings', mcpSettings).catch((err) => {
+    return window.ipc.invoke('mcp:save-settings', mcpSettings).catch((err) => {
       console.error('[Settings] Failed to sync MCP settings to main:', err)
     })
   },

@@ -78,18 +78,18 @@ export function McpSection(): JSX.Element {
     }).catch(() => {})
   }, [hydrateMcpSettings])
 
-  function save(next: McpSettings): void {
-    setMcpSettings(next)
+  function save(next: McpSettings): Promise<void> {
     setSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     savedTimerRef.current = setTimeout(() => setSaved(false), 2000)
+    return setMcpSettings(next)
   }
 
   function toggleBuiltin(enabled: boolean): void {
-    save({ ...mcpSettings, builtinBrowserEnabled: enabled })
+    void save({ ...mcpSettings, builtinBrowserEnabled: enabled }).then(fetchStatus)
   }
   function toggleUiAutomation(enabled: boolean): void {
-    save({ ...mcpSettings, builtinUiAutomationEnabled: enabled })
+    void save({ ...mcpSettings, builtinUiAutomationEnabled: enabled }).then(fetchStatus)
   }
 
   function openAdd(): void {

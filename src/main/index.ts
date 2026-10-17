@@ -52,6 +52,13 @@ function saveWindowState(win: BrowserWindow): void {
 // Keep references so resources can be cleaned up on quit
 let cleanupFn: (() => Promise<void>) | null = null
 let browserViewManager: BrowserViewManager | null = null
+function getBrowserViewManager(): BrowserViewManager {
+  if (!browserViewManager) {
+    browserViewManager = new BrowserViewManager()
+    browserViewManager.initialize()
+  }
+  return browserViewManager
+}
 // Set by registerIpcHandlers; called during primary-window shutdown to flush detached state.
 let performShutdownSaveFn: (() => Promise<void>) | null = null
 let registerWindowHandlersFn: ((win: BrowserWindow) => void) | null = null
@@ -158,15 +165,14 @@ async function createWindow(): Promise<void> {
   )
   windowManager.startMoveTracking(mainWindow)
 
-  // Set up browser window (MCP-controlled separate window)
-  if (!browserViewManager) {
-    browserViewManager = new BrowserViewManager()
-    browserViewManager.initialize()
-    mcpManager.start(browserViewManager).then(() => {
-      console.log(`[MultiAgent] Browser MCP server listening on port ${mcpManager.getStatus().port}`)
-    }).catch((err) => {
-      console.error('[MultiAgent] Browser MCP server failed to start:', err)
-    })
+  // The browser MCP server is started by McpManager only when its setting is enabled.
+  // Defer constructing its BrowserViewManager until that setting is on.
+  try {
+    await mcpManager.start(getBrowserViewManager)
+    const status = mcpManager.getStatus()
+    if (status.running) console.log(`[MultiAgent] Browser MCP server listening on port ${status.port}`)
+  } catch (err) {
+    console.error('[MultiAgent] Browser MCP server failed to start:', err)
   }
 
   // Load renderer

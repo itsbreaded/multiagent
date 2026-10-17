@@ -633,9 +633,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
 
   registrar.handle('mcp:get-settings', () => mcpManager.getSettings())
 
-  registrar.handle('mcp:save-settings', (_e, settings: McpSettings) => {
-    mcpManager.saveSettings(settings)
-  })
+  registrar.handle('mcp:save-settings', (_e, settings: McpSettings) => mcpManager.saveSettings(settings))
 
   registrar.handle('mcp:probe-stdio', async (_e, command: string, args: string[], env?: Record<string, string>) => {
     const tools = await probeStdioServer(command, args, env)

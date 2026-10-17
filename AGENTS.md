@@ -217,6 +217,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   via `-c` overrides. Browser MCP tools are inlined in `BrowserMcpServer.ts` (registrations +
   descriptions) backed by `BrowserViewManager.ts` (methods) — keep the tool list in sync
   there, not in docs.
+- Built-in `multiagent-browser` MCP defaults off; create its manager/server only when enabled
+  and reconcile it when the setting changes. Custom MCP servers remain independent.
+  → [`docs/sessions.md`](docs/sessions.md)
 
 ### Packaging → [`docs/packaging-and-release.md`](docs/packaging-and-release.md)
 
