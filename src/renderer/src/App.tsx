@@ -9,10 +9,14 @@ import { SnapOverlay } from './components/SnapOverlay'
 import { DirPicker } from './components/DirPicker'
 import { UpdateBanner } from './components/UpdateBanner'
 import { TerminalHostRecoveryBanner } from './components/TerminalHostRecoveryBanner'
+import { DatabaseStatusBanner } from './components/DatabaseStatusBanner'
+import { JiraMentions } from './components/JiraMentions'
 import { startIdleAgentSuspensionCoordinator, usePanesStore } from './store/panes'
 import { useSettingsStore } from './store/settings'
 import { useSessionsStore } from './store/sessions'
 import { useJiraStore } from './store/jira'
+import { useDatabaseStatusStore } from './store/databaseStatus'
+import { useJiraMentionsStore } from './store/jiraMentions'
 import { border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { transferDroppedPane, PANE_DRAG_MIME } from './utils/paneDrag'
@@ -24,6 +28,7 @@ function useGlobalKeyboard() {
   const addTab = usePanesStore((s) => s.addTab)
   const closeTab = usePanesStore((s) => s.closeTab)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const projectWorkspaceActive = usePanesStore((s) => s.activeDestination.kind === 'project')
   const splitPane = usePanesStore((s) => s.splitPane)
   const closePane = usePanesStore((s) => s.closePane)
   const zoomPane = usePanesStore((s) => s.zoomPane)
@@ -39,8 +44,8 @@ function useGlobalKeyboard() {
   useEffect(() => {
     const hotkeys = buildHotkeys(hotkeyOverrides)
     const dispatch: Record<string, () => void> = {
-      [hotkeyKey(hotkeys.newTab)]:          () => addTab(),
-      [hotkeyKey(hotkeys.closeTab)]:        () => { if (activeTabId) closeTab(activeTabId) },
+      [hotkeyKey(hotkeys.newTab)]:          () => { if (projectWorkspaceActive) addTab() },
+      [hotkeyKey(hotkeys.closeTab)]:        () => { if (projectWorkspaceActive && activeTabId) closeTab(activeTabId) },
       [hotkeyKey(hotkeys.splitVertical)]:   () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'vertical') },
       [hotkeyKey(hotkeys.splitHorizontal)]: () => { const p = getFocusedPane(); if (p) splitPane(p.id, 'horizontal') },
       [hotkeyKey(hotkeys.closePane)]:       () => { const p = getFocusedPane(); if (p) closePane(p.id) },
@@ -68,6 +73,7 @@ function useGlobalKeyboard() {
     addTab,
     closeTab,
     activeTabId,
+    projectWorkspaceActive,
     splitPane,
     closePane,
     zoomPane,
@@ -84,6 +90,21 @@ function useGlobalKeyboard() {
 
 export default function App(): JSX.Element {
   useGlobalKeyboard()
+
+  const setDatabaseStatus = useDatabaseStatusStore((s) => s.setStatus)
+  useEffect(() => {
+    void window.ipc.invoke('database:get-status').then(setDatabaseStatus).catch(() => {})
+  }, [setDatabaseStatus])
+
+  const hydrateJiraMentions = useJiraMentionsStore((s) => s.hydrate)
+  const receiveJiraMentions = useJiraMentionsStore((s) => s.receiveProjection)
+  useEffect(() => {
+    const off = window.ipc.on('jira-mentions:state-changed', (value: unknown) => {
+      if (value && typeof value === 'object' && 'items' in value) receiveJiraMentions(value as Parameters<typeof receiveJiraMentions>[0])
+    })
+    void hydrateJiraMentions()
+    return off
+  }, [hydrateJiraMentions, receiveJiraMentions])
 
   const restoreStartedRef = useRef(false)
   const detachedSyncVersionRef = useRef(0)
@@ -102,6 +123,11 @@ export default function App(): JSX.Element {
   const sessions = useSessionsStore((s) => s.sessions)
   const windowId = usePanesStore((s) => s.windowId)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const activeDestination = usePanesStore((s) => s.activeDestination)
+  const sidebarOrder = usePanesStore((s) => s.sidebarOrder)
+  const jiraFeatureVisible = usePanesStore((s) => s.jiraFeatureVisible)
+  const setActiveTab = usePanesStore((s) => s.setActiveTab)
+  const jiraTrackingEnabled = useJiraMentionsStore((s) => s.projection.enabled)
   const sidebarWidth = usePanesStore((s) => s.sidebarWidth)
   const sidebarPanelSizes = usePanesStore((s) => s.sidebarPanelSizes)
   const sidebarOpen = usePanesStore((s) => s.sidebarOpen)
@@ -121,6 +147,9 @@ export default function App(): JSX.Element {
     if (isDetachedWindow || !layoutReady || !jiraHydrated) return
     syncJiraProjects(Array.from(jiraLabels.entries()).map(([tabId, label]) => ({ tabId, label })))
   }, [isDetachedWindow, layoutReady, jiraHydrated, jiraLabels, syncJiraProjects])
+  useEffect(() => {
+    if (jiraHydrated && !jiraTrackingEnabled && activeDestination.kind === 'feature') setActiveTab(activeTabId)
+  }, [jiraHydrated, jiraTrackingEnabled, activeDestination, activeTabId, setActiveTab])
 
   // Detect VS Code availability once on startup
   const setVsCodeAvailable = usePanesStore((s) => s.setVsCodeAvailable)
@@ -193,8 +222,8 @@ export default function App(): JSX.Element {
 
       // Primary window: restore saved layout as before.
       return window.ipc.invoke('layout:load').then((saved) => {
-        const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
-        if (data?.tabs?.length) return usePanesStore.getState().applyLayout(data)
+        const data = saved as { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean>; activeDestination?: { kind: 'project'; tabId: string } | { kind: 'feature'; featureId: 'jira-mentions' }; sidebarOrder?: string[]; jiraFeatureVisible?: boolean } | null
+        if (data && ((data.tabs?.length ?? 0) > 0 || data.activeDestination?.kind === 'feature')) return usePanesStore.getState().applyLayout(data)
         return undefined
       }).catch(() => {})
     }).catch(() => {}).finally(() => setLayoutReady(true))
@@ -241,6 +270,9 @@ export default function App(): JSX.Element {
         activeTabId: s.activeTabId,
         sidebarSectionOpen: s.sidebarSectionOpen,
         sidebarPanelSizes: s.sidebarPanelSizes,
+        activeDestination: s.activeDestination,
+        sidebarOrder: s.sidebarOrder,
+        jiraFeatureVisible: s.jiraFeatureVisible,
       })
     })
     const unsub2 = window.ipc.on('layout:collect-detached-state', (requestId: unknown) => {
@@ -259,13 +291,13 @@ export default function App(): JSX.Element {
   // Debounced layout save — only for the primary window.
   useEffect(() => {
     if (!layoutReady) return
-    if (!tabs.length) return
+    if (!tabs.length && activeDestination.kind !== 'feature') return
     if (isDetachedWindow) return  // Detached windows don't overwrite the primary layout file
     const timer = setTimeout(() => {
-      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes).catch(() => {})
+      window.ipc.invoke('layout:save', tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes, activeDestination, sidebarOrder, jiraFeatureVisible).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [layoutReady, isDetachedWindow, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes])
+  }, [layoutReady, isDetachedWindow, tabs, sidebarWidth, sidebarOpen, activeTabId, sidebarSectionOpen, sidebarPanelSizes, activeDestination, sidebarOrder, jiraFeatureVisible])
 
   // Wait only for the runtime availability check; preferences already restored.
   if (!providerAvailabilityHydrated) {
@@ -287,12 +319,13 @@ export default function App(): JSX.Element {
         if (e.dataTransfer.types.includes(PANE_DRAG_MIME)) e.preventDefault()
       }}
       onDrop={(e) => {
-        if (activeTabId) transferDroppedPane(e, activeTabId, windowId, { movePaneToTab })
+        if (activeTabId && activeDestination.kind === 'project') transferDroppedPane(e, activeTabId, windowId, { movePaneToTab })
       }}
     >
       <>
           <AppChrome />
           {!isDetachedWindow && <UpdateBanner />}
+          <DatabaseStatusBanner />
           <TerminalHostRecoveryBanner />
 
           {/* Main content row */}
@@ -316,9 +349,13 @@ export default function App(): JSX.Element {
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
+                position: 'relative',
               }}
             >
-              <PaneGrid />
+              <div aria-hidden={activeDestination.kind === 'feature'} style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', visibility: activeDestination.kind === 'feature' ? 'hidden' : 'visible', pointerEvents: activeDestination.kind === 'feature' ? 'none' : 'auto' }}>
+                <PaneGrid />
+              </div>
+              {jiraTrackingEnabled && <div aria-hidden={activeDestination.kind !== 'feature'} style={{ position: 'absolute', inset: 0, display: 'flex', visibility: activeDestination.kind === 'feature' ? 'visible' : 'hidden', pointerEvents: activeDestination.kind === 'feature' ? 'auto' : 'none' }}><JiraMentions /></div>}
             </div>
           </div>
       </>

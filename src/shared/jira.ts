@@ -5,6 +5,9 @@ export interface JiraSettings {
   email: string
   patterns: string[]
   hasToken: boolean
+  mentionsEnabled: boolean
+  mentionsPollingEnabled: boolean
+  mentionsPollingMinutes: number
 }
 
 export interface JiraSettingsInput {
@@ -13,6 +16,17 @@ export interface JiraSettingsInput {
   patterns: string[]
   apiToken?: string
   clearToken?: boolean
+  mentionsEnabled?: boolean
+  mentionsPollingEnabled?: boolean
+  mentionsPollingMinutes?: number
+}
+
+export interface JiraVerifiedIdentityBinding {
+  contextId: string
+  siteUrl: string
+  accountId: string
+  verifiedAt: number
+  credentialRecordKey: string
 }
 
 export interface JiraConnectionTestInput {
@@ -130,4 +144,23 @@ export function buildJiraIssueUrl(baseUrl: unknown, issueKey: unknown): string |
   const normalizedBase = normalizeJiraBaseUrl(baseUrl)
   if (!normalizedBase || !isJiraIssueKey(issueKey)) return null
   return `${normalizedBase}/browse/${encodeURIComponent(issueKey)}`
+}
+
+export function normalizeJiraAttachmentUrl(baseUrl: unknown, value: unknown): string | null {
+  const normalizedBase = normalizeJiraBaseUrl(baseUrl)
+  if (!normalizedBase || typeof value !== 'string' || !value.trim()) return null
+  let base: URL
+  let attachment: URL
+  try {
+    base = new URL(normalizedBase)
+    attachment = new URL(value, `${normalizedBase}/`)
+  } catch {
+    return null
+  }
+  if ((attachment.protocol !== 'http:' && attachment.protocol !== 'https:')
+    || attachment.origin !== base.origin || attachment.username || attachment.password
+    || attachment.search || attachment.hash) return null
+  const basePath = base.pathname.replace(/\/+$/, '')
+  if (basePath && !attachment.pathname.startsWith(`${basePath}/`)) return null
+  return attachment.href
 }

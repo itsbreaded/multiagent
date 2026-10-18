@@ -22,11 +22,14 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
         return null
       }
     })
-    registrar.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarPanelSizes: unknown) => {
+    registrar.handle('layout:save', (_e, tabs: unknown, sidebarWidth: unknown, sidebarOpen: unknown, activeTabId: unknown, sidebarSectionOpen: unknown, sidebarPanelSizes: unknown, activeDestination: unknown, sidebarOrder: unknown, jiraFeatureVisible: unknown) => {
       try {
         writeJsonAtomic(layoutPath, {
           tabs: sanitizeTabsForLayout(tabs), sidebarWidth, sidebarOpen, activeTabId,
           sidebarSectionOpen, sidebarPanelSizes,
+          activeDestination: sanitizeWorkspaceDestination(activeDestination),
+          sidebarOrder: sanitizeSidebarOrder(sidebarOrder),
+          jiraFeatureVisible: typeof jiraFeatureVisible === 'boolean' ? jiraFeatureVisible : false,
         })
       } catch (err) {
         console.error('[MultiAgent] layout:save failed:', err)
@@ -83,6 +86,7 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
     type PrimaryState = {
       tabs: unknown[]; sidebarWidth: unknown; sidebarOpen: unknown; activeTabId: unknown
       sidebarSectionOpen: unknown; sidebarPanelSizes: unknown
+      activeDestination?: unknown; sidebarOrder?: unknown; jiraFeatureVisible?: unknown
     }
     type DetachedSnapshot = { windowId: number; tabs: unknown[]; activeTabId?: string }
     const detachedWins = BrowserWindow.getAllWindows().filter(
@@ -111,6 +115,9 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
         sidebarWidth: primaryState.sidebarWidth, sidebarOpen: primaryState.sidebarOpen,
         activeTabId: primaryState.activeTabId, sidebarSectionOpen: primaryState.sidebarSectionOpen,
         sidebarPanelSizes: primaryState.sidebarPanelSizes,
+        activeDestination: sanitizeWorkspaceDestination(primaryState.activeDestination),
+        sidebarOrder: sanitizeSidebarOrder(primaryState.sidebarOrder),
+        jiraFeatureVisible: typeof primaryState.jiraFeatureVisible === 'boolean' ? primaryState.jiraFeatureVisible : false,
       })
     } catch (err) {
       console.error('[MultiAgent] performShutdownSave: layout write failed:', err)
@@ -118,6 +125,25 @@ export function createLayoutStore(deps: { layoutPath: string; windowManager: Lay
   }
 
   return { registerHandlers, repairLayoutCwds, performShutdownSave }
+}
+
+function sanitizeWorkspaceDestination(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (record.kind === 'project' && typeof record.tabId === 'string' && record.tabId.length <= 128) {
+    return { kind: 'project', tabId: record.tabId }
+  }
+  if (record.kind === 'feature' && record.featureId === 'jira-mentions') {
+    return { kind: 'feature', featureId: 'jira-mentions' }
+  }
+  return undefined
+}
+
+function sanitizeSidebarOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const entries = value.filter((item): item is string => typeof item === 'string'
+    && item.length <= 140 && (item === 'feature:jira-mentions' || item.startsWith('project:')))
+  return [...new Set(entries)]
 }
 
 export function normalizeTabsForLayout(tabs: unknown): unknown {

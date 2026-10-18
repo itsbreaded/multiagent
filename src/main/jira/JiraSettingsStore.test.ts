@@ -37,6 +37,9 @@ describe('JiraSettingsStore', () => {
       email: '',
       patterns: [],
       hasToken: false,
+      mentionsEnabled: false,
+      mentionsPollingEnabled: false,
+      mentionsPollingMinutes: 15,
     })
 
     const result = store.save({
@@ -77,6 +80,54 @@ describe('JiraSettingsStore', () => {
       email: '',
       patterns: [],
       hasToken: false,
+      mentionsEnabled: false,
+      mentionsPollingEnabled: false,
+      mentionsPollingMinutes: 15,
     })
+  })
+
+  it('validates mention polling and preserves the private identity binding across preference saves', () => {
+    const store = new JiraSettingsStore(makePath(), makeSecureStorage())
+    expect(store.save({
+      baseUrl: 'https://jira.example.test', email: 'user@example.com', patterns: [], apiToken: 'token',
+      mentionsEnabled: true, mentionsPollingEnabled: true, mentionsPollingMinutes: 15.5,
+    })).toMatchObject({ ok: false, error: expect.stringContaining('whole number') })
+    store.save({
+      baseUrl: 'https://jira.example.test', email: 'user@example.com', patterns: [], apiToken: 'token',
+      mentionsEnabled: true, mentionsPollingEnabled: true, mentionsPollingMinutes: 15,
+    })
+    const key = store.getCredentialRecordKey()!
+    expect(store.saveVerifiedIdentityBinding(key, {
+      contextId: 'context-1', siteUrl: 'https://jira.example.test', accountId: 'account-1',
+      verifiedAt: 1234, credentialRecordKey: key,
+    })).toBe(true)
+    expect(store.getSettings()).not.toHaveProperty('mentionsVerifiedIdentity')
+
+    store.save({
+      baseUrl: 'https://jira.example.test', email: 'user@example.com', patterns: ['APP-'],
+      mentionsEnabled: true, mentionsPollingEnabled: false, mentionsPollingMinutes: 30,
+    })
+    expect(store.getVerifiedIdentityBinding()).toMatchObject({ contextId: 'context-1', accountId: 'account-1' })
+    expect(store.getSettings()).toMatchObject({ mentionsEnabled: true, mentionsPollingEnabled: false, mentionsPollingMinutes: 30 })
+  })
+
+  it('invalidates the binding when Jira credentials change or are removed', () => {
+    const store = new JiraSettingsStore(makePath(), makeSecureStorage())
+    store.save({ baseUrl: 'https://jira.example.test', email: 'user@example.com', patterns: [], apiToken: 'token' })
+    const key = store.getCredentialRecordKey()!
+    store.saveVerifiedIdentityBinding(key, {
+      contextId: 'context-1', siteUrl: 'https://jira.example.test', accountId: 'account-1',
+      verifiedAt: 1234, credentialRecordKey: key,
+    })
+    store.save({ baseUrl: 'https://other.example.test', email: 'user@example.com', patterns: [] })
+    expect(store.getVerifiedIdentityBinding()).toBeNull()
+    const nextKey = store.getCredentialRecordKey()!
+    store.saveVerifiedIdentityBinding(nextKey, {
+      contextId: 'context-2', siteUrl: 'https://other.example.test', accountId: 'account-1',
+      verifiedAt: 2345, credentialRecordKey: nextKey,
+    })
+    store.save({ baseUrl: 'https://other.example.test', email: 'user@example.com', patterns: [], clearToken: true })
+    expect(store.getVerifiedIdentityBinding()).toBeNull()
+    expect(store.getCredentialRecordKey()).toBeNull()
   })
 })

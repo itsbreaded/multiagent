@@ -278,6 +278,30 @@ describe('usePanesStore — idle defaults for agent session entry paths', () => 
     expect(leaves.map((leaf) => leaf.agentStatus?.status)).toEqual(['idle', 'idle'])
   })
 
+  it('restores a feature-only workspace without hydrating the inactive project tab', async () => {
+    const ipc = installMockIpc()
+    const agent = makeLeaf('C:\\feature-project', 'agent', 'claude')
+    agent.sessionId = 'session-inactive'
+    await usePanesStore.getState().applyLayout({
+      tabs: [{ id: 'feature-project', rootNode: agent, focusedPaneId: agent.id }],
+      sidebarWidth: 220,
+      sidebarOpen: true,
+      activeTabId: 'feature-project',
+      activeDestination: { kind: 'feature', featureId: 'jira-mentions' },
+      sidebarOrder: ['project:feature-project', 'feature:jira-mentions'],
+      jiraFeatureVisible: true,
+    })
+
+    expect(usePanesStore.getState()).toMatchObject({
+      activeDestination: { kind: 'feature', featureId: 'jira-mentions' },
+      sidebarOrder: ['project:feature-project', 'feature:jira-mentions'],
+      jiraFeatureVisible: true,
+      hydratedTabIds: {},
+    })
+    expect(ipc.invoke).not.toHaveBeenCalledWith('sessions:validate', 'claude', 'session-inactive', 'C:\\feature-project')
+    expect(ipc.invoke).not.toHaveBeenCalledWith('session:resume', 'claude', 'session-inactive', 'C:\\feature-project')
+  })
+
   it('preserves explicit unknown at layout and incoming-pane boundaries', async () => {
     Object.defineProperty(window, 'ipc', { configurable: true, value: undefined })
     const restored = makeLeaf('C:\\restored', 'agent', 'claude')

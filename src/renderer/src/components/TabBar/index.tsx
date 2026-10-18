@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { usePanesStore } from '../../store/panes'
+import { useJiraMentionsStore } from '../../store/jiraMentions'
 import { HOTKEYS } from '../../utils/hotkeys'
 import { ui, border } from '../../styles/theme'
 import searchIcon from '../../assets/search.png'
 import bookIcon from '../../assets/book.png'
+import jiraMentionsIcon from '../../assets/notifications.png'
 import settingsIcon from '../../assets/settings.png'
 import leftPanelOpenedIcon from '../../assets/leftpanelopened.png'
 import leftPanelClosedIcon from '../../assets/leftpanelclosed.png'
@@ -163,6 +165,12 @@ function ChromeButtonCluster(): JSX.Element {
   const sessionBrowserOpen = usePanesStore((s) => s.sessionBrowserOpen)
   const commandPaletteOpen = usePanesStore((s) => s.commandPaletteOpen)
   const settingsOpen = usePanesStore((s) => s.settingsOpen)
+  const mentionsEnabled = useJiraMentionsStore((s) => s.projection.enabled)
+  const mentionsCount = useJiraMentionsStore((s) => s.projection.activeCount)
+  const jiraFeatureVisible = usePanesStore((s) => s.jiraFeatureVisible)
+  const setJiraFeatureVisible = usePanesStore((s) => s.setJiraFeatureVisible)
+  const selectJiraFeature = usePanesStore((s) => s.selectJiraFeature)
+  const jiraFeatureActive = usePanesStore((s) => s.activeDestination.kind === 'feature')
 
   return <>
     <BarButton onClick={toggleSidebar} title={sidebarOpen ? `Collapse sidebar (${HOTKEYS.toggleSidebar.display})` : `Open sidebar (${HOTKEYS.toggleSidebar.display})`}>
@@ -171,6 +179,19 @@ function ChromeButtonCluster(): JSX.Element {
     <BarButton onClick={toggleSessionBrowser} title={`Session browser (${HOTKEYS.sessionBrowser.display})`} active={sessionBrowserOpen}>
       <img src={bookIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
     </BarButton>
+    {mentionsEnabled && <BarButton
+      onClick={() => {
+        if (jiraFeatureActive) setJiraFeatureVisible(false)
+        else { setJiraFeatureVisible(true); selectJiraFeature() }
+      }}
+      title={jiraFeatureActive ? 'Close Jira mentions' : `Open Jira mentions${mentionsCount ? ` (${mentionsCount} unanswered)` : ''}`}
+      active={jiraFeatureActive || jiraFeatureVisible}
+    >
+      <span style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <img src={jiraMentionsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
+        {mentionsCount > 0 && <span style={{ position: 'absolute', right: -7, top: -6, minWidth: 12, height: 12, padding: '0 2px', borderRadius: 7, background: ui.color.accent, color: '#0e1011', fontSize: 8, lineHeight: '12px', fontWeight: 700 }}>{mentionsCount > 99 ? '99+' : mentionsCount}</span>}
+      </span>
+    </BarButton>}
     <BarButton onClick={toggleCommandPalette} title={`Command palette (${HOTKEYS.commandPalette.display})`} active={commandPaletteOpen}>
       <img src={searchIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
     </BarButton>
@@ -181,7 +202,7 @@ function ChromeButtonCluster(): JSX.Element {
 }
 
 function leftChromeWidth(sidebarOpen: boolean, sidebarWidth: number, isMac: boolean): number {
-  return sidebarOpen ? sidebarWidth : ui.chrome.controlSize * 4 + 8 + (isMac ? 80 : 0)
+  return sidebarOpen ? sidebarWidth : ui.chrome.controlSize * 5 + 8 + (isMac ? 80 : 0)
 }
 
 export function TabBar(): JSX.Element {

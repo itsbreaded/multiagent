@@ -9,6 +9,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
+    "test:db": "node scripts/electron-database-smoke.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "npm run build && playwright test",

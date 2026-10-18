@@ -8,6 +8,15 @@ import type {
   JiraStatusResult,
   JiraTokenResult,
 } from './jira'
+import type {
+  JiraIssueSnapshot,
+  JiraAttachmentPreviewResult,
+  JiraMentionsActionInput,
+  JiraMentionsProjection,
+  JiraMentionsRefreshMode,
+  JiraMentionsReplyInput,
+  JiraMentionsReplyResult,
+} from './jiraMentions'
 
 // Auto-updater status pushed from main to renderer
 export type UpdaterStatus =
@@ -275,9 +284,9 @@ export interface AgentStatusInput {
 export interface Session {
   agentKind: AgentKind
   sessionId: string           // UUID from JSONL
-  cwd: string                 // actual project path e.g. C:\source\ecentria\core
+  cwd: string                 // actual project path e.g. C:\source\...\core
   cwdExists: boolean          // false when cwd no longer exists on disk
-  projectName: string         // derived: last 2 path segments e.g. "ecentria/core"
+  projectName: string         // derived: last 2 path segments e.g. ".../core"
   displayName: string | null
   gitBranch: string | null
   firstMessage: string | null // first real user-typed message (not slash commands)
@@ -327,6 +336,12 @@ export interface SessionSearchResult {
   score: number
   matchCount: number
   matches: SessionSearchMatch[]
+}
+
+export interface DatabaseStatus {
+  available: boolean
+  code?: 'unsupported_schema' | 'database_unavailable'
+  message?: string
 }
 
 // Pane tree - binary split layout (same model as tmux)
@@ -510,7 +525,14 @@ export interface AppState {
   zoomedPaneId: string | null
   sessionBrowserOpen: boolean
   commandPaletteOpen: boolean
+  activeDestination?: WorkspaceDestination
+  sidebarOrder?: string[]
+  jiraFeatureVisible?: boolean
 }
+
+export type WorkspaceDestination =
+  | { kind: 'project'; tabId: string }
+  | { kind: 'feature'; featureId: 'jira-mentions' }
 
 // IPC channel definitions
 // Channels prefixed with direction:
@@ -519,6 +541,9 @@ export interface AppState {
 //   send: renderer fires and forgets to main
 
 export interface IPCChannels {
+  'database:get-status': () => DatabaseStatus
+  'database:status-changed': (status: DatabaseStatus) => void
+
   // --- Sessions ---
   // Main pushes full session list whenever it changes
   'sessions:updated': (sessions: Session[]) => void
@@ -605,6 +630,15 @@ export interface IPCChannels {
   'jira:test-connection': (settings: JiraConnectionTestInput) => JiraConnectionTestResult
   'jira:fetch-status': (issueKey: string) => JiraStatusResult
   'jira:open-issue': (issueKey: string) => JiraOpenIssueResult
+  'jira-mentions:get-state': () => JiraMentionsProjection
+  'jira-mentions:refresh': (mode: JiraMentionsRefreshMode) => JiraMentionsProjection
+  'jira-mentions:get-issue-detail': (issueId: string) => Promise<JiraIssueSnapshot | null>
+  'jira-mentions:get-attachment-preview': (issueId: string, attachmentId: string) => JiraAttachmentPreviewResult
+  'jira-mentions:open-attachment': (issueId: string, attachmentId: string) => JiraOpenIssueResult
+  'jira-mentions:set-action': (input: JiraMentionsActionInput) => JiraMentionsProjection
+  'jira-mentions:clear-cache': () => JiraMentionsProjection
+  'jira-mentions:post-reply': (input: JiraMentionsReplyInput) => Promise<JiraMentionsReplyResult>
+  'jira-mentions:state-changed': (projection: JiraMentionsProjection) => void
 
   // --- Git ---
   'git:branch': (cwd: string) => string | null
@@ -620,8 +654,8 @@ export interface IPCChannels {
   'dirs:validate': (dir: string) => { ok: true; directory: string } | { ok: false; error: string }
 
   // --- Layout persistence ---
-  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>) => void
-  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> } | null
+  'layout:save': (tabs: Tab[], sidebarWidth: number, sidebarOpen: boolean, activeTabId: string, sidebarSectionOpen: Record<string, boolean>, sidebarPanelSizes?: Record<string, number>, activeDestination?: WorkspaceDestination, sidebarOrder?: string[], jiraFeatureVisible?: boolean) => void
+  'layout:load': () => { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean>; activeDestination?: WorkspaceDestination; sidebarOrder?: string[]; jiraFeatureVisible?: boolean } | null
 
   // Shutdown state collection: main requests renderer state for a final authoritative save
   // Main sends requestId; renderer responds via layout:state-response / layout:detached-state-response
@@ -800,6 +834,7 @@ export interface IPCChannels {
 type ChannelSubset<K extends keyof IPCChannels> = K
 
 export type InvokeChannels = ChannelSubset<
+  | 'database:get-status'
   | 'sessions:search'
   | 'sessions:search-deep'
   | 'sessions:delete'
@@ -824,6 +859,14 @@ export type InvokeChannels = ChannelSubset<
   | 'jira:test-connection'
   | 'jira:fetch-status'
   | 'jira:open-issue'
+  | 'jira-mentions:get-state'
+  | 'jira-mentions:refresh'
+  | 'jira-mentions:get-issue-detail'
+  | 'jira-mentions:get-attachment-preview'
+  | 'jira-mentions:open-attachment'
+  | 'jira-mentions:set-action'
+  | 'jira-mentions:clear-cache'
+  | 'jira-mentions:post-reply'
   | 'git:branch'
   | 'git:unwatch-branch'
   | 'layout:save'
@@ -875,6 +918,8 @@ export type InvokeChannels = ChannelSubset<
   | 'overlay:release'>
 
 export type EventChannels = ChannelSubset<
+  | 'database:status-changed'
+  | 'jira-mentions:state-changed'
   | 'sessions:updated'
   | 'git:branch-updated'
   | 'layout:cwd-repaired'

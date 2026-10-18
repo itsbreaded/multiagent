@@ -49,6 +49,7 @@ const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ?
 export function PaneGrid(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const activeDestination = usePanesStore((s) => s.activeDestination)
   const hydratedTabIds = usePanesStore((s) => s.hydratedTabIds)
   const zoomedPaneId = usePanesStore((s) => s.zoomedPaneId)
   const updatePaneRatio = usePanesStore((s) => s.updatePaneRatio)
@@ -61,6 +62,7 @@ export function PaneGrid(): JSX.Element {
   const [isSashDragging, setIsSashDragging] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
+  const projectDestinationActive = activeDestination.kind === 'project'
   const activeTabHydrated = activeTabId ? hydratedTabIds[activeTabId] === true : false
   const cwdForNew = activeTab?.defaultCwd ?? DEFAULT_CWD
   const zoomedPane = zoomedPaneId ? findPane(zoomedPaneId) : null
@@ -129,16 +131,17 @@ export function PaneGrid(): JSX.Element {
         return (
           <div
             key={tab.id}
-            className={isActive && isSashDragging ? 'sash-dragging' : undefined}
+            className={isActive && projectDestinationActive && isSashDragging ? 'sash-dragging' : undefined}
+            aria-hidden={!isActive || !projectDestinationActive}
             style={{
               position: 'absolute',
               inset: 0,
               display: 'flex',
               flexDirection: 'column',
-              visibility: isActive ? 'visible' : 'hidden',
-              pointerEvents: isActive ? 'auto' : 'none',
+              visibility: isActive && projectDestinationActive ? 'visible' : 'hidden',
+              pointerEvents: isActive && projectDestinationActive ? 'auto' : 'none',
             }}
-            onMouseDownCapture={isActive ? (e) => {
+            onMouseDownCapture={isActive && projectDestinationActive ? (e) => {
               const target = e.target as HTMLElement
               if (target.closest('[class*="sash-module_sash"]')) {
                 setIsSashDragging(true)

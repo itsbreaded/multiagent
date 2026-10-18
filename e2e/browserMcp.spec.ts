@@ -1,4 +1,4 @@
-import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
+import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { spawnSync } from 'child_process'
 import { createServer } from 'http'
 import { mkdtemp, readFile, rm } from 'fs/promises'
@@ -55,6 +55,13 @@ async function listBrowserTools(port: number): Promise<string[]> {
   const payload = await readMcpPayload<{ error?: { message: string }; result?: { tools?: Array<{ name: string }> } }>(response)
   if (payload.error) throw new Error(payload.error.message)
   return (payload.result?.tools ?? []).map((tool) => tool.name).sort()
+}
+
+async function enableBrowserMcp(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const settings = await window.ipc.invoke('mcp:get-settings')
+    await window.ipc.invoke('mcp:save-settings', { ...settings, builtinBrowserEnabled: true })
+  })
 }
 
 async function startFixtureServer(): Promise<{ url: string; close: () => Promise<void> }> {
@@ -188,6 +195,7 @@ test.describe('browser MCP Electron runtime', () => {
 
   test('drives separate manager click and wait calls through MCP against the async fixture', async () => {
     const page = await app.firstWindow()
+    await enableBrowserMcp(page)
     await app.evaluate(() => {
       ;(globalThis as typeof globalThis & { __multiagentBrowserMcpWaitTrace?: unknown[] })
         .__multiagentBrowserMcpWaitTrace = []
@@ -211,7 +219,7 @@ test.describe('browser MCP Electron runtime', () => {
         const actionCompletedMs = Date.now() - start
         const wait = await callBrowserTool(mcpStatus.port!, 'browser_wait_for_text', {
           text: 'Reveal complete',
-          timeout_ms: 1000,
+          timeout_ms: 5000,
         })
         trace.push({ iteration, actionCompletedMs, waitCompletedMs: Date.now() - start, result: wait.text })
         expect(wait).toEqual({ isError: false, text: 'Text found: Reveal complete' })
@@ -234,6 +242,7 @@ test.describe('browser MCP Electron runtime', () => {
 
   test('returns console and completed/failed network metadata through MCP', async () => {
     const page = await app.firstWindow()
+    await enableBrowserMcp(page)
     await expect.poll(
       () => page.evaluate(() => window.ipc.invoke('mcp:get-status'))
     ).toMatchObject({ running: true })

@@ -14,6 +14,7 @@ npm test            # vitest run (both projects, no coverage)
 npm run test:watch  # vitest watch
 npm run test:coverage  # vitest run --coverage (text + html + lcov under coverage/)
 npm run test:e2e    # build + Playwright Electron smoke tests (isolated temp profile)
+npm run test:db     # shared-database migration/reopen checks under the Electron ABI
 npm run typecheck   # tsc -b --noEmit — also type-checks test files
 ```
 
@@ -24,6 +25,10 @@ Electron 42+ no longer does this during `npm install`), then the `electron-rebui
 `@electron/rebuild` to rebuild `better-sqlite3` for the Electron ABI. `node-pty` ships Windows
 Electron-compatible prebuilds in this tree; if those are unavailable, a source rebuild requires
 Visual Studio Build Tools. Do not add `--ignore-scripts`.
+
+`test:db` bundles the shared database owner and runs migration/rebuild fixtures under the
+installed Electron executable. `better-sqlite3` is rebuilt for Electron's ABI, so running those
+fixtures under the system Node binary can fail with a module-version mismatch.
 
 ## Project layout
 
@@ -90,6 +95,11 @@ sidebar MIME payloads as the renderer and leave the existing pane MIME path sepa
 primary and detached windows use the same ordinary show, restore, and focus lifecycle as production.
 Their renderers keep `backgroundThrottling: false` so covered windows continue to paint while
 cross-window terminal and overlay behavior is exercised.
+
+`e2e/jira-mentions.spec.ts` starts an isolated loopback Jira REST fixture and launches the
+compiled app with temporary user-data/home paths. It configures synthetic credentials through
+the Jira Settings form, verifies discovery of an ADF mention, selects a requester with keyboard
+navigation, and captures exactly one structured reply POST. It does not contact a live Jira site.
 
 ## Coverage ratchets
 

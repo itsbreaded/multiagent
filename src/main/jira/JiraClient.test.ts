@@ -7,6 +7,9 @@ const settings: JiraStoredSettings = {
   email: 'user@example.com',
   patterns: ['GLD-'],
   token: 'secret-token',
+  mentionsEnabled: false,
+  mentionsPollingEnabled: false,
+  mentionsPollingMinutes: 15,
 }
 
 function response(status: number, body: unknown): { ok: boolean; status: number; json: () => Promise<unknown> } {

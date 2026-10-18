@@ -58,6 +58,9 @@ const DEFAULT_SETTINGS: JiraSettings = {
   email: '',
   patterns: [],
   hasToken: false,
+  mentionsEnabled: false,
+  mentionsPollingEnabled: false,
+  mentionsPollingMinutes: 15,
 }
 
 function asFailure(issueKey: string, message = 'Jira status is unavailable.'): JiraStatusResult {

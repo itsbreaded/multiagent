@@ -4,6 +4,6 @@
  * partially redact an evolving settings shape.
  */
 export function traceInvokeArgs(channel: string, args: readonly unknown[]): unknown[] | null {
-  if (channel === 'jira:save-settings' || channel === 'jira:test-connection') return null
+  if (channel === 'jira:save-settings' || channel === 'jira:test-connection' || channel === 'jira-mentions:post-reply') return null
   return [...args]
 }

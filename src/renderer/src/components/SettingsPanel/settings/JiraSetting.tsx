@@ -37,27 +37,43 @@ export function JiraSetting(): JSX.Element {
   const [showToken, setShowToken] = useState(false)
   const [clearToken, setClearToken] = useState(false)
   const [patterns, setPatterns] = useState<string[]>(settings.patterns.length ? settings.patterns : [''])
+  const [mentionsEnabled, setMentionsEnabled] = useState(settings.mentionsEnabled)
+  const [mentionsPollingEnabled, setMentionsPollingEnabled] = useState(settings.mentionsPollingEnabled)
+  const [pollingMinutesDraft, setPollingMinutesDraft] = useState(String(settings.mentionsPollingMinutes))
   const [testing, setTesting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const draftDirty = useRef(false)
+  const pollingIntervalValid = !mentionsPollingEnabled || (
+    /^\d+$/.test(pollingMinutesDraft)
+    && Number(pollingMinutesDraft) >= 5
+    && Number(pollingMinutesDraft) <= 240
+  )
+  const pollingIntervalValidRef = useRef(pollingIntervalValid)
+  pollingIntervalValidRef.current = pollingIntervalValid
   const draftRef = useRef<JiraSettingsInput>({
     baseUrl: settings.baseUrl,
     email: settings.email,
     patterns,
+    mentionsEnabled: settings.mentionsEnabled,
+    mentionsPollingEnabled: settings.mentionsPollingEnabled,
+    mentionsPollingMinutes: settings.mentionsPollingMinutes,
   })
 
   draftRef.current = {
     baseUrl,
     email,
     patterns,
+    mentionsEnabled,
+    mentionsPollingEnabled,
+    mentionsPollingMinutes: pollingIntervalValid ? Number(pollingMinutesDraft) : settings.mentionsPollingMinutes,
     ...(tokenDirty && token ? { apiToken: token } : {}),
     ...(clearToken || (settings.hasToken && tokenDirty && !token) ? { clearToken: true } : {}),
   }
 
   useEffect(() => {
     return () => {
-      if (draftDirty.current) void saveSettings(draftRef.current)
+      if (draftDirty.current && pollingIntervalValidRef.current) void saveSettings(draftRef.current)
     }
   }, [saveSettings])
 
@@ -65,10 +81,13 @@ export function JiraSetting(): JSX.Element {
     setBaseUrl(settings.baseUrl)
     setEmail(settings.email)
     setPatterns(settings.patterns.length ? settings.patterns : [''])
+    setMentionsEnabled(settings.mentionsEnabled)
+    setMentionsPollingEnabled(settings.mentionsPollingEnabled)
+    setPollingMinutesDraft(String(settings.mentionsPollingMinutes))
     setClearToken(false)
     setShowToken(false)
     draftDirty.current = false
-  }, [settings.baseUrl, settings.email, settings.patterns, settings.hasToken])
+  }, [settings.baseUrl, settings.email, settings.patterns, settings.hasToken, settings.mentionsEnabled, settings.mentionsPollingEnabled, settings.mentionsPollingMinutes])
 
   useEffect(() => {
     let cancelled = false
@@ -122,9 +141,6 @@ export function JiraSetting(): JSX.Element {
 
   return (
     <>
-      <div style={{ color: ui.color.textMuted, fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
-        Match a leading ticket prefix such as <code>DZ-</code> to show read-only Jira status badges in project folders.
-      </div>
       <label style={labelStyle}>Jira base URL</label>
       <input aria-label="Jira base URL" value={baseUrl} onChange={(e) => { draftDirty.current = true; setBaseUrl(e.target.value) }} style={fieldStyle} />
 
@@ -197,6 +213,53 @@ export function JiraSetting(): JSX.Element {
         Add prefix
       </button>
 
+      <label style={{ ...checkRowStyle, marginTop: 16 }}>
+        <input
+          type="checkbox"
+          aria-label="Track unanswered Jira mentions"
+          checked={mentionsEnabled}
+          onChange={(event) => { draftDirty.current = true; setMentionsEnabled(event.target.checked) }}
+        />
+        <span>Track unanswered mentions</span>
+      </label>
+      {mentionsEnabled && (
+        <>
+          <label style={checkRowStyle}>
+            <input
+              type="checkbox"
+              aria-label="Background refresh"
+              checked={mentionsPollingEnabled}
+              onChange={(event) => { draftDirty.current = true; setMentionsPollingEnabled(event.target.checked) }}
+            />
+            <span>Background refresh</span>
+          </label>
+          {mentionsPollingEnabled && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+              <label htmlFor="jira-mentions-polling-minutes" style={{ ...labelStyle, margin: 0, flex: 1 }}>
+                Refresh interval (minutes)
+              </label>
+              <input
+                id="jira-mentions-polling-minutes"
+                aria-label="Refresh interval in minutes"
+                type="number"
+                aria-invalid={!pollingIntervalValid}
+                min={5}
+                max={240}
+                step={1}
+                value={pollingMinutesDraft}
+                onChange={(event) => { draftDirty.current = true; setPollingMinutesDraft(event.target.value) }}
+                style={{ ...fieldStyle, width: 92 }}
+              />
+            </div>
+          )}
+          {!pollingIntervalValid && mentionsPollingEnabled && (
+            <div role="alert" style={{ color: ui.color.danger, fontSize: 11, marginTop: 5 }}>
+              Use a whole number from 5 to 240.
+            </div>
+          )}
+        </>
+      )}
+
       {error && <div role="alert" style={{ color: ui.color.danger, fontSize: 11, marginTop: 10 }}>{error}</div>}
       {message && <div role="status" style={{ color: ui.color.accent, fontSize: 11, marginTop: 10 }}>{message}</div>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
@@ -214,4 +277,13 @@ const labelStyle: React.CSSProperties = {
   fontSize: 11,
   marginTop: 10,
   marginBottom: 4,
+}
+
+const checkRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  color: ui.color.text,
+  fontSize: 12,
+  marginTop: 8,
 }

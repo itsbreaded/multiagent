@@ -1,0 +1,11 @@
+{
+  "name": "jira-attachment-preview-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone Electron demo for authenticated, in-memory Jira attachment previews.",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "node ../../node_modules/electron/cli.js .",
+    "verify": "node verify.cjs"
+  }
+}

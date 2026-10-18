@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title description">
+  <title id="title">Known attachment preview fixture</title>
+  <desc id="description">A database incident diagram used to demonstrate inline attachment previews.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#151a24" />
+      <stop offset="1" stop-color="#222d3d" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4ade80" />
+      <stop offset="1" stop-color="#38bdf8" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity=".28" />
+    </filter>
+  </defs>
+  <rect width="1200" height="760" rx="28" fill="url(#background)" />
+  <text x="72" y="92" fill="#f3f4f6" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">INCIDENT 7421 · DATABASE TIMEOUT</text>
+  <text x="72" y="132" fill="#a8b3c4" font-family="Segoe UI, Arial, sans-serif" font-size="18">Known attachment fixture · displayed from memory</text>
+  <g filter="url(#shadow)">
+    <rect x="72" y="210" width="310" height="212" rx="18" fill="#273449" stroke="#52647b" stroke-width="2" />
+    <rect x="445" y="210" width="310" height="212" rx="18" fill="#273449" stroke="#52647b" stroke-width="2" />
+    <rect x="818" y="210" width="310" height="212" rx="18" fill="#273449" stroke="#52647b" stroke-width="2" />
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif" text-anchor="middle">
+    <text x="227" y="270" fill="#7dd3fc" font-size="18" font-weight="700">APPLICATION</text>
+    <text x="227" y="324" fill="#f3f4f6" font-size="28" font-weight="700">Request queue</text>
+    <text x="227" y="366" fill="#a8b3c4" font-size="17">47 waiting · p95 8.2s</text>
+    <text x="600" y="270" fill="#86efac" font-size="18" font-weight="700">CONNECTION POOL</text>
+    <text x="600" y="324" fill="#f3f4f6" font-size="28" font-weight="700">Pool exhausted</text>
+    <text x="600" y="366" fill="#a8b3c4" font-size="17">0 of 32 connections free</text>
+    <text x="973" y="270" fill="#fca5a5" font-size="18" font-weight="700">SQL SERVER</text>
+    <text x="973" y="324" fill="#f3f4f6" font-size="28" font-weight="700">Query timeout</text>
+    <text x="973" y="366" fill="#a8b3c4" font-size="17">Elapsed 30.0 seconds</text>
+  </g>
+  <path d="M382 316H440M755 316H813" stroke="url(#accent)" stroke-width="8" stroke-linecap="round" />
+  <path d="m426 302 15 14-15 14M799 302l15 14-15 14" fill="none" stroke="#7dd3fc" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+  <rect x="72" y="492" width="1056" height="174" rx="18" fill="#171e2b" stroke="#39485c" stroke-width="2" />
+  <circle cx="112" cy="550" r="12" fill="#fb7185" />
+  <text x="144" y="558" fill="#fda4af" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">OBSERVED MESSAGE</text>
+  <text x="112" y="610" fill="#e5e7eb" font-family="Consolas, monospace" font-size="22">[Microsoft][ODBC Driver 11 for SQL Server] Query timeout expired</text>
+  <text x="112" y="642" fill="#94a3b8" font-family="Segoe UI, Arial, sans-serif" font-size="15">Preview fixture only · no Jira data or credentials involved</text>
+</svg>

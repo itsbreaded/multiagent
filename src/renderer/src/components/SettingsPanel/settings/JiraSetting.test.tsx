@@ -8,7 +8,7 @@ const TEST_BASE_URL = 'https://jira.example.com'
 
 beforeEach(() => {
   useJiraStore.setState({
-    settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false },
+    settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
     hydrated: true,
     configVersion: 0,
     labels: {},
@@ -24,13 +24,13 @@ describe('JiraSetting', () => {
   it('uses a normal password field with show/hide and clear actions', async () => {
     const ipc = installMockIpc()
     useJiraStore.setState({
-      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
     })
     ipc.invoke.mockImplementation(async (channel: string) => {
       if (channel === 'jira:get-token') return { ok: true, token: 'saved-token' }
       return {
         ok: true,
-        settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: false },
+        settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
       }
     })
 
@@ -56,7 +56,7 @@ describe('JiraSetting', () => {
     const ipc = installMockIpc()
     ipc.invoke.mockResolvedValue({
       ok: true,
-      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
     })
     const { unmount } = render(<JiraSetting />)
     fireEvent.change(screen.getByLabelText('Atlassian account email'), { target: { value: 'user@example.com' } })
@@ -74,13 +74,13 @@ describe('JiraSetting', () => {
   it('saves a replaced token when settings close', async () => {
     const ipc = installMockIpc()
     useJiraStore.setState({
-      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
     })
     ipc.invoke.mockImplementation(async (channel: string) => {
       if (channel === 'jira:get-token') return { ok: true, token: 'old-token' }
       return {
         ok: true,
-        settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+        settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
       }
     })
 
@@ -118,5 +118,22 @@ describe('JiraSetting', () => {
     fireEvent.change(screen.getByLabelText('Jira API token'), { target: { value: 'secret-token' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test Jira connection' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Jira connection succeeded.')
+  })
+
+  it('validates whole-minute polling intervals and does not autosave an invalid draft', () => {
+    const ipc = installMockIpc()
+    useJiraStore.setState({
+      settings: {
+        baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true,
+        mentionsEnabled: true, mentionsPollingEnabled: true, mentionsPollingMinutes: 15,
+      },
+    })
+    const { unmount } = render(<JiraSetting />)
+    const interval = screen.getByRole('spinbutton', { name: 'Refresh interval in minutes' })
+    fireEvent.change(interval, { target: { value: '15.5' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('whole number from 5 to 240')
+    expect(interval).toHaveAttribute('aria-invalid', 'true')
+    unmount()
+    expect(ipc.invoke).not.toHaveBeenCalledWith('jira:save-settings', expect.anything())
   })
 })

@@ -1,10 +1,9 @@
 # Sessions: indexing, detection & repair (mechanism)
 
-The why/how behind session search, session-id detection, cwd repair, and the startup-resume /
-shutdown-state flow. The one-line guardrails live in `AGENTS.md`. The hook-based session-id
-**linking** mechanism — the one scoped exception to "don't mutate agent config" — is a deep
-dive in [`docs/session-linking-hooks.md`](session-linking-hooks.md); this doc covers everything
-else session-related.
+This document expands the `AGENTS.md` **Sessions & MCP** guardrails. It covers session search,
+session-id detection, shared database ownership, cwd repair, and startup-resume/shutdown state.
+The hook-based session-id **linking** mechanism — the one scoped exception to "don't mutate
+agent config" — is a deep dive in [`docs/session-linking-hooks.md`](session-linking-hooks.md).
 
 ---
 
@@ -19,6 +18,22 @@ the live pane list to Recent without waiting for the next poll.
 
 `SessionIndex.search(query)` is summary-only FTS5 over `projectName`, `displayName`,
 `firstMessage`, and `lastMessage`. It is **not** a full transcript search.
+
+### Shared application database
+
+`ApplicationDatabase` in `src/main/database/ApplicationDatabase.ts` is the sole
+owner of `session-index.db` and its `user_version` history. It creates the
+session schema and additive Jira mention tables in one transaction; `SessionIndex`
+borrows the opened connection in production. A session FTS rebuild drops and
+rebuilds only session index tables, and clearing Jira cache touches only Jira
+evidence tables, preserving the other subsystem's state.
+
+Initialization distinguishes migration/unsupported-version failures from
+corruption. A failed transaction rolls back and startup preserves the original
+file; an unsupported newer version is never downgraded or recreated. Main reports
+only a sanitized database status and keeps PTY/session launching available while
+database-backed search and mentions are unavailable. The Electron-ABI migration
+and scoped-preservation checks run with `npm run test:db`.
 
 ## Deep transcript search
 

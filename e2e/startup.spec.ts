@@ -27,6 +27,16 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
   }
 }
 
+function prepareDatabase(mode: '--prepare-newer' | '--prepare-v1' | '--prepare-failed' | '--verify-failed' | '--prepare-jira-v1' | '--verify-jira-v1', databasePath: string): void {
+  const result = spawnSync(process.execPath, [
+    join(repoRoot, 'scripts', 'electron-database-smoke.mjs'), mode, databasePath,
+  ], { cwd: repoRoot, encoding: 'utf8', windowsHide: true })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`Could not prepare ${mode} database: ${result.stdout}\n${result.stderr}`)
+  }
+}
+
 interface SavedPaneNode {
   type?: 'leaf' | 'split'
   id?: string
@@ -311,6 +321,119 @@ test.describe('cold-start layout restore', () => {
       firstMessage: 'The quasarneedle appears only in this fixture.',
     })
     expect(misses).toEqual([])
+  })
+
+  test('upgrades a supported shared schema at startup and preserves settings, sessions, and layout', async () => {
+    await page.getByTitle('Settings').click()
+    await page.getByText('Jira', { exact: true }).first().click()
+    await page.getByRole('textbox', { name: 'Jira base URL' }).fill('https://migration.example.test')
+    await page.getByRole('textbox', { name: 'Atlassian account email' }).fill('migration@example.test')
+    await page.getByLabel('Jira API token').fill('migration-token')
+    await page.keyboard.press('Escape')
+    await expect.poll(async () => page.evaluate(() => window.ipc.invoke('jira:get-settings')))
+      .toMatchObject({ baseUrl: 'https://migration.example.test', email: 'migration@example.test', hasToken: true })
+
+    await closeApp(app)
+    const databasePath = join(userDataDir, 'session-index.db')
+    await Promise.all([
+      rm(databasePath, { force: true }),
+      rm(`${databasePath}-wal`, { force: true }),
+      rm(`${databasePath}-shm`, { force: true }),
+    ])
+    prepareDatabase('--prepare-v1', databasePath)
+    await launchTestApp()
+
+    const databaseStatus = await page.evaluate(() => window.ipc.invoke('database:get-status'))
+    expect(databaseStatus).toEqual({ available: true })
+    const migratedSession = await page.evaluate(() => window.ipc.invoke('sessions:search', 'migrationneedle')) as Array<{
+      sessionId: string
+      cwd: string
+      firstMessage: string | null
+    }>
+    expect(migratedSession).toMatchObject([{
+      sessionId: 'legacy-v1', cwd: 'C:/legacy', firstMessage: 'migrationneedle legacy summary',
+    }])
+    const savedLayout = JSON.parse(await readFile(join(userDataDir, 'layout.json'), 'utf8')) as {
+      tabs: Array<{ id: string }>
+      activeTabId: string
+    }
+    expect(savedLayout.tabs.map((tab) => tab.id)).toEqual(['tab-alpha', 'tab-beta'])
+    expect(savedLayout.activeTabId).toBe('tab-alpha')
+
+    await page.getByTitle('Settings').click()
+    await page.getByText('Jira', { exact: true }).first().click()
+    await expect(page.getByRole('textbox', { name: 'Jira base URL' })).toHaveValue('https://migration.example.test')
+    await expect(page.getByRole('textbox', { name: 'Atlassian account email' })).toHaveValue('migration@example.test')
+    await expect(page.getByRole('textbox', { name: 'Jira API token' })).toHaveValue('migration-token')
+  })
+
+  test('preserves cached Jira results and sync state in an older supported schema', async () => {
+    await closeApp(app)
+    const databasePath = join(userDataDir, 'session-index.db')
+    await Promise.all([
+      rm(databasePath, { force: true }),
+      rm(`${databasePath}-wal`, { force: true }),
+      rm(`${databasePath}-shm`, { force: true }),
+    ])
+    prepareDatabase('--prepare-jira-v1', databasePath)
+
+    await launchTestApp()
+
+    expect(await page.evaluate(() => window.ipc.invoke('database:get-status'))).toEqual({ available: true })
+    prepareDatabase('--verify-jira-v1', databasePath)
+  })
+
+  test('keeps the workspace usable and preserves unsupported or unupgradeable databases on startup', async () => {
+    await closeApp(app)
+    const databasePath = join(userDataDir, 'session-index.db')
+    await Promise.all([
+      rm(databasePath, { force: true }),
+      rm(`${databasePath}-wal`, { force: true }),
+      rm(`${databasePath}-shm`, { force: true }),
+    ])
+    prepareDatabase('--prepare-newer', databasePath)
+    const databaseBytesBeforeStartup = await readFile(databasePath)
+
+    await launchTestApp()
+    await expect(page.getByRole('status').filter({ hasText: 'This database was created by a newer MultiAgent version.' })).toBeVisible()
+    expect(await page.evaluate(() => window.ipc.invoke('database:get-status'))).toEqual({
+      available: false,
+      code: 'unsupported_schema',
+      message: 'This database was created by a newer MultiAgent version. Update the app to use session search and Jira mentions.',
+    })
+    await page.getByTitle(/Command palette/).click()
+    await page.getByPlaceholder('Search commands…').fill('New Shell Pane')
+    await page.keyboard.press('Enter')
+    const layoutPath = join(userDataDir, 'layout.json')
+    let alphaPaneId = ''
+    await expect.poll(async () => {
+      const saved = JSON.parse(await readFile(layoutPath, 'utf8')) as {
+        tabs: Array<{ id: string; rootNode?: { id?: string; ptyId?: string } }>
+      }
+      const alpha = saved.tabs.find((tab) => tab.id === 'tab-alpha')
+      alphaPaneId = alpha?.rootNode?.id ?? ''
+      return alpha?.rootNode?.ptyId ?? ''
+    }).not.toBe('')
+    await expect(page.locator(`[data-pane-id="${alphaPaneId}"] .xterm`)).toHaveCount(1)
+    expect((await readFile(databasePath)).equals(databaseBytesBeforeStartup)).toBe(true)
+
+    await closeApp(app)
+    await Promise.all([
+      rm(databasePath, { force: true }),
+      rm(`${databasePath}-wal`, { force: true }),
+      rm(`${databasePath}-shm`, { force: true }),
+    ])
+    prepareDatabase('--prepare-failed', databasePath)
+    await launchTestApp()
+    await expect(page.getByRole('status').filter({ hasText: 'The database file was preserved.' })).toBeVisible()
+    expect(await page.evaluate(() => window.ipc.invoke('database:get-status'))).toEqual({
+      available: false,
+      code: 'database_unavailable',
+      message: 'Local session and Jira data could not be opened safely. The database file was preserved.',
+    })
+    expect(await page.getByRole('button', { name: 'Alpha' }).isVisible()).toBe(true)
+    await expect(page.locator('.xterm')).toHaveCount(1)
+    prepareDatabase('--verify-failed', databasePath)
   })
 
   test('keeps valid sessions visible when one transcript is malformed', async () => {
@@ -1205,7 +1328,10 @@ test.describe('cold-start layout restore', () => {
       await expect(page.locator('.xterm')).toHaveCount(2)
     }
 
-    await page.waitForTimeout(250)
+    await expect.poll(async () => {
+      const trace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
+      return framedSequences(trace?.preloadChunks ?? [], trackedPtyId).length
+    }, { timeout: 15_000, intervals: [100, 250, 500] }).toBeGreaterThan(100)
     const after = await page.evaluate(
       (id) => window.ipc.invoke('pty:get-ready', id),
       trackedPtyId

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Jira Attachment Preview Demo</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="renderer.js" defer></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">STANDALONE EXPERIMENT</p>
+          <h1>Attachment preview</h1>
+          <p class="subtitle">A Jira-like comment with an image attachment displayed inline.</p>
+        </div>
+        <span class="fixture-label"><span></span> Local fixture</span>
+      </header>
+
+      <section class="notice" aria-label="Demo details">
+        <strong>Sandbox credentials are not used.</strong>
+        <span>The app requests this bundled fixture from a loopback-only endpoint, then previews the returned bytes from memory.</span>
+      </section>
+
+      <section class="comment" aria-labelledby="comment-title">
+        <div class="comment-heading">
+          <div class="avatar" aria-hidden="true">JD</div>
+          <div>
+            <h2 id="comment-title">Jordan D. <span>· Yesterday at 4:18 PM</span></h2>
+            <p>Comment on <a href="#issue">OPS-7421</a></p>
+          </div>
+        </div>
+        <p class="comment-copy">We captured the timeout path. The attached diagnostic diagram shows the request queue backing up after the database connection pool is exhausted.</p>
+
+        <div class="attachment-heading">
+          <div>
+            <h3>Attachments</h3>
+            <p id="attachment-name">incident-7421-diagnostic.svg · loading preview…</p>
+          </div>
+          <button class="text-button" id="reload-button" type="button">Reload preview</button>
+        </div>
+
+        <button class="preview-button" id="preview-button" type="button" aria-label="Open attachment preview" disabled>
+          <span class="loading" id="loading-state">Loading attachment…</span>
+          <img id="attachment-image" alt="Database timeout diagnostic diagram attachment" hidden />
+        </button>
+      </section>
+
+      <section class="request-details" aria-labelledby="request-title">
+        <div class="details-heading">
+          <h2 id="request-title">What this demonstrates</h2>
+          <span class="status-pill" id="status-pill">Requesting…</span>
+        </div>
+        <p id="request-summary">The main process makes an authenticated ranged request. The renderer receives image bytes through the preload bridge and creates a temporary Blob URL.</p>
+        <dl>
+          <div><dt>HTTP response</dt><dd id="http-status">Pending</dd></div>
+          <div><dt>Content range</dt><dd id="content-range">Pending</dd></div>
+          <div><dt>Attachment bytes</dt><dd id="byte-count">Pending</dd></div>
+          <div><dt>Saved to disk</dt><dd>No</dd></div>
+        </dl>
+      </section>
+      <p class="hint">Click the image to open it larger. Close the viewer with Escape or the close button.</p>
+    </main>
+
+    <dialog id="image-dialog" aria-label="Full-size attachment preview">
+      <div class="dialog-header">
+        <span>incident-7421-diagnostic.svg</span>
+        <button id="close-dialog" class="close-button" type="button" aria-label="Close preview">×</button>
+      </div>
+      <img id="dialog-image" alt="Full-size database timeout diagnostic diagram" />
+    </dialog>
+  </body>
+</html>

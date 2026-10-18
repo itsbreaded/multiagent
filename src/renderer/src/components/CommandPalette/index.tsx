@@ -3,6 +3,8 @@ import { overlayStyles, ui } from '../../styles/theme'
 import { SectionLabel } from '../common/SectionLabel'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
+import { useJiraStore } from '../../store/jira'
+import { useJiraMentionsStore } from '../../store/jiraMentions'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
 import { getCommands, CATEGORY_ORDER, type Command, type CommandContext } from '../../commands/registry'
 
@@ -15,6 +17,8 @@ export function CommandPalette(): JSX.Element {
   const toggleSidebar = usePanesStore((s) => s.toggleSidebar)
   const toggleSessionBrowser = usePanesStore((s) => s.toggleSessionBrowser)
   const openSettings = usePanesStore((s) => s.openSettings)
+  const selectJiraFeature = usePanesStore((s) => s.selectJiraFeature)
+  const setJiraFeatureVisible = usePanesStore((s) => s.setJiraFeatureVisible)
   const closePane = usePanesStore((s) => s.closePane)
   const zoomPane = usePanesStore((s) => s.zoomPane)
   const unzoom = usePanesStore((s) => s.unzoom)
@@ -27,8 +31,15 @@ export function CommandPalette(): JSX.Element {
   const openDirPickerForTab = usePanesStore((s) => s.openDirPickerForTab)
   const overlayFocusNonce = usePanesStore((s) => s.overlayFocusNonce)
   const activeTabId = usePanesStore((s) => s.activeTabId)
+  const isProjectWorkspace = usePanesStore((s) => s.activeDestination.kind === 'project')
   const tabs = usePanesStore((s) => s.tabs)
   const isDetachedWindow = usePanesStore((s) => s.isDetachedWindow)
+  const jiraMentionsEnabled = useJiraStore((s) => s.settings.mentionsEnabled)
+  const mentionsProjection = useJiraMentionsStore((s) => s.projection)
+  const mentionsSelection = useJiraMentionsStore((s) => s.selected)
+  const refreshJiraMentions = useJiraMentionsStore((s) => s.refresh)
+  const clearJiraMentionsCache = useJiraMentionsStore((s) => s.clearCache)
+  const setJiraMentionAction = useJiraMentionsStore((s) => s.setAction)
   const vsCodeAvailable = usePanesStore((s) => s.vsCodeAvailable)
   const hotkeyOverrides = useSettingsStore((s) => s.hotkeyOverrides)
   // spec 055: gate new-session commands on detected-and-enabled providers.
@@ -47,10 +58,13 @@ export function CommandPalette(): JSX.Element {
 
   const focusedPane = getFocusedPane()
   const activeTab = tabs.find((t) => t.id === activeTabId)
+  const selectedMentionItem = mentionsProjection.items.find((item) => item.issue.issueId === mentionsSelection?.issueId
+    && item.comment.commentId === mentionsSelection?.incomingCommentId)
 
   const ctx: CommandContext = {
     getFocusedPane,
     activeTabId,
+    isProjectWorkspace,
     activeTabDefaultCwd: activeTab?.defaultCwd,
     cwd: focusedPane?.cwd ?? window.homeDir ?? 'C:\\',
     isDetachedWindow,
@@ -69,6 +83,17 @@ export function CommandPalette(): JSX.Element {
     toggleSidebar,
     toggleSessionBrowser,
     openSettings,
+    jiraMentionsEnabled,
+    openJiraMentions: () => { setJiraFeatureVisible(true); selectJiraFeature() },
+    refreshJiraMentions,
+    clearJiraMentionsCache,
+    selectedJiraMention: selectedMentionItem && selectedMentionItem.state.state !== 'removed' ? {
+      issueId: selectedMentionItem.issue.issueId,
+      commentId: selectedMentionItem.comment.commentId,
+      state: selectedMentionItem.state.state,
+      disposition: selectedMentionItem.action?.disposition ?? null,
+    } : null,
+    setJiraMentionAction,
     setPaneCustomName,
     setPendingRenamePaneId,
     setPendingRenameTabId,

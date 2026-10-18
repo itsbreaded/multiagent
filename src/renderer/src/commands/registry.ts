@@ -2,10 +2,12 @@ import type { AgentKind, PaneLeaf, SplitDirection } from '../../../shared/types'
 import type { HotkeyId, HotkeyOverride } from '../utils/hotkeys'
 import type { SettingsSection } from '../store/settings'
 import { buildHotkeys } from '../utils/hotkeys'
+import type { JiraMentionsRefreshMode } from '../../../shared/jiraMentions'
 
 export interface CommandContext {
   getFocusedPane: () => PaneLeaf | undefined
   activeTabId: string
+  isProjectWorkspace: boolean
   activeTabDefaultCwd: string | undefined
   cwd: string
   isDetachedWindow: boolean
@@ -24,6 +26,12 @@ export interface CommandContext {
   toggleSidebar: () => void
   toggleSessionBrowser: () => void
   openSettings: (section?: SettingsSection) => void
+  jiraMentionsEnabled: boolean
+  openJiraMentions: () => void
+  refreshJiraMentions: (mode: JiraMentionsRefreshMode) => Promise<void>
+  clearJiraMentionsCache: () => Promise<void>
+  selectedJiraMention: { issueId: string; commentId: string; state: 'unanswered' | 'answered' | 'unknown'; disposition: 'dismissed' | 'snoozed' | null } | null
+  setJiraMentionAction: (input: { issueId: string; incomingCommentId: string; action: 'dismissed' | 'snoozed' | 'restored'; snoozeUntil?: number }) => Promise<void>
   setPaneCustomName: (paneId: string, name: string) => void
   setPendingRenamePaneId: (id: string | null) => void
   setPendingRenameTabId: (id: string | null) => void
@@ -94,6 +102,62 @@ const COMMANDS: Command[] = [
     run: (ctx) => { ctx.openSettings('jira') },
   },
   {
+    id: 'jiraMentions.open',
+    title: 'Open Jira Mentions',
+    category: 'View',
+    keywords: ['inbox', 'jira', 'unanswered', 'comments'],
+    enabled: (ctx) => ctx.jiraMentionsEnabled,
+    run: (ctx) => { ctx.openJiraMentions(); ctx.closeOverlays() },
+  },
+  {
+    id: 'jiraMentions.refresh',
+    title: 'Refresh Jira Mentions',
+    category: 'View',
+    keywords: ['inbox', 'jira', 'check'],
+    enabled: (ctx) => ctx.jiraMentionsEnabled,
+    run: (ctx) => { void ctx.refreshJiraMentions('manual'); ctx.closeOverlays() },
+  },
+  {
+    id: 'jiraMentions.fullRecheck',
+    title: 'Recheck All Jira Mentions',
+    category: 'View',
+    keywords: ['inbox', 'jira', 'full', 'all'],
+    enabled: (ctx) => ctx.jiraMentionsEnabled,
+    run: (ctx) => { void ctx.refreshJiraMentions('full'); ctx.closeOverlays() },
+  },
+  {
+    id: 'jiraMentions.clearCache',
+    title: 'Clear Jira Mentions Cache',
+    category: 'View',
+    keywords: ['inbox', 'jira', 'cache'],
+    enabled: (ctx) => ctx.jiraMentionsEnabled,
+    run: (ctx) => { void ctx.clearJiraMentionsCache(); ctx.closeOverlays() },
+  },
+  {
+    id: 'jiraMentions.dismissSelected',
+    title: 'Dismiss Selected Jira Mention',
+    category: 'View',
+    keywords: ['inbox', 'jira', 'comment'],
+    enabled: (ctx) => ctx.jiraMentionsEnabled && ctx.selectedJiraMention?.state === 'unanswered' && !ctx.selectedJiraMention.disposition,
+    run: (ctx) => {
+      const selected = ctx.selectedJiraMention
+      if (selected) void ctx.setJiraMentionAction({ issueId: selected.issueId, incomingCommentId: selected.commentId, action: 'dismissed' })
+      ctx.closeOverlays()
+    },
+  },
+  {
+    id: 'jiraMentions.restoreSelected',
+    title: 'Restore Selected Jira Mention',
+    category: 'View',
+    keywords: ['inbox', 'jira', 'comment', 'unsnooze'],
+    enabled: (ctx) => ctx.jiraMentionsEnabled && ctx.selectedJiraMention?.state === 'unanswered' && Boolean(ctx.selectedJiraMention.disposition),
+    run: (ctx) => {
+      const selected = ctx.selectedJiraMention
+      if (selected) void ctx.setJiraMentionAction({ issueId: selected.issueId, incomingCommentId: selected.commentId, action: 'restored' })
+      ctx.closeOverlays()
+    },
+  },
+  {
     id: 'settings.open.terminal',
     title: 'Settings: Terminal',
     category: 'General',
@@ -115,7 +179,7 @@ const COMMANDS: Command[] = [
     category: 'Panes',
     agentKind: 'claude',
     // spec 055: hide from the palette when Claude is disabled or its CLI is not on PATH.
-    enabled: (ctx) => ctx.isProviderOffered('claude'),
+    enabled: (ctx) => ctx.isProjectWorkspace && ctx.isProviderOffered('claude'),
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'claude'); ctx.closeOverlays() },
   },
   {
@@ -123,7 +187,7 @@ const COMMANDS: Command[] = [
     title: 'New Codex Session',
     category: 'Panes',
     agentKind: 'codex',
-    enabled: (ctx) => ctx.isProviderOffered('codex'),
+    enabled: (ctx) => ctx.isProjectWorkspace && ctx.isProviderOffered('codex'),
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'codex'); ctx.closeOverlays() },
   },
   {
@@ -131,7 +195,7 @@ const COMMANDS: Command[] = [
     title: 'New OpenCode Session',
     category: 'Panes',
     agentKind: 'opencode',
-    enabled: (ctx) => ctx.isProviderOffered('opencode'),
+    enabled: (ctx) => ctx.isProjectWorkspace && ctx.isProviderOffered('opencode'),
     run: (ctx) => { ctx.newSession(ctx.cwd, 'vertical', 'opencode'); ctx.closeOverlays() },
   },
   {
@@ -139,6 +203,7 @@ const COMMANDS: Command[] = [
     title: 'New Shell Pane',
     category: 'Panes',
     shellIcon: true,
+    enabled: (ctx) => ctx.isProjectWorkspace,
     run: (ctx) => { ctx.addShellPane(ctx.cwd); ctx.closeOverlays() },
   },
   {
@@ -272,6 +337,7 @@ const COMMANDS: Command[] = [
     title: 'New Tab',
     category: 'Tabs',
     shortcut: (ctx) => buildHotkeys(ctx.hotkeyOverrides).newTab.display,
+    enabled: (ctx) => ctx.isProjectWorkspace,
     run: (ctx) => { ctx.addTab(); ctx.closeOverlays() },
   },
   {
@@ -279,7 +345,7 @@ const COMMANDS: Command[] = [
     title: 'Close Tab',
     category: 'Tabs',
     shortcut: (ctx) => buildHotkeys(ctx.hotkeyOverrides).closeTab.display,
-    enabled: (ctx) => ctx.tabCount > 1,
+    enabled: (ctx) => ctx.isProjectWorkspace && ctx.tabCount > 1,
     run: (ctx) => { ctx.closeTab(ctx.activeTabId); ctx.closeOverlays() },
   },
   {
@@ -287,6 +353,7 @@ const COMMANDS: Command[] = [
     title: 'Rename Tab',
     category: 'Tabs',
     keywords: ['label', 'name', 'project'],
+    enabled: (ctx) => ctx.isProjectWorkspace,
     run: (ctx) => {
       ctx.closeOverlays()
       ctx.setPendingRenameTabId(ctx.activeTabId)
@@ -297,6 +364,7 @@ const COMMANDS: Command[] = [
     title: 'Change Project Directory',
     category: 'Tabs',
     keywords: ['cwd', 'folder', 'project', 'root', 'repair', 'move'],
+    enabled: (ctx) => ctx.isProjectWorkspace,
     run: (ctx) => {
       ctx.closeOverlays()
       ctx.openDirPickerForTab(ctx.activeTabId)

@@ -6,6 +6,8 @@ import { installMockIpc } from '../../../../../tests/mockIpc'
 import { usePanesStore } from '../../store/panes'
 import { useSettingsStore } from '../../store/settings'
 import { useJiraStore } from '../../store/jira'
+import { useJiraMentionsStore } from '../../store/jiraMentions'
+import jiraMentionsIcon from '../../assets/notifications.png'
 import { isIdleAgentSuspensionEligible } from '../../store/idleAgentSuspension'
 import { TabSections } from './TabSections'
 import { TAB_DRAG_MIME } from '../../utils/tabDrag'
@@ -16,7 +18,7 @@ beforeEach(() => {
   installMockIpc()
   useSettingsStore.setState({ showGitBranchBadges: false })
   useJiraStore.setState({
-    settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false },
+    settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
     hydrated: false,
     configVersion: 0,
     labels: {},
@@ -24,6 +26,10 @@ beforeEach(() => {
     rows: {},
     suppressedInitialTabs: {},
   })
+  useJiraMentionsStore.setState((state) => ({
+    projection: { ...state.projection, enabled: false, identityVerified: false, status: 'not-configured', items: [], activeCount: 0 },
+    selected: null, detail: null, detailLoading: false, drafts: {}, lastReplyResult: null,
+  }))
 })
 
 afterEach(() => {
@@ -181,6 +187,41 @@ describe('TabSections - agent status dot (spec 032)', () => {
 })
 
 describe('TabSections - ownership-scoped reorder', () => {
+  it('selects the enabled Jira destination from the shared sidebar list', () => {
+    const alpha = tabWithLabel('alpha', 'Alpha')
+    usePanesStore.setState({ tabs: [alpha], activeTabId: alpha.id, activeDestination: { kind: 'project', tabId: alpha.id } })
+    useJiraMentionsStore.setState((state) => ({ projection: { ...state.projection, enabled: true, identityVerified: true, status: 'ready' } }))
+    act(() => { usePanesStore.getState().setJiraFeatureVisible(true) })
+
+    render(<TabSections />)
+    const featureButton = screen.getByRole('button', { name: 'Jira mentions' })
+    expect(featureButton.querySelector('img')).toHaveAttribute('src', jiraMentionsIcon)
+    fireEvent.click(featureButton)
+
+    expect(usePanesStore.getState().activeDestination).toEqual({ kind: 'feature', featureId: 'jira-mentions' })
+    expect(usePanesStore.getState().sidebarOrder[0]).toBe('feature:jira-mentions')
+    expect(usePanesStore.getState().tabs).toEqual([alpha])
+  })
+
+  it('reorders a project folder around the Jira feature without changing project tabs', () => {
+    const alpha = tabWithLabel('alpha', 'Alpha')
+    const beta = tabWithLabel('beta', 'Beta')
+    usePanesStore.setState({ tabs: [alpha, beta], activeTabId: alpha.id, activeDestination: { kind: 'project', tabId: alpha.id } })
+    useJiraMentionsStore.setState((state) => ({ projection: { ...state.projection, enabled: true, identityVerified: true, status: 'ready' } }))
+    act(() => { usePanesStore.getState().setJiraFeatureVisible(true) })
+    render(<TabSections />)
+
+    const transfer = tabDataTransfer()
+    fireEvent.dragStart(tabHeader('Beta'), { dataTransfer: transfer })
+    expect(transfer.types).toContain('application/x-multiagent-tab-reorder')
+    const featureButton = screen.getByRole('button', { name: 'Jira mentions' })
+    act(() => { dispatchTabDrag(featureButton, 'drop', transfer, -1) })
+
+    const order = usePanesStore.getState().sidebarOrder
+    expect(order.indexOf('project:beta')).toBeLessThan(order.indexOf('feature:jira-mentions'))
+    expect(usePanesStore.getState().tabs.map((tab) => tab.id)).toEqual(['alpha', 'beta'])
+  })
+
   it('hides detached proxies and reorders only visible local tabs', () => {
     const localBefore = tabWithLabel('local-before', 'Local before')
     const detached = tabWithLabel('detached', 'Detached', true)
@@ -412,7 +453,7 @@ describe('TabSections - Jira status badges', () => {
     usePanesStore.setState({ tabs: [tab], activeTabId: tab.id })
     useJiraStore.setState({
       hydrated: true,
-      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
       projects: { [tab.id]: { tabId: tab.id, label: 'DZ-1234', issueKey: 'DZ-1234', prefix: 'DZ-' } },
       rows: {
         [tab.id]: {
@@ -443,7 +484,7 @@ describe('TabSections - Jira status badges', () => {
     usePanesStore.setState({ tabs: [tab], activeTabId: tab.id })
     useJiraStore.setState({
       hydrated: true,
-      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+      settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
       projects: { [tab.id]: { tabId: tab.id, label: 'DZ-1234', issueKey: 'DZ-1234', prefix: 'DZ-' } },
       rows: {
         [tab.id]: {

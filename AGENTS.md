@@ -150,6 +150,8 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 
 - Layout auto-restored on startup **without prompting**; StrictMode guard ref + `layoutReady`
   gate. Don't reintroduce a restore prompt.
+- Feature destinations share the sidebar order and persisted workspace destination; keep
+  project `Tab` ownership intact and the hydrated `PaneGrid` mounted while a feature is active.
 - Saved layout includes `activeTabId`/`sidebarSectionOpen`/`sidebarPanelSizes`; saved tabs
   normalize to `detached:false`. Hydrate only the active tab; keep hydrated tabs mounted while
   inactive. New resizable/collapsible sidebar panels use a stable id + `sidebarPanelSizes`.
@@ -191,6 +193,8 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   first (SQLite overrides); Claude copies/merges the transcript dir, Codex doesn't; don't
   rewrite whole JSONL for normal repair. `sessions:repair-cwd` rewrites `layout.json` + `.bak`
   + broadcasts `layout:cwd-repaired`.
+- `ApplicationDatabase` is the sole `session-index.db` owner; subsystem migrations and rebuilds
+  must preserve the other subsystem's tables and must never recreate the whole file on a schema error.
 - Claude id is known at launch (`claude --session-id <uuid>`); Codex id comes only from the
   managed `SessionStart` hook. **No file-poll scanner**, no scanner fallback, no
   `--dangerously-bypass-hook-trust`. Don't reintroduce Claude filesystem matching for panes we
@@ -232,24 +236,34 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 
 ### Jira sidebar status badges → [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md)
 
-- Keep Jira persistence and network access main-owned; the settings form may hold
+- Keep Jira persistence and network access main-owned; status badge lookups stay
+  GET-only and read-only, with no polling or writes. The settings form may hold
   a decrypted token only transiently for its standard password Show/Hide control.
-  Never persist that value in renderer state, token persistence is encrypted/
-  fail-closed, and Jira status lookups are GET-only with no polling, writes, or
-  automatic tab closure.
-- Route badge activation through main-owned issue-key URL construction and the
-  external-browser allowlist; never expose credential-bearing URLs or trace args.
+  Never persist that value in renderer state; token persistence is encrypted and
+  fail-closed. The mentions inbox may poll when enabled and may create a comment
+  only after an explicit user Post reply action.
+- Route Jira issue links through main-owned issue-key construction and cached
+  attachment-ID lookup/URL validation; external opens stay allowlisted, and raw
+  URLs never cross IPC or traces.
+- Inline Jira comment images must resolve through cached attachment IDs and a
+  bounded same-site HTTPS fetch in main; never pass attachment URLs or tokens to the renderer.
+- Keep mention discovery, cache publication, and reply validation main-owned; preserve the
+  shared `session-index.db` on Jira/session migration failures and scope cache clearing to Jira tables.
+- Constrain mention discovery JQL by the authenticated account ID comment term and update lower bound;
+  never enumerate every recently updated issue. Verify candidates against structured ADF.
+- Reply to unrestricted comments when Jira omits platform visibility; preserve Service Desk public/internal
+  and any group/role restriction, and block only audiences the app cannot verify.
 
 ## Docs index
 
 | File | Covers |
 |---|---|
 | [`docs/pty-and-terminals.md`](docs/pty-and-terminals.md) | PTY isolation, shell integration (Win/Unix), process snapshot, resize, agent launch shape, no-flow-control + no-PATH-rewrite root cause, terminal renderer selection, scrollback |
-| [`docs/multi-window-and-layout.md`](docs/multi-window-and-layout.md) | Pane tree model, label computation, startup restore + hydration, multi-window ownership, transfer-ack semantics, shutdown state collection, renderer stores |
-| [`docs/sessions.md`](docs/sessions.md) | Session indexing, deep search, cwd repair, session detection states, startup-resume flow, MCP injection + browser panel |
+| [`docs/multi-window-and-layout.md`](docs/multi-window-and-layout.md) | Pane tree model, label computation, startup restore + hydration, feature destinations, multi-window ownership, transfer-ack semantics, shutdown state collection, renderer stores |
+| [`docs/sessions.md`](docs/sessions.md) | Session indexing, shared application database, deep search, cwd repair, session detection states, startup-resume flow, MCP injection + browser panel |
 | [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md) | Hook-based session-id linking: the managed-hook install, Claude vs Codex differences, the report server, failure modes, file map |
 | [`docs/testing.md`](docs/testing.md) | Vitest projects, postinstall/native rebuild, the PATH-rewrite guard, testable extractions, Zustand mock, determinism, E2E, coverage ratchets |
 | [`docs/packaging-and-release.md`](docs/packaging-and-release.md) | Per-OS `dist` output, signing/notarization deferral, icons, asar/native modules, auto-update, release publish flow, `patch-package` |
-| [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md) | Jira sidebar status badge ownership, encrypted credentials, lookup lifecycle, stale state, trace privacy, and external links |
+| [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md) | Jira status badges and unanswered-mentions inbox ownership, shared cache, encrypted credentials, refresh/reply lifecycle, trace privacy, and external links |
 | [`docs/writing-specs.md`](docs/writing-specs.md) | Behavioral contracts, acceptance scenarios, definition of done, and spec lifecycle |
 | [`docs/writing-plans.md`](docs/writing-plans.md) | Detailed implementation-plan structure, lifecycle, task quality, and blind pre-execution review |

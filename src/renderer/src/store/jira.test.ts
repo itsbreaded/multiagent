@@ -5,7 +5,7 @@ import { useJiraStore } from './jira'
 const TEST_BASE_URL = 'https://jira.example.com'
 
 const defaultState = {
-  settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false },
+  settings: { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
   hydrated: false,
   configVersion: 0,
   labels: {},
@@ -35,7 +35,7 @@ describe('useJiraStore', () => {
   it('looks up each matching row once and excludes non-matches', async () => {
     const ipc = installMockIpc()
     ipc.invoke.mockImplementation(async (channel: string, value?: string) => {
-      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true }
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 }
       if (channel === 'jira:fetch-status') return success(value as string)
       return { ok: true }
     })
@@ -54,7 +54,7 @@ describe('useJiraStore', () => {
   it('performs one initial lookup after the create flow renames Tab N to a matching key', async () => {
     const ipc = installMockIpc()
     ipc.invoke.mockImplementation(async (channel: string, value?: string) => {
-      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true }
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 }
       if (channel === 'jira:fetch-status') return success(value as string)
       return { ok: true }
     })
@@ -68,8 +68,8 @@ describe('useJiraStore', () => {
   it('does not fetch implicitly when settings create a new match', async () => {
     const ipc = installMockIpc()
     ipc.invoke.mockImplementation(async (channel: string) => {
-      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false }
-      if (channel === 'jira:save-settings') return { ok: true, settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true } }
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 }
+      if (channel === 'jira:save-settings') return { ok: true, settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 } }
       return success('DZ-1234')
     })
     await useJiraStore.getState().hydrateSettings()
@@ -85,8 +85,8 @@ describe('useJiraStore', () => {
   it('refreshes a renamed matching ticket after settings save suppresses initial refreshes', async () => {
     const ipc = installMockIpc()
     ipc.invoke.mockImplementation(async (channel: string, value?: string) => {
-      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false }
-      if (channel === 'jira:save-settings') return { ok: true, settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true } }
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 }
+      if (channel === 'jira:save-settings') return { ok: true, settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 } }
       if (channel === 'jira:fetch-status') return success(value as string)
       return { ok: true }
     })
@@ -103,7 +103,7 @@ describe('useJiraStore', () => {
     const ipc = installMockIpc()
     let requests = 0
     ipc.invoke.mockImplementation(async (channel: string, value?: string) => {
-      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true }
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 }
       if (channel === 'jira:fetch-status') {
         requests += 1
         return requests === 1 ? success(value as string, 'Closed') : { ok: false, issueKey: value, code: 'network', message: 'Jira could not be reached.' }
@@ -121,7 +121,7 @@ describe('useJiraStore', () => {
     const ipc = installMockIpc()
     const pending: Array<(value: unknown) => void> = []
     ipc.invoke.mockImplementation(async (channel: string) => {
-      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true }
+      if (channel === 'jira:get-settings') return { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 }
       if (channel === 'jira:fetch-status') return new Promise((resolve) => pending.push(resolve))
       return { ok: true }
     })
@@ -142,7 +142,7 @@ describe('useJiraStore', () => {
   it('does not create a polling timer', async () => {
     vi.useFakeTimers()
     const ipc: MockIpc = installMockIpc(createMockIpc())
-    ipc.invoke.mockResolvedValue({ baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false })
+    ipc.invoke.mockResolvedValue({ baseUrl: TEST_BASE_URL, email: '', patterns: [], hasToken: false, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 })
     await useJiraStore.getState().hydrateSettings()
     useJiraStore.getState().syncProjects([{ tabId: 'one', label: 'DZ-1234' }])
     expect(vi.getTimerCount()).toBe(0)

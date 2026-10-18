@@ -13,17 +13,20 @@ import { SpawnChoiceMenu, spawnChoiceLabel, type SpawnChoice } from '../SpawnCho
 import { useGitBranch } from '../../hooks/useGitBranch'
 import { useSettingsStore } from '../../store/settings'
 import { useJiraStore } from '../../store/jira'
+import { useJiraMentionsStore } from '../../store/jiraMentions'
 import { border, menuStyles, sidebarStyles, ui } from '../../styles/theme'
 import { AgentIcon, ShellIcon } from '../AgentIcon'
 import { isAgentPaneDisconnected, StatusDot } from '../PaneHeader/StatusDot'
 import closeIcon from '../../assets/close.png'
 import threeDotIcon from '../../assets/threedot.png'
 import addBoxIcon from '../../assets/addbox.png'
+import jiraMentionsIcon from '../../assets/notifications.png'
 import { PaneSplitDropTarget } from '../PaneGrid/PaneSplitDropTarget'
 import { JiraStatusBadge } from './JiraStatusBadge'
 
 const DEFAULT_CWD = window.homeDir ?? (navigator.userAgent.includes('Windows') ? 'C:\\' : '/')
 const TAB_REORDER_MIME = 'application/x-multiagent-tab-reorder'
+const FEATURE_REORDER_MIME = 'application/x-multiagent-feature-reorder'
 
 export function TabSections(): JSX.Element {
   const tabs = usePanesStore((s) => s.tabs)
@@ -51,14 +54,22 @@ export function TabSections(): JSX.Element {
   const effectiveActiveWindowId = pendingFocusTarget?.windowId ?? activeWindowId
   const localWindowActive = effectiveActiveWindowId === null || effectiveActiveWindowId === windowId
   const reorderTab = usePanesStore((s) => s.reorderTab)
+  const sidebarOrder = usePanesStore((s) => s.sidebarOrder)
+  const activeDestination = usePanesStore((s) => s.activeDestination)
+  const jiraFeatureVisible = usePanesStore((s) => s.jiraFeatureVisible)
+  const selectJiraFeature = usePanesStore((s) => s.selectJiraFeature)
+  const reorderSidebarEntry = usePanesStore((s) => s.reorderSidebarEntry)
+  const jiraTrackingEnabled = useJiraMentionsStore((s) => s.projection.enabled)
+  const jiraMentionCount = useJiraMentionsStore((s) => s.projection.activeCount)
   const pendingRenameTabId = usePanesStore((s) => s.pendingRenameTabId)
   const setPendingRenameTabId = usePanesStore((s) => s.setPendingRenameTabId)
   const jiraRows = useJiraStore((s) => s.rows)
   const jiraProjects = useJiraStore((s) => s.projects)
   const refreshJiraTab = useJiraStore((s) => s.refreshTab)
   const visibleTabs = useMemo(
-    () => tabs.filter((tab) => isTabVisibleInCurrentWindow(isDetachedWindow, tab)),
-    [tabs, isDetachedWindow],
+    () => tabs.filter((tab) => isTabVisibleInCurrentWindow(isDetachedWindow, tab))
+      .sort((a, b) => mixedOrderIndex(`project:${a.id}`) - mixedOrderIndex(`project:${b.id}`)),
+    [tabs, isDetachedWindow, sidebarOrder],
   )
 
   const tabLabels = useMemo(() => computeLabels(visibleTabs, sessions), [visibleTabs, sessions])
@@ -75,6 +86,7 @@ export function TabSections(): JSX.Element {
   const [renameValue, setRenameValue] = useState('')
   const [dropTabId, setDropTabId] = useState<string | null>(null)
   const [tabDropTabId, setTabDropTabId] = useState<string | null>(null)
+  const [featureDropBeforeKey, setFeatureDropBeforeKey] = useState<string | null | undefined>(undefined)
   // undefined = no reorder drag; null = insert at end; string = insert before that tab id
   const [reorderInsertBeforeId, setReorderInsertBeforeId] = useState<string | null | undefined>(undefined)
   const draggedTabRef = useRef<Tab | null>(null)
@@ -86,6 +98,13 @@ export function TabSections(): JSX.Element {
   const dirPickerTab = dirPickerTabId ? visibleTabs.find((t) => t.id === dirPickerTabId) : null
   const spawnMenuTab = spawnMenu ? visibleTabs.find((t) => t.id === spawnMenu.tabId) : null
   const dirPickerSpawnTab = dirPickerSpawn ? visibleTabs.find((t) => t.id === dirPickerSpawn.tabId) : null
+  const jiraFeatureEnabled = jiraFeatureVisible && jiraTrackingEnabled
+  const featureEntryKey = 'feature:jira-mentions'
+
+  function mixedOrderIndex(key: string): number {
+    const index = sidebarOrder.indexOf(key)
+    return index < 0 ? sidebarOrder.length : index
+  }
 
   function startRename(tabId: string) {
     setRenameValue(tabLabels.get(tabId) ?? '')
@@ -218,7 +237,7 @@ export function TabSections(): JSX.Element {
       <div
         data-sidebar-tab-container="true"
         // Keep the trailing part of the scroll area as a real append target.
-        style={{ minHeight: '100%' }}
+        style={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}
         onDragEnter={(e) => {
           // Drag-enter/over bubbles from section children. Only the empty
           // trailing area should reset the insertion point to append.
@@ -303,6 +322,7 @@ export function TabSections(): JSX.Element {
         return (
           <SidebarSection
             key={tab.id}
+            style={{ order: mixedOrderIndex(`project:${tab.id}`) }}
             title={label}
             count={leaves.length > 1 ? leaves.length : undefined}
             open={open}
@@ -398,6 +418,15 @@ export function TabSections(): JSX.Element {
               setReorderInsertBeforeId(undefined)
             }}
             onHeaderDragOver={(e) => {
+              if (e.dataTransfer.types.includes(FEATURE_REORDER_MIME)) {
+                e.preventDefault()
+                e.stopPropagation()
+                const rect = e.currentTarget.getBoundingClientRect()
+                const beforeKey = e.clientY - rect.top < rect.height / 2 ? `project:${tab.id}` : sidebarOrder[mixedOrderIndex(`project:${tab.id}`) + 1] ?? null
+                setFeatureDropBeforeKey(beforeKey)
+                e.dataTransfer.dropEffect = 'move'
+                return
+              }
               const tabPayload = tabPayloadFromEvent(e)
               if (tabPayload && !isLocalTabDrag(tabPayload)) {
                 e.preventDefault()
@@ -436,6 +465,16 @@ export function TabSections(): JSX.Element {
               }
             }}
             onHeaderDrop={(e) => {
+              if (e.dataTransfer.types.includes(FEATURE_REORDER_MIME)) {
+                e.preventDefault()
+                e.stopPropagation()
+                try {
+                  const { entryKey } = JSON.parse(e.dataTransfer.getData(FEATURE_REORDER_MIME)) as { entryKey: string }
+                  reorderSidebarEntry(entryKey, featureDropBeforeKey ?? `project:${tab.id}`)
+                } catch {}
+                setFeatureDropBeforeKey(undefined)
+                return
+              }
               const tabPayload = tabPayloadFromEvent(e)
               if (tabPayload) {
                 e.preventDefault()
@@ -491,6 +530,79 @@ export function TabSections(): JSX.Element {
           </SidebarSection>
         )
       })}
+      {jiraFeatureEnabled && (
+        <button
+          key={featureEntryKey}
+          type="button"
+          draggable
+          title="Jira mentions"
+          aria-label={`Jira mentions${jiraMentionCount ? `, ${jiraMentionCount} unanswered` : ''}`}
+          aria-current={activeDestination.kind === 'feature' ? 'page' : undefined}
+          onClick={selectJiraFeature}
+          onDragStart={(event) => {
+            event.dataTransfer.setData(FEATURE_REORDER_MIME, JSON.stringify({ entryKey: featureEntryKey }))
+            event.dataTransfer.effectAllowed = 'move'
+            tabDragHandledRef.current = false
+          }}
+          onDragOver={(event) => {
+            const types = event.dataTransfer.types
+            if (!types.includes(FEATURE_REORDER_MIME) && !types.includes(TAB_REORDER_MIME) && !types.includes(TAB_DRAG_MIME)) return
+            event.preventDefault()
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            const featureIndex = mixedOrderIndex(featureEntryKey)
+            const beforeKey = event.clientY - rect.top < rect.height / 2
+              ? featureEntryKey
+              : sidebarOrder[featureIndex + 1] ?? null
+            setFeatureDropBeforeKey(beforeKey)
+            event.dataTransfer.dropEffect = 'move'
+          }}
+          onDragEnd={() => setFeatureDropBeforeKey(undefined)}
+          onDrop={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            const featureIndex = mixedOrderIndex(featureEntryKey)
+            const beforeKey = featureDropBeforeKey !== undefined ? featureDropBeforeKey
+              : event.clientY - rect.top < rect.height / 2 ? featureEntryKey : sidebarOrder[featureIndex + 1] ?? null
+            if (event.dataTransfer.types.includes(FEATURE_REORDER_MIME)) {
+              try {
+                const { entryKey } = JSON.parse(event.dataTransfer.getData(FEATURE_REORDER_MIME)) as { entryKey: string }
+                reorderSidebarEntry(entryKey, beforeKey)
+              } catch {}
+            } else if (event.dataTransfer.types.includes(TAB_REORDER_MIME)) {
+              try {
+                const { tabId } = JSON.parse(event.dataTransfer.getData(TAB_REORDER_MIME)) as { tabId: string }
+                reorderSidebarEntry(`project:${tabId}`, beforeKey)
+                tabDragHandledRef.current = true
+              } catch {}
+            } else {
+              const payload = tabPayloadFromEvent(event)
+              if (payload && !isLocalTabDrag(payload)) {
+                const projectIndex = beforeKey === null
+                  ? visibleTabs.length
+                  : visibleTabs.filter((tab) => mixedOrderIndex(`project:${tab.id}`) < mixedOrderIndex(beforeKey)).length
+                absorbTab(payload, projectIndex)
+              } else if (payload) {
+                reorderSidebarEntry(`project:${payload.tab.id}`, beforeKey)
+                tabDragHandledRef.current = true
+              }
+            }
+            setFeatureDropBeforeKey(undefined)
+          }}
+          style={{
+            order: mixedOrderIndex(featureEntryKey), display: 'flex', alignItems: 'center', gap: 8, width: 'calc(100% - 8px)',
+            margin: '3px 4px', padding: '7px 12px', borderRadius: 5, textAlign: 'left', cursor: 'pointer',
+            background: activeDestination.kind === 'feature' ? ui.color.control : 'transparent',
+            border: `1px solid ${featureDropBeforeKey !== undefined ? ui.color.accent : 'transparent'}`,
+            color: activeDestination.kind === 'feature' ? ui.color.text : ui.color.textMuted, fontSize: 11,
+          }}
+        >
+          <img src={jiraMentionsIcon} alt="" style={{ width: 14, height: 14, opacity: 0.8 }} />
+          <span style={{ flex: 1 }}>Jira mentions</span>
+          {jiraMentionCount > 0 && <span style={{ color: ui.color.accent, fontSize: 10 }}>{jiraMentionCount}</span>}
+        </button>
+      )}
       </div>
 
       {tabMenu && (

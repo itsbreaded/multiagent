@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, OverlayKind, OverlayRequestResult, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection, TerminalHostStatus } from '../../../shared/types'
+import type { AgentKind, AgentStatusState, CwdRepairMapping, FocusTarget, OverlayKind, OverlayRequestResult, Tab, PaneNode, PaneLeaf, PaneType, SpawnInTabPayload, SplitDirection, TerminalHostStatus, WorkspaceDestination } from '../../../shared/types'
+import { JIRA_FEATURE_KEY, normalizeDestination, normalizeSidebarOrder, projectOrderKey, syncProjectOrder } from '../../../shared/workspaceNavigation'
 import {
   uuid, makeLeaf, makeSplit, findLeaf, replaceNode, removeLeaf, swapLeaves,
   updateRatioInTree, updateLeaf, updateCwdsInTree, collectLeafIds, findLeafBySessionId,
@@ -364,6 +365,12 @@ export function tabSidebarSectionId(tabId: string): string {
 interface PanesStore {
   tabs: Tab[]
   activeTabId: string
+  activeDestination: WorkspaceDestination
+  sidebarOrder: string[]
+  jiraFeatureVisible: boolean
+  selectJiraFeature: () => void
+  setJiraFeatureVisible: (visible: boolean) => void
+  reorderSidebarEntry: (entryKey: string, beforeEntryKey: string | null) => void
   windowId: number | null
   setWindowId: (id: number) => void
   isDetachedWindow: boolean
@@ -469,7 +476,7 @@ interface PanesStore {
   setPaneCustomName: (paneId: string, name: string) => void
 
   // Layout persistence
-  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean> }) => Promise<void>
+  applyLayout: (saved: { tabs: Tab[]; sidebarWidth: number; sidebarOpen: boolean; sidebarBottomHeight?: number; sidebarPanelSizes?: Record<string, number>; activeTabId?: string; sidebarSectionOpen?: Record<string, boolean>; tabSectionOpen?: Record<string, boolean>; activeDestination?: WorkspaceDestination; sidebarOrder?: string[]; jiraFeatureVisible?: boolean }) => Promise<void>
 
   // UI toggles
   toggleSidebar: () => void
@@ -709,6 +716,7 @@ async function spawnPaneCore(get: PanesGet, set: PanesSet, args: SpawnPaneCoreAr
     return {
       tabs,
       activeTabId: args.tabId,
+      activeDestination: { kind: 'project', tabId: args.tabId },
       hydratedTabIds: markHydrated(s.hydratedTabIds, args.tabId),
       sidebarSectionOpen: {
         ...s.sidebarSectionOpen,
@@ -733,6 +741,28 @@ async function spawnPaneCore(get: PanesGet, set: PanesSet, args: SpawnPaneCoreAr
 export const usePanesStore = create<PanesStore>((set, get) => ({
   tabs: [],
   activeTabId: '',
+  activeDestination: { kind: 'project', tabId: '' },
+  sidebarOrder: [],
+  jiraFeatureVisible: false,
+  selectJiraFeature: () => set((s) => {
+    const sidebarOrder = normalizeSidebarOrder(s.sidebarOrder, s.tabs, true)
+    return { jiraFeatureVisible: true, sidebarOrder, activeDestination: { kind: 'feature', featureId: 'jira-mentions' } }
+  }),
+  setJiraFeatureVisible: (visible) => set((s) => {
+    const sidebarOrder = normalizeSidebarOrder(s.sidebarOrder, s.tabs, visible || s.sidebarOrder.includes(JIRA_FEATURE_KEY))
+    const activeDestination = !visible && s.activeDestination.kind === 'feature'
+      ? { kind: 'project' as const, tabId: s.tabs.some((tab) => tab.id === s.activeTabId) ? s.activeTabId : (s.tabs.at(-1)?.id ?? '') }
+      : s.activeDestination
+    return { jiraFeatureVisible: visible, sidebarOrder, activeDestination }
+  }),
+  reorderSidebarEntry: (entryKey, beforeEntryKey) => set((s) => {
+    const keys = normalizeSidebarOrder(s.sidebarOrder, s.tabs, s.sidebarOrder.includes(JIRA_FEATURE_KEY))
+    if (!keys.includes(entryKey) || entryKey === beforeEntryKey) return s
+    const next = keys.filter((key) => key !== entryKey)
+    const index = beforeEntryKey === null ? next.length : next.indexOf(beforeEntryKey)
+    next.splice(index < 0 ? next.length : index, 0, entryKey)
+    return { sidebarOrder: next }
+  }),
   windowId: null,
   setWindowId: (id) => set({ windowId: id }),
   isDetachedWindow: false,
@@ -758,6 +788,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set({
       tabs: [seededTab],
       activeTabId: seededTab.id,
+      activeDestination: { kind: 'project', tabId: seededTab.id },
       isDetachedWindow: true,
       sidebarOpen: true,
       hydratedTabIds: {},
@@ -815,6 +846,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs,
         activeTabId: base.id,
+        activeDestination: { kind: 'project', tabId: base.id },
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [base.id]),
         sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(base.id)]: true },
         localFocusArmed: true,
@@ -1013,7 +1045,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         removedIds
       )
 
-      return { tabs, detachedWindowTabIds, detachedWindowActiveTabIds, activeTabId: newActiveTabId, hydratedTabIds }
+      return {
+        tabs, detachedWindowTabIds, detachedWindowActiveTabIds, activeTabId: newActiveTabId, hydratedTabIds,
+        ...(s.activeDestination.kind === 'project' ? { activeDestination: { kind: 'project' as const, tabId: newActiveTabId } } : {}),
+      }
     })
     hydrateTabForActivation(get().activeTabId, previousHydrated)
   },
@@ -1116,6 +1151,8 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => ({
       tabs: [...s.tabs, tab],
       activeTabId: tab.id,
+      activeDestination: { kind: 'project', tabId: tab.id },
+      sidebarOrder: [...normalizeSidebarOrder(s.sidebarOrder, s.tabs, s.sidebarOrder.includes(JIRA_FEATURE_KEY)), projectOrderKey(tab.id)],
       hydratedTabIds: markHydrated(s.hydratedTabIds, tab.id),
       sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
     }))
@@ -1159,12 +1196,18 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const tabs = s.tabs.filter((t) => t.id !== tabId)
       const activeTabId =
         s.activeTabId === tabId ? (tabs[tabs.length - 1]?.id ?? '') : s.activeTabId
+      const activeDestination = s.activeDestination.kind === 'project' && s.activeDestination.tabId === tabId
+        ? { kind: 'project' as const, tabId: activeTabId }
+        : s.activeDestination
       const { [tabSidebarSectionId(tabId)]: _closed, [tabId]: _legacyClosed, ...sidebarSectionOpen } = s.sidebarSectionOpen
       const hydratedTabIds = removeHydratedTabs(
         s.hydratedTabIds,
         [tabId]
       )
-      return { tabs, activeTabId, hydratedTabIds, sidebarSectionOpen }
+      return {
+        tabs, activeTabId, activeDestination, hydratedTabIds, sidebarSectionOpen,
+        sidebarOrder: normalizeSidebarOrder(s.sidebarOrder.filter((key) => key !== projectOrderKey(tabId)), tabs, s.sidebarOrder.includes(JIRA_FEATURE_KEY)),
+      }
     })
     scheduleSessionRefreshAfter(teardown.killPromises, teardown.needsSessionRefresh)
     hydrateTabForActivation(get().activeTabId, previousHydrated)
@@ -1193,9 +1236,15 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const closedFocusWindow = windowId !== undefined
         ? (target: { windowId: number } | null): boolean => target?.windowId === windowId
         : () => false
+      const previousDestination = s.activeDestination
+      const activeDestination = previousDestination.kind === 'project' && !tabs.some((tab) => tab.id === previousDestination.tabId)
+        ? { kind: 'project' as const, tabId: activeTabId }
+        : previousDestination
       return {
         tabs,
         activeTabId,
+        activeDestination,
+        sidebarOrder: normalizeSidebarOrder(s.sidebarOrder.filter((key) => key !== projectOrderKey(tabId)), tabs, s.sidebarOrder.includes(JIRA_FEATURE_KEY)),
         hydratedTabIds,
         sidebarSectionOpen,
         detachedWindowTabIds,
@@ -1272,6 +1321,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         : null
       return {
         activeTabId: tabId,
+        activeDestination: { kind: 'project', tabId },
         zoomedPaneId,
       }
     })
@@ -1339,6 +1389,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         : null
       return {
         activeTabId: tabId,
+        activeDestination: { kind: 'project', tabId },
         tabs: s.tabs.map((t) => t.id === tabId ? { ...t, focusedPaneId: paneId } : t),
         zoomedPaneId,
         localFocusArmed: true,
@@ -1738,6 +1789,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         return {
           tabs: [tab],
           activeTabId: tab.id,
+          activeDestination: { kind: 'project', tabId: tab.id },
           hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
           sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
         }
@@ -1762,6 +1814,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     set((s) => ({
       tabs: [...s.tabs, tab],
       activeTabId: tab.id,
+      activeDestination: { kind: 'project', tabId: tab.id },
       hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [tab.id]),
       sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(tab.id)]: true },
     }))
@@ -1894,7 +1947,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (get().tabs.length === 0) {
       const tab: Tab = { id: uuid(), focusedPaneId: '' }
       tabId = tab.id
-      set({ tabs: [tab], activeTabId: tab.id })
+      set({ tabs: [tab], activeTabId: tab.id, activeDestination: { kind: 'project', tabId: tab.id } })
     }
     const tab = get().tabs.find((t) => t.id === tabId)
     if (!tab) return
@@ -1913,7 +1966,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
     if (get().tabs.length === 0) {
       const tab: Tab = { id: uuid(), focusedPaneId: '' }
       tabId = tab.id
-      set({ tabs: [tab], activeTabId: tab.id })
+      set({ tabs: [tab], activeTabId: tab.id, activeDestination: { kind: 'project', tabId: tab.id } })
     }
     const tab = get().tabs.find((t) => t.id === tabId)
     if (!tab) return
@@ -1982,7 +2035,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         const [first, second] = await Promise.all([sanitizeNode(node.first), sanitizeNode(node.second)])
         return { ...node, first, second }
       }
-      const tabs = await Promise.all(saved.tabs.map(async (t) => {
+      const tabs = await Promise.all((Array.isArray(saved.tabs) ? saved.tabs : []).map(async (t) => {
         const baseTab = { ...t, detached: false }
         if (!baseTab.rootNode) return { ...baseTab, focusedPaneId: '' }
         const rootNode = await sanitizeNode(baseTab.rootNode)
@@ -1996,6 +2049,10 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       const activeTabId = tabs.some((t) => t.id === savedActiveTabId)
         ? savedActiveTabId
         : (tabs.findLast((t) => t.rootNode)?.id ?? tabs[0]?.id ?? '')
+      const jiraFeatureVisible = saved.jiraFeatureVisible === true
+      const sidebarOrder = normalizeSidebarOrder(saved.sidebarOrder, tabs,
+        jiraFeatureVisible || (Array.isArray(saved.sidebarOrder) && saved.sidebarOrder.includes(JIRA_FEATURE_KEY)))
+      const activeDestination = normalizeDestination(saved.activeDestination, tabs, activeTabId, jiraFeatureVisible)
       const savedSectionOpen = saved.sidebarSectionOpen && typeof saved.sidebarSectionOpen === 'object'
         ? saved.sidebarSectionOpen
         : saved.tabSectionOpen && typeof saved.tabSectionOpen === 'object'
@@ -2032,6 +2089,9 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       set({
         tabs,
         activeTabId,
+        activeDestination,
+        sidebarOrder,
+        jiraFeatureVisible,
         hydratedTabIds: {},
         sidebarWidth: saved.sidebarWidth ?? 220,
         sidebarPanelSizes,
@@ -2040,7 +2100,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         detachedWindowTabIds: {},
         detachedWindowActiveTabIds: {},
       })
-      if (activeTabId) hydrateTabRuntime(activeTabId, true)
+      if (activeDestination.kind === 'project' && activeTabId) hydrateTabRuntime(activeTabId, true)
     } catch (err) {
       console.error('[MultiAgent] applyLayout failed:', err)
     }
@@ -2096,6 +2156,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: newTab.id,
+        activeDestination: { kind: 'project', tabId: newTab.id },
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [newTab.id]),
         sidebarSectionOpen: { ...s.sidebarSectionOpen, [tabSidebarSectionId(newTab.id)]: true },
       }
@@ -2147,6 +2208,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: targetTabId,
+        activeDestination: { kind: 'project', tabId: targetTabId },
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [targetTabId]),
         zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
         // Clear after the drop has already been consumed — safe here, cannot cancel the operation.
@@ -2231,6 +2293,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: targetTabId,
+        activeDestination: { kind: 'project', tabId: targetTabId },
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [targetTabId]),
         zoomedPaneId: s.zoomedPaneId === sourcePaneId ? null : s.zoomedPaneId,
         // Clear after the drop has already been consumed — safe here, cannot cancel the operation.
@@ -2337,7 +2400,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         visibleTabs.splice(toVisible, 0, moved)
         const next = [...s.tabs]
         visibleIndices.forEach((index, position) => { next[index] = visibleTabs[position] })
-        return { tabs: next }
+        return { tabs: next, sidebarOrder: syncProjectOrder(s.sidebarOrder, next) }
       }
       const from = s.tabs.findIndex((t) => t.id === tabId)
       if (from === -1) return s
@@ -2356,7 +2419,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
         const toIdx = next.findIndex((t) => t.id === beforeTabId)
         next.splice(toIdx === -1 ? next.length : toIdx, 0, moved)
       }
-      return { tabs: next }
+      return { tabs: next, sidebarOrder: syncProjectOrder(s.sidebarOrder, next) }
     })
   },
 
@@ -2406,6 +2469,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
       return {
         tabs: updatedTabs,
         activeTabId: activatedTabId,
+        activeDestination: { kind: 'project', tabId: activatedTabId },
         hydratedTabIds: removeHydratedTabs(s.hydratedTabIds, [activatedTabId]),
         sidebarSectionOpen: {
           ...s.sidebarSectionOpen,
@@ -2510,11 +2574,13 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   activeTab: () => {
     const s = get()
+    if (s.activeDestination.kind === 'feature') return undefined
     return s.tabs.find((t) => t.id === s.activeTabId)
   },
 
   getFocusedPane: () => {
     const s = get()
+    if (s.activeDestination.kind === 'feature') return undefined
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
     if (!tab || !tab.focusedPaneId || !tab.rootNode) return undefined
     return findLeaf(tab.rootNode, tab.focusedPaneId) ?? undefined
@@ -2522,6 +2588,7 @@ export const usePanesStore = create<PanesStore>((set, get) => ({
 
   findPane: (paneId) => {
     const s = get()
+    if (s.activeDestination.kind === 'feature') return undefined
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
     if (!tab || !tab.rootNode) return undefined
     return findLeaf(tab.rootNode, paneId) ?? undefined

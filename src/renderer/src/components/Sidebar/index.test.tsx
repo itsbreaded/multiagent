@@ -18,7 +18,7 @@ beforeEach(() => {
     sidebarSectionOpen: {},
   })
   useJiraStore.setState({
-    settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true },
+    settings: { baseUrl: TEST_BASE_URL, email: 'user@example.com', patterns: ['DZ-'], hasToken: true, mentionsEnabled: false, mentionsPollingEnabled: false, mentionsPollingMinutes: 15 },
     hydrated: true,
     configVersion: 0,
     labels: { 'jira-tab': 'DZ-1234' },

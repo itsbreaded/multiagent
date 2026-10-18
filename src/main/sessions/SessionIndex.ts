@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import * as path from 'path'
 import * as fs from 'fs'
 import { app } from 'electron'
+import { ApplicationDatabase, rebuildSessionSearchIndex } from '../database/ApplicationDatabase'
 import type { AgentKind, Session } from '../../shared/types'
 import type { ScannedSession } from './TranscriptScanner'
 import { claudeProjectDirForCwd, claudeTranscriptPathForCwd } from './claudePaths'
@@ -16,24 +17,6 @@ import { deriveProjectName } from './transcriptParse'
  */
 function defaultDbPath(): string {
   return path.join(app.getPath('userData'), 'session-index.db')
-}
-
-/**
- * Move a corrupt DB (plus its WAL/SHM sidecars) aside to `<path>.corrupt-<iso>`
- * so recovery can create a fresh file in its place. Non-destructive: the
- * original bytes are preserved for inspection. Falls back to delete if the
- * rename fails (e.g. lingering lock), so the recreate isn't blocked.
- */
-function backupCorruptDb(dbPath: string): void {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
-    if (!fs.existsSync(f)) continue
-    try {
-      fs.renameSync(f, `${f}.corrupt-${stamp}`)
-    } catch {
-      try { fs.unlinkSync(f) } catch { /* give up; recreate may still succeed */ }
-    }
-  }
 }
 
 /** Summary columns searched by the LIKE fallback (must match the FTS5 index). */
@@ -90,16 +73,17 @@ interface DbRow {
 export class SessionIndex {
   private db: Database.Database
   private closed = false
+  private readonly ownedDatabase: ApplicationDatabase | null
   private upsertStmt: Database.Statement
   private overrideStmt: Database.Statement
   private mtimesStmt: Database.Statement
 
-  constructor(dbPath: string = defaultDbPath()) {
-    this.db = new Database(dbPath)
+  constructor(dbPathOrDatabase: string | Database.Database = defaultDbPath()) {
+    this.ownedDatabase = typeof dbPathOrDatabase === 'string'
+      ? ApplicationDatabase.open(dbPathOrDatabase)
+      : null
+    this.db = this.ownedDatabase?.database ?? dbPathOrDatabase as Database.Database
     try {
-      this.db.pragma('journal_mode = WAL')
-      this.db.pragma('busy_timeout = 5000')
-      this.migrate()
       this.overrideStmt = this.db.prepare(`SELECT cwd, projectName FROM session_cwd_overrides WHERE agentKind = ? AND sessionId = ?`)
       this.mtimesStmt = this.db.prepare(`SELECT agentKind, sessionId, mtimeMs FROM sessions`)
       this.upsertStmt = this.db.prepare(`
@@ -116,149 +100,16 @@ export class SessionIndex {
           filePath=excluded.filePath, mtimeMs=excluded.mtimeMs
       `)
     } catch (err) {
-      // Close the partially-opened handle (Windows locks an open DB file, which
-      // would block recovery's rename) and mark closed so a later close() is a
-      // no-op, then rethrow for create() to back up + retry.
-      try { this.db.close() } catch { /* ignore */ }
+      // A borrowed application connection remains owned by its coordinator.
+      this.ownedDatabase?.close()
       this.closed = true
       throw err
     }
   }
 
-  /**
-   * Production entry point. Equivalent to `new SessionIndex(dbPath)` for a
-   * healthy/missing DB, but if the file exists yet fails to open or migrate
-   * (corruption), the offending file (+ -wal/-shm) is backed up to
-   * `<file>.corrupt-<iso>` — non-destructive, preserved for inspection — and a
-   * fresh DB is created so a corrupt cache never hard-crashes startup. The
-   * transcripts on disk stay the source of truth; only the cached index (and
-   * session_cwd_overrides, which are minor/reconstructible) is rebuilt. A
-   * second failure rethrows (a genuine environment error, not corruption).
-   */
+  /** Path-based convenience entry point; ApplicationDatabase preserves failures. */
   static create(dbPath: string = defaultDbPath()): SessionIndex {
-    try {
-      return new SessionIndex(dbPath)
-    } catch (err) {
-      console.error(`[SessionIndex] Failed to open ${dbPath}; backing up and recreating:`, err)
-      backupCorruptDb(dbPath)
-      return new SessionIndex(dbPath)
-    }
-  }
-
-  private migrate(): void {
-    const version = this.db.pragma('user_version', { simple: true }) as number
-    if (version < 1) this.db.exec(`
-      DROP TRIGGER IF EXISTS sessions_ai;
-      DROP TRIGGER IF EXISTS sessions_ad;
-      DROP TRIGGER IF EXISTS sessions_au;
-      DROP TABLE IF EXISTS sessions_fts;
-    `)
-
-    const existing = this.db
-      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`)
-      .get() as { sql: string } | undefined
-
-    if (existing?.sql.includes('sessionId TEXT PRIMARY KEY')) {
-      this.db.exec(`
-        ALTER TABLE sessions RENAME TO sessions_old;
-
-        CREATE TABLE sessions (
-          agentKind TEXT NOT NULL DEFAULT 'claude',
-          sessionId TEXT NOT NULL,
-          cwd TEXT NOT NULL,
-          projectName TEXT NOT NULL,
-          displayName TEXT,
-          gitBranch TEXT,
-          firstMessage TEXT,
-          lastMessage TEXT,
-          firstActivity TEXT,
-          lastActivity TEXT,
-          messageCount INTEGER NOT NULL DEFAULT 0,
-          filePath TEXT NOT NULL,
-          mtimeMs REAL NOT NULL,
-          status TEXT NOT NULL DEFAULT 'resumable',
-          UNIQUE(agentKind, sessionId)
-        );
-
-        INSERT INTO sessions (
-          agentKind, sessionId, cwd, projectName, displayName, gitBranch,
-          firstMessage, lastMessage, firstActivity, lastActivity, messageCount,
-          filePath, mtimeMs, status
-        )
-        SELECT
-          'claude', sessionId, cwd, projectName, NULL, gitBranch,
-          firstMessage, lastMessage, firstActivity, lastActivity, messageCount,
-          filePath, mtimeMs, status
-        FROM sessions_old;
-
-        DROP TABLE sessions_old;
-      `)
-    }
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        agentKind TEXT NOT NULL DEFAULT 'claude',
-        sessionId TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        projectName TEXT NOT NULL,
-        displayName TEXT,
-        gitBranch TEXT,
-        firstMessage TEXT,
-        lastMessage TEXT,
-        firstActivity TEXT,
-        lastActivity TEXT,
-        messageCount INTEGER NOT NULL DEFAULT 0,
-        filePath TEXT NOT NULL,
-        mtimeMs REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'resumable',
-        UNIQUE(agentKind, sessionId)
-      );
-
-      CREATE TABLE IF NOT EXISTS session_cwd_overrides (
-        agentKind TEXT NOT NULL,
-        sessionId TEXT NOT NULL,
-        cwd TEXT NOT NULL,
-        projectName TEXT NOT NULL,
-        updatedAt REAL NOT NULL,
-        PRIMARY KEY(agentKind, sessionId)
-      );
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-        agentKind UNINDEXED,
-        sessionId UNINDEXED,
-        projectName,
-        displayName,
-        firstMessage,
-        lastMessage,
-        content=sessions,
-        content_rowid=rowid
-      );
-
-      CREATE TRIGGER IF NOT EXISTS sessions_ai AFTER INSERT ON sessions BEGIN
-        INSERT INTO sessions_fts(rowid, agentKind, sessionId, projectName, displayName, firstMessage, lastMessage)
-        VALUES (new.rowid, new.agentKind, new.sessionId, new.projectName, new.displayName, new.firstMessage, new.lastMessage);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS sessions_ad AFTER DELETE ON sessions BEGIN
-        INSERT INTO sessions_fts(sessions_fts, rowid, agentKind, sessionId, projectName, displayName, firstMessage, lastMessage)
-        VALUES ('delete', old.rowid, old.agentKind, old.sessionId, old.projectName, old.displayName, old.firstMessage, old.lastMessage);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS sessions_au AFTER UPDATE ON sessions BEGIN
-        INSERT INTO sessions_fts(sessions_fts, rowid, agentKind, sessionId, projectName, displayName, firstMessage, lastMessage)
-        VALUES ('delete', old.rowid, old.agentKind, old.sessionId, old.projectName, old.displayName, old.firstMessage, old.lastMessage);
-        INSERT INTO sessions_fts(rowid, agentKind, sessionId, projectName, displayName, firstMessage, lastMessage)
-        VALUES (new.rowid, new.agentKind, new.sessionId, new.projectName, new.displayName, new.firstMessage, new.lastMessage);
-      END;
-
-      CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd);
-      CREATE INDEX IF NOT EXISTS idx_sessions_lastActivity ON sessions(lastActivity);
-
-    `)
-    if (version < 1) {
-      this.db.exec(`INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')`)
-      this.db.pragma('user_version = 1')
-    }
+    return new SessionIndex(dbPath)
   }
 
   upsert(session: ScannedSession): void {
@@ -404,6 +255,10 @@ export class SessionIndex {
     }
   }
 
+  rebuildSearchIndex(): void {
+    this.db.transaction(() => rebuildSessionSearchIndex(this.db))()
+  }
+
   /**
    * Literal LIKE fallback over the four summary columns. Each whitespace-separated
    * token becomes an AND-ed group over all summary columns (LIKE ? ESCAPE '\').
@@ -449,11 +304,7 @@ export class SessionIndex {
   close(): void {
     if (this.closed) return
     this.closed = true
-    try {
-      this.db.close()
-    } catch {
-      // Already closed or close failed — ignore; the handle is effectively gone.
-    }
+    this.ownedDatabase?.close()
   }
 }
 

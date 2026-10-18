@@ -3,6 +3,8 @@ import { cleanup, render, screen } from '@testing-library/react'
 import type { Tab } from '../../../../shared/types'
 import { installMockIpc } from '../../../../../tests/mockIpc'
 import { usePanesStore } from '../../store/panes'
+import { useJiraMentionsStore } from '../../store/jiraMentions'
+import jiraMentionsIcon from '../../assets/notifications.png'
 import { TabBar } from './index'
 
 beforeEach(() => {
@@ -45,5 +47,13 @@ describe('TabBar - sidebar-first chrome', () => {
     expect(screen.getByTitle('Settings')).toBeInTheDocument()
     expect(screen.queryByText('One')).toBeNull()
     expect(screen.queryByText('Away')).toBeNull()
+  })
+
+  it('uses the supplied notifications icon for the Jira mentions launcher', () => {
+    useJiraMentionsStore.setState((state) => ({ projection: { ...state.projection, enabled: true } }))
+    render(<TabBar />)
+
+    const launcher = screen.getByTitle('Open Jira mentions')
+    expect(launcher.querySelector('img')).toHaveAttribute('src', jiraMentionsIcon)
   })
 })

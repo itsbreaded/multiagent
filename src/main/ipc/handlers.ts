@@ -24,7 +24,7 @@ import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, IdleAgentSuspensionSettings, McpSettings, OverlayRequest, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, DatabaseStatus, IdleAgentSuspensionSettings, McpSettings, OverlayRequest, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -39,6 +39,10 @@ import { DEFAULT_IDLE_AGENT_SUSPENSION, normalizeIdleAgentSuspensionSettings } f
 import { JiraClient } from '../jira/JiraClient'
 import { JiraSettingsStore } from '../jira/JiraSettingsStore'
 import { createJiraIpcController, isPrimaryWindowSender } from '../jira/jiraIpc'
+import { JiraMentionsClient } from '../jira/JiraMentionsClient'
+import { JiraMentionsRepository } from '../jira/JiraMentionsRepository'
+import { JiraMentionsService } from '../jira/JiraMentionsService'
+import { ApplicationDatabase, ApplicationDatabaseError } from '../database/ApplicationDatabase'
 
 // PTY output is relayed straight to xterm (seq=0 direct write) for both shell and
 // agent panes — no coalescing, no ack, no backpressure. node-pty + xterm handle
@@ -68,7 +72,39 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     removeListener: (channel, listener) => ipcMain.removeListener(channel, listener),
     senderWindowId: (event) => BrowserWindow.fromWebContents((event as Electron.IpcMainEvent).sender)?.id,
   })
-  const index = SessionIndex.create()
+  let applicationDatabase: ApplicationDatabase | null = null
+  let index: SessionIndex | null = null
+  let databaseStatus: DatabaseStatus = { available: true }
+  try {
+    applicationDatabase = ApplicationDatabase.open(path.join(app.getPath('userData'), 'session-index.db'))
+    index = new SessionIndex(applicationDatabase.database)
+  } catch (error) {
+    applicationDatabase?.close()
+    applicationDatabase = null
+    const code = error instanceof ApplicationDatabaseError && error.code === 'unsupported_schema'
+      ? 'unsupported_schema'
+      : 'database_unavailable'
+    databaseStatus = {
+      available: false,
+      code,
+      message: code === 'unsupported_schema'
+        ? 'This database was created by a newer MultiAgent version. Update the app to use session search and Jira mentions.'
+        : 'Local session and Jira data could not be opened safely. The database file was preserved.',
+    }
+    console.error(`[MultiAgent] App database unavailable (${code}); continuing without database-backed features.`)
+  }
+  const jiraMentionsService = new JiraMentionsService(
+    applicationDatabase ? new JiraMentionsRepository(applicationDatabase.database) : null,
+    jiraSettingsStore,
+    new JiraMentionsClient(),
+    (projection) => windowManager.broadcastAll('jira-mentions:state-changed', projection),
+    { openExternal: openExternalUrl },
+  )
+  void jiraMentionsService.start().catch(() => {
+    windowManager.broadcastAll('jira-mentions:state-changed', jiraMentionsService.getState())
+  })
+  let sessionPoller: ReturnType<typeof createSessionPoller> | null = null
+  let deepSearcher: DeepSearcher | null = null
   const claudeScanner = new TranscriptScanner()
   const codexScanner = new CodexSessionScanner()
   const opencodeScanner = new OpencodeSessionScanner()
@@ -278,7 +314,9 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     if (registeredWindowHandlers.has(win)) return
     registeredWindowHandlers.add(win)
     win.webContents.once('did-finish-load', () => {
-      win.webContents.send('sessions:updated', index.getAll())
+      win.webContents.send('sessions:updated', index?.getAll() ?? [])
+      win.webContents.send('database:status-changed', databaseStatus)
+      win.webContents.send('jira-mentions:state-changed', jiraMentionsService.getState())
       win.webContents.send('window:maximized-changed', win.isMaximized())
       win.webContents.send('settings:idle-agent-suspension-changed', idleAgentSuspension)
       if (currentTerminalHostStatus) {
@@ -311,25 +349,31 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   // Initial full scan on startup.
-  const sessionPoller = createSessionPoller({
-    scanAll: scanAllSessions,
-    index,
-    broadcast: (sessions) => windowManager.broadcastAll('sessions:updated', sessions),
-  })
-  const deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index, () => sessionPoller.markDirty(), opencodeScanner)
-  sessionPoller.poll(true).catch((err) => {
-    console.error('[MultiAgent] Session scan failed:', err)
-    windowManager.broadcastAll('sessions:updated', [])
-  })
+  if (index) {
+    sessionPoller = createSessionPoller({
+      scanAll: scanAllSessions,
+      index,
+      broadcast: (sessions) => windowManager.broadcastAll('sessions:updated', sessions),
+    })
+    deepSearcher = new DeepSearcher(claudeScanner, codexScanner, index, () => sessionPoller?.markDirty(), opencodeScanner)
+    sessionPoller.poll(true).catch((err) => {
+      console.error('[MultiAgent] Session scan failed:', err)
+      windowManager.broadcastAll('sessions:updated', [])
+    })
+  }
 
   const projectsDir = path.join(os.homedir(), '.claude', 'projects')
   fs.mkdirSync(projectsDir, { recursive: true })
 
-  const contentTimer = setInterval(() => {
-    void sessionPoller.poll().catch((err) => console.error('[MultiAgent] pollSessions error:', err))
-  }, 5000)
+  const contentTimer = sessionPoller
+    ? setInterval(() => {
+        void sessionPoller?.poll().catch((err) => console.error('[MultiAgent] pollSessions error:', err))
+      }, 5000)
+    : null
 
   // --- IPC handlers ---
+
+  registrar.handle('database:get-status', () => databaseStatus)
 
   registrar.handle('terminal-host:get-status', () => currentTerminalHostStatus)
 
@@ -349,6 +393,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('sessions:search', (_e, query: string) => {
+    if (!index) return []
     try {
       return index.search(query)
     } catch (err) {
@@ -361,17 +406,22 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('sessions:search-deep', async (_e, request: SessionSearchRequest) => {
+    if (!index || !deepSearcher) return []
     const allSessions = index.getAll()
     return deepSearcher.search(request, allSessions)
   })
 
   registrar.handle('sessions:delete', (_e, agentKind, sessionId: string) => {
+    if (!index) return
     const deleted = index.delete(agentKind, sessionId)
-    sessionPoller.markDirty()
+    sessionPoller?.markDirty()
     return deleted
   })
 
   registrar.handle('sessions:repair-cwd', (_e, oldCwd: string, newCwd: string) => {
+    if (!index) {
+      return { ok: false, sessions: [], error: 'Session database is unavailable.' }
+    }
     if (typeof oldCwd !== 'string' || typeof newCwd !== 'string') {
       return { ok: false, sessions: [], error: 'Invalid directory repair request' }
     }
@@ -407,8 +457,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   })
 
   registrar.handle('sessions:refresh', async () => {
-    await sessionPoller.poll(true)
-    return index.getAll()
+    await sessionPoller?.poll(true)
+    return index?.getAll() ?? []
   })
 
   registrar.handle('sessions:latest-for-cwd', async (_e, agentKind, cwd: string) => {
@@ -419,8 +469,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
       .filter((session) => session.agentKind === agentKind && normalizePath(session.cwd) === normalizedCwd)
       .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
     if (latest) {
-      index.upsert(latest)
-      sessionPoller.markDirty()
+      index?.upsert(latest)
+      sessionPoller?.markDirty()
       return latest.sessionId
     }
     return null
@@ -535,10 +585,53 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
     return jiraController.getToken()
   })
-  registrar.handle('jira:save-settings', (_e, settings) => jiraController.saveSettings(settings))
+  registrar.handle('jira:save-settings', (_e, settings) => {
+    const oldBinding = jiraSettingsStore.getVerifiedIdentityBinding()
+    const oldCredentialKey = jiraSettingsStore.getCredentialRecordKey()
+    const wasEnabled = jiraSettingsStore.getStoredSettings().mentionsEnabled
+    const result = jiraController.saveSettings(settings)
+    if (result.ok) {
+      void jiraMentionsService.settingsChanged(oldBinding, oldCredentialKey, wasEnabled)
+    }
+    return result
+  })
   registrar.handle('jira:test-connection', (_e, settings) => jiraController.testConnection(settings))
   registrar.handle('jira:fetch-status', (_e, issueKey) => jiraController.fetchStatus(issueKey))
   registrar.handle('jira:open-issue', (_e, issueKey) => jiraController.openIssue(issueKey))
+  const jiraMentionsSenderIsLive = (event: Electron.IpcMainInvokeEvent): boolean => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender)
+    return Boolean(senderWindow && !senderWindow.isDestroyed()
+      && windowManager.getWindowById(senderWindow.id) === senderWindow
+      && !windowManager.isWindowClosing(senderWindow.id))
+  }
+  registrar.handle('jira-mentions:get-state', (event) => jiraMentionsSenderIsLive(event)
+    ? jiraMentionsService.getState()
+    : jiraMentionsService.getState())
+  registrar.handle('jira-mentions:refresh', (event, mode) => jiraMentionsSenderIsLive(event)
+    && (mode === 'open-if-stale' || mode === 'manual' || mode === 'full')
+    ? jiraMentionsService.refresh(mode)
+    : jiraMentionsService.getState())
+  registrar.handle('jira-mentions:get-issue-detail', (event, issueId) => jiraMentionsSenderIsLive(event)
+    && typeof issueId === 'string' && issueId.length <= 128
+    ? jiraMentionsService.getIssueDetail(issueId)
+    : null)
+  registrar.handle('jira-mentions:get-attachment-preview', (event, issueId, attachmentId) => jiraMentionsSenderIsLive(event)
+    && typeof issueId === 'string' && issueId.length <= 128
+    && typeof attachmentId === 'string' && attachmentId.length <= 128
+    ? jiraMentionsService.getAttachmentPreview(issueId, attachmentId)
+    : { ok: false, reason: 'unavailable' })
+  registrar.handle('jira-mentions:open-attachment', (event, issueId, attachmentId) => jiraMentionsSenderIsLive(event)
+    ? jiraMentionsService.openAttachment(issueId, attachmentId)
+    : { ok: false, error: 'Attachment link is unavailable.' })
+  registrar.handle('jira-mentions:set-action', (event, input) => jiraMentionsSenderIsLive(event)
+    ? jiraMentionsService.setAction(input)
+    : jiraMentionsService.getState())
+  registrar.handle('jira-mentions:clear-cache', (event) => jiraMentionsSenderIsLive(event)
+    ? jiraMentionsService.clearCache()
+    : jiraMentionsService.getState())
+  registrar.handle('jira-mentions:post-reply', (event, input) => jiraMentionsSenderIsLive(event)
+    ? jiraMentionsService.postReply(input)
+    : { ok: false, outcome: 'rejected', errorCode: 'invalid_window' })
 
   registrar.handle('git:branch', (_e, cwd: string) => gitBranchWatcher.watchCwd(cwd))
   registrar.handle('git:unwatch-branch', (_e, cwd: string) => gitBranchWatcher.unwatchCwd(cwd))
@@ -624,8 +717,8 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }
 
     if (candidates.length !== 1) return null
-    index.upsert(candidates[0])
-    sessionPoller.markDirty()
+    index?.upsert(candidates[0])
+    sessionPoller?.markDirty()
     return candidates[0].sessionId
   })
 
@@ -821,14 +914,16 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     cleanup: () => {
       if (cleanupPromise) return cleanupPromise
       registrar.disposeAll()
-      clearInterval(contentTimer)
+      if (contentTimer) clearInterval(contentTimer)
       ptyOutputRouter.dispose()
       statusScraper.dispose()
-      index.close()
       opencodeScanner.dispose()
       agentSweeper.dispose()
       reportServer.stop()
       cleanupPromise = (async () => {
+        await jiraMentionsService.close()
+        index?.close()
+        applicationDatabase?.close()
         await spawner?.dispose()
         await gitBranchWatcher.dispose()
         await ptyManager.destroy()

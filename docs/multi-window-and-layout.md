@@ -1,7 +1,7 @@
 # Pane Layout & Multi-Window State (mechanism)
 
-The why/how behind the pane tree, layout save/restore, and cross-window tab/pane movement.
-The one-line guardrails live in `AGENTS.md`.
+This document expands the `AGENTS.md` **Layout & multi-window** guardrails. It covers pane
+layout, feature destinations, save/restore, and cross-window tab/pane movement.
 
 ---
 
@@ -34,6 +34,24 @@ unless that state was not present in an older saved layout. Any new resizable/co
 sidebar panel must use a stable panel id and persist its size through `sidebarPanelSizes`.
 
 Terminal scrollback default + the terminal renderer decision live in `docs/pty-and-terminals.md`.
+
+## Feature workspace destinations
+
+`activeDestination` separates project tabs from non-terminal workspace features.
+The Jira mentions feature uses the existing sidebar list and `sidebarOrder`,
+with stable `project:<tabId>` and `feature:jira-mentions` references. The
+primary layout persists the active destination, order, and feature visibility
+alongside existing tab state; old layouts normalize to project navigation.
+Unknown/duplicate order entries are discarded and current tabs are added
+without changing their `Tab` trees or transfer ownership.
+
+`App.tsx` keeps the project `PaneGrid` mounted but hidden and inert while a
+feature occupies the workspace. Only project activation hydrates or focuses a
+pane. This preserves terminal instances and scrollback across feature navigation.
+The Jira view remains renderer-local to the selected destination; its data and
+refresh operation are main-owned and broadcast to all windows. A detached
+window can show the same feature navigation without creating another Jira
+service or writing the primary layout.
 
 ## Multi-window ownership
 

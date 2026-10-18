@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { usePanesStore } from '../../store/panes'
+import { useJiraStore } from '../../store/jira'
 import { installMockIpc } from '../../../../../tests/mockIpc'
 import { CommandPalette } from './index'
 
@@ -57,6 +58,29 @@ describe('CommandPalette - filtering and enabled gates', () => {
     await user.type(screen.getByPlaceholderText('Search commands…'), 'Close Pane')
 
     expect(screen.queryByText('Close Pane')).toBeNull()
+    expect(screen.getByText('No results')).toBeInTheDocument()
+  })
+
+  it('offers Jira inbox commands only when tracking is enabled and opens the feature workspace', async () => {
+    const user = userEvent.setup()
+    useJiraStore.setState((state) => ({ settings: { ...state.settings, mentionsEnabled: true } }))
+    render(<CommandPalette />)
+
+    await user.type(screen.getByPlaceholderText('Search commands…'), 'Open Jira Mentions')
+    expect(screen.getByText('Open Jira Mentions')).toBeInTheDocument()
+    await user.keyboard('{Enter}')
+
+    expect(usePanesStore.getState().activeDestination).toEqual({ kind: 'feature', featureId: 'jira-mentions' })
+    expect(usePanesStore.getState().jiraFeatureVisible).toBe(true)
+  })
+
+  it('does not offer hidden project pane actions while the feature workspace is active', async () => {
+    const user = userEvent.setup()
+    usePanesStore.setState({ activeDestination: { kind: 'feature', featureId: 'jira-mentions' } })
+    render(<CommandPalette />)
+
+    await user.type(screen.getByPlaceholderText('Search commands…'), 'New Shell Pane')
+    expect(screen.queryByText('New Shell Pane')).toBeNull()
     expect(screen.getByText('No results')).toBeInTheDocument()
   })
 
