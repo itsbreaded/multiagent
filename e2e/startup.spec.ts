@@ -1,4 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'child_process'
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -12,7 +13,7 @@ interface SavedTab {
   rootNode?: { ptyId?: string }
 }
 
-function launchEnv(userDataDir: string, homeDir: string): Record<string, string> {
+function launchEnv(userDataDir: string, homeDir: string, jiraSecureStorageKey: string): Record<string, string> {
   const inherited = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   )
@@ -20,6 +21,7 @@ function launchEnv(userDataDir: string, homeDir: string): Record<string, string>
     ...inherited,
     MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
     MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
+    MULTIAGENT_E2E_JIRA_SECURE_STORAGE_KEY: jiraSecureStorageKey,
     MULTIAGENT_E2E_AGENT_COMMAND: `node "${join(repoRoot, 'e2e', 'fixtures', 'framed-agent.cjs')}"`,
     MULTIAGENT_E2E_FRAME_INTERVAL_MS: '2',
     HOME: homeDir,
@@ -172,13 +174,14 @@ test.describe('cold-start layout restore', () => {
   let homeDir: string
   let projectCwd: string
   let repairedProjectCwd: string
+  let jiraSecureStorageKey: string
 
   async function launchTestApp(expectedInitialTab = 'Alpha', extraEnv: Record<string, string> = {}): Promise<void> {
     app = await electron.launch({
       executablePath: electronPath,
       args: ['.'],
       cwd: repoRoot,
-      env: { ...launchEnv(userDataDir, homeDir), ...extraEnv },
+      env: { ...launchEnv(userDataDir, homeDir, jiraSecureStorageKey), ...extraEnv },
     })
     page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
@@ -192,6 +195,7 @@ test.describe('cold-start layout restore', () => {
 
   test.beforeEach(async () => {
     userDataDir = await mkdtemp(join(tmpdir(), 'multiagent-e2e-'))
+    jiraSecureStorageKey = randomBytes(32).toString('hex')
     homeDir = join(userDataDir, 'home')
     const transcriptDir = join(homeDir, '.claude', 'projects', 'fixture-project')
     projectCwd = join(homeDir, 'work', 'fixture-project')

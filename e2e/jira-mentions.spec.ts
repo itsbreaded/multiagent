@@ -1,4 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -8,6 +9,18 @@ import { pathToFileURL } from 'node:url'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
+const jiraSecureStorageKey = randomBytes(32).toString('hex')
+
+function jiraTestLaunchEnv(userDataDir: string, homeDir: string): Record<string, string> {
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+    MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
+    MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
+    MULTIAGENT_E2E_JIRA_SECURE_STORAGE_KEY: jiraSecureStorageKey,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  }
+}
 
 const mentionBody = {
   type: 'doc', version: 1,
@@ -294,13 +307,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       executablePath: electronPath,
       args: ['.'],
       cwd: repoRoot,
-      env: {
-        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-        MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
-        MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-      },
+      env: jiraTestLaunchEnv(userDataDir, homeDir),
     })
     const page: Page = await app.firstWindow()
     await page.setViewportSize({ width: 1280, height: 800 })
@@ -351,6 +358,12 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await page.getByLabel('Jira API token').fill('synthetic-token')
     await page.getByRole('checkbox', { name: 'Track unanswered Jira mentions' }).check()
     await page.keyboard.press('Escape')
+
+    await expect.poll(async () => page.evaluate(async () => {
+      const settings = await window.ipc.invoke('jira:get-settings')
+      const projection = await window.ipc.invoke('jira-mentions:get-state')
+      return { mentionsEnabled: settings.mentionsEnabled, hasToken: settings.hasToken, serviceEnabled: projection.enabled }
+    })).toEqual({ mentionsEnabled: true, hasToken: true, serviceEnabled: true })
 
     const chromeLauncher = page.getByTitle(/Open Jira mentions/)
     await expect(chromeLauncher).toBeVisible({ timeout: 30_000 })
@@ -933,13 +946,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       executablePath: electronPath,
       args: ['.'],
       cwd: repoRoot,
-      env: {
-        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-        MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
-        MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-      },
+      env: jiraTestLaunchEnv(userDataDir, homeDir),
     })
     const restartedPage = await app.firstWindow()
     await restartedPage.waitForLoadState('domcontentloaded')
@@ -1041,13 +1048,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       executablePath: electronPath,
       args: ['.'],
       cwd: repoRoot,
-      env: {
-        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-        MULTIAGENT_ALLOW_MULTI_INSTANCE: '1',
-        MULTIAGENT_E2E_USER_DATA_DIR: userDataDir,
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-      },
+      env: jiraTestLaunchEnv(userDataDir, homeDir),
     })
     const identityChangedPage = await app.firstWindow()
     await identityChangedPage.waitForLoadState('domcontentloaded')

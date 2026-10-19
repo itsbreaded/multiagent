@@ -14,6 +14,13 @@ never writes plaintext. Tokens, account email, comment bodies, and reply drafts
 must stay out of renderer persistence, layout state, logs, errors, diagnostics,
 and IPC traces.
 
+Playwright's cross-platform Jira integration tests use a per-run AES-GCM key
+through `MULTIAGENT_E2E_JIRA_SECURE_STORAGE_KEY`, because CI runners do not
+consistently provide an OS keychain. The main process accepts that adapter only
+for an unpackaged app whose `MULTIAGENT_E2E_USER_DATA_DIR` equals the active user
+data path. Tests use synthetic credentials in temporary profiles; ordinary and
+packaged app launches continue to use Electron `safeStorage`.
+
 Status badges and unanswered mentions share credentials but have different
 lifecycles. A badge lookup is read-only and runs only for initial appearance or
 an explicit per-folder/bulk refresh. It does not poll or mutate Jira. Mention

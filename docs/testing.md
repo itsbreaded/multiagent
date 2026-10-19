@@ -100,6 +100,10 @@ cross-window terminal and overlay behavior is exercised.
 compiled app with temporary user-data/home paths. It configures synthetic credentials through
 the Jira Settings form, verifies discovery of an ADF mention, selects a requester with keyboard
 navigation, and captures exactly one structured reply POST. It does not contact a live Jira site.
+The Jira E2E specs pass an ephemeral per-run key for an AES-GCM test adapter so token save/reload
+coverage does not depend on an interactive OS keychain. Main enables it only for an unpackaged
+app whose active data path matches the isolated E2E profile; all other launches use Electron
+`safeStorage`.
 
 ## Coverage ratchets
 

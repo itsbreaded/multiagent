@@ -249,6 +249,8 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   bounded same-site HTTPS fetch in main; never pass attachment URLs or tokens to the renderer.
 - Keep mention discovery, cache publication, and reply validation main-owned; preserve the
   shared `session-index.db` on Jira/session migration failures and scope cache clearing to Jira tables.
+- Cross-platform E2E may use per-run AES-GCM Jira credential storage only for an unpackaged app
+  whose active user-data path matches the isolated E2E profile; production always uses Electron `safeStorage`.
 - Constrain mention discovery JQL by the authenticated account ID comment term and update lower bound;
   never enumerate every recently updated issue. Verify candidates against structured ADF.
 - Reply to unrestricted comments when Jira omits platform visibility; preserve Service Desk public/internal

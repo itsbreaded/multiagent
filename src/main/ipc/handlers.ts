@@ -38,6 +38,7 @@ import { killPtyIfAllowed, senderMayControlPty as senderMayControlOwnedPty } fro
 import { DEFAULT_IDLE_AGENT_SUSPENSION, normalizeIdleAgentSuspensionSettings } from '../../shared/idleAgentSuspension'
 import { JiraClient } from '../jira/JiraClient'
 import { JiraSettingsStore } from '../jira/JiraSettingsStore'
+import { createE2EJiraSecureStorage } from '../jira/e2eJiraSecureStorage'
 import { createJiraIpcController, isPrimaryWindowSender } from '../jira/jiraIpc'
 import { JiraMentionsClient } from '../jira/JiraMentionsClient'
 import { JiraMentionsRepository } from '../jira/JiraMentionsRepository'
@@ -65,7 +66,13 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     windowManager,
   })
   layoutStore.registerHandlers(registrar)
-  const jiraSettingsStore = new JiraSettingsStore(path.join(app.getPath('userData'), 'jira-settings.json'), safeStorage)
+  const e2eProfile = process.env['MULTIAGENT_E2E_USER_DATA_DIR']
+  const e2eJiraKey = process.env['MULTIAGENT_E2E_JIRA_SECURE_STORAGE_KEY']
+  const jiraSecureStorage = !app.isPackaged && e2eProfile && e2eJiraKey
+    && path.resolve(e2eProfile) === path.resolve(app.getPath('userData'))
+    ? createE2EJiraSecureStorage(e2eJiraKey) ?? safeStorage
+    : safeStorage
+  const jiraSettingsStore = new JiraSettingsStore(path.join(app.getPath('userData'), 'jira-settings.json'), jiraSecureStorage)
   const jiraController = createJiraIpcController(jiraSettingsStore, new JiraClient(), openExternalUrl)
   const ack = createAckProtocol({
     on: (channel, listener) => ipcMain.on(channel, listener),
