@@ -1,11 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { JiraAttachmentMetadata, JiraCommentRecord, JiraIssueMetadata, JiraMentionProjectionItem, JiraQuickSnooze, JiraReplyDraftToken, JiraUserReference } from '../../../../shared/jiraMentions'
-import { getQuickSnoozeUntil, normalizeJiraInlineImageMimeType, orderMentionItems, type JiraAttachmentPreviewResult } from '../../../../shared/jiraMentions'
+import type { JiraAttachmentMetadata, JiraCommentRecord, JiraIssueMetadata, JiraMentionProjectionItem, JiraReplyDraftToken, JiraUserReference } from '../../../../shared/jiraMentions'
+import { compareCommentsAscending, normalizeJiraInlineImageMimeType, orderMentionItems, type JiraAttachmentPreviewResult } from '../../../../shared/jiraMentions'
 import { useJiraMentionsStore, type JiraMentionsFilter } from '../../store/jiraMentions'
 import { usePanesStore } from '../../store/panes'
 import refreshIcon from '../../assets/refresh.png'
 import closeIcon from '../../assets/close.png'
 import { border, ui } from '../../styles/theme'
+import './JiraMentions.css'
 
 const buttonStyle: React.CSSProperties = {
   border: border.default, borderRadius: 5, background: ui.color.control, color: ui.color.text,
@@ -16,7 +17,7 @@ const linkButtonStyle: React.CSSProperties = {
   textAlign: 'left', textDecoration: 'underline', textUnderlineOffset: 3, cursor: 'pointer',
 }
 const issuePropertyChipStyle: React.CSSProperties = {
-  borderRadius: 4, padding: '3px 8px', fontSize: 11, whiteSpace: 'nowrap',
+  borderRadius: 4, padding: '3px 8px', fontSize: 'calc(11px + 1pt)', whiteSpace: 'nowrap',
 }
 const jiraStatusStyles: Record<'new' | 'in-progress' | 'done', React.CSSProperties> = {
   new: { color: ui.color.jiraStatusNew, background: ui.color.jiraStatusNewBackground, border: `1px solid ${ui.color.jiraStatusNewBorder}` },
@@ -29,19 +30,25 @@ const jiraIssueTypeStyle: React.CSSProperties = {
 }
 const jiraPriorityStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 5, color: ui.color.jiraPriority,
-  borderLeft: border.default, paddingLeft: 9, marginLeft: 1, fontSize: 11, whiteSpace: 'nowrap',
+  borderLeft: border.default, paddingLeft: 9, marginLeft: 1, fontSize: 'calc(11px + 1pt)', whiteSpace: 'nowrap',
 }
 const jiraAssigneeStyle: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 7, paddingLeft: 8, fontSize: 11, whiteSpace: 'nowrap',
+  display: 'inline-flex', alignItems: 'center', gap: 7, paddingLeft: 8, fontSize: 'calc(11px + 1pt)', whiteSpace: 'nowrap',
+}
+const jiraPersonStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 'calc(10px + 1pt)', whiteSpace: 'normal',
 }
 const DESCRIPTION_MIN_HEIGHT = 90
+const COMMENT_MIN_HEIGHT = 48
 const DESCRIPTION_MAX_HEIGHT = 360
 const DESCRIPTION_MAX_VIEWPORT_RATIO = 0.35
 const MIN_REPLY_EDITOR_HEIGHT = 95
-const MAX_REPLY_EDITOR_HEIGHT = 300
+const SNOOZE_UNIT_MILLISECONDS: Record<SnoozeUnit, number> = { minutes: 60_000, hours: 60 * 60_000, days: 24 * 60 * 60_000 }
+const MAX_SNOOZE_MILLISECONDS = 370 * 24 * 60 * 60_000
 
 type JiraStatusGroup = 'new' | 'in-progress' | 'done'
-type JiraIssueProperty = { label: string; value: string; kind: 'status' | 'type' | 'priority' | 'assignee'; statusGroup?: JiraStatusGroup }
+type SnoozeUnit = 'minutes' | 'hours' | 'days'
+type JiraIssueProperty = { label: string; value: string; kind: 'status' | 'type' | 'priority' | 'assignee' | 'person' | 'text'; statusGroup?: JiraStatusGroup; user?: JiraUserReference; users?: JiraUserReference[] }
 
 function jiraStatusGroup(category: string | null | undefined): JiraStatusGroup {
   const normalized = category?.trim().toLowerCase() ?? ''
@@ -53,6 +60,10 @@ function jiraStatusGroup(category: string | null | undefined): JiraStatusGroup {
 function displayTime(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 'Unknown time'
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(value)
+}
+
+function initials(name: string): string {
+  return name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? '').join('')
 }
 
 function stateMessage(status: string, code: string | null): string {
@@ -230,7 +241,7 @@ function JiraInlineImage({ issueId, attachment, alt, inline = false, linkMode = 
       : state.kind === 'too_large' ? `Image is too large to preview: ${attachment.name}`
         : state.kind === 'unsupported' ? `Image format cannot be previewed: ${attachment.name}`
           : `Image preview unavailable: ${attachment.name}`
-    return <span ref={targetRef} role={state.kind === 'loading' ? 'status' : undefined} style={{ display: 'inline-block', padding: '7px 9px', border: border.default, borderRadius: 5, color: ui.color.textMuted, fontSize: 11 }}>{label}</span>
+    return <span ref={targetRef} role={state.kind === 'loading' ? 'status' : undefined} style={{ display: 'inline-block', padding: '7px 9px', border: border.default, borderRadius: 5, color: ui.color.textMuted, fontSize: 'var(--jira-mentions-reading-base)' }}>{label}</span>
   }
 
   return <>
@@ -260,12 +271,12 @@ function renderAdf(value: unknown, key = 'adf', context?: AdfRenderContext): Rea
   const attrs = isRecord(value.attrs) ? value.attrs : {}
   if (value.type === 'media' || value.type === 'mediaInline') {
     const attachment = context ? resolveAdfAttachment(attrs, context) : null
-    if (!context || !attachment) return <span key={key} style={{ color: ui.color.textMuted, fontSize: 11 }}>Attachment preview unavailable</span>
+    if (!context || !attachment) return <span key={key} style={{ color: ui.color.textMuted, fontSize: 'var(--jira-mentions-reading-base)' }}>Attachment preview unavailable</span>
     const alt = typeof attrs.alt === 'string' ? attrs.alt : undefined
     if (normalizeJiraInlineImageMimeType(attachment.mimeType)) {
       return <JiraInlineImage key={key} issueId={context.issueId} attachment={attachment} alt={alt} inline={value.type === 'mediaInline'} />
     }
-    return <span key={key} style={{ color: ui.color.textMuted, fontSize: 11 }}>[Attachment: {attachment.name}]</span>
+    return <span key={key} style={{ color: ui.color.textMuted, fontSize: 'var(--jira-mentions-reading-base)' }}>[Attachment: {attachment.name}]</span>
   }
   const children = adfChildren(value)
   const body = children.map((child, index) => <React.Fragment key={`${key}-${index}`}>{renderAdf(child, `${key}-${index}`, context)}</React.Fragment>)
@@ -325,8 +336,8 @@ function makeDraftTokens(value: string, mentions: readonly { start: number; end:
 }
 
 function CommentBody({ comment, issueId, attachments }: { comment: JiraCommentRecord; issueId: string; attachments: readonly JiraAttachmentMetadata[] }): JSX.Element {
-  if (comment.availability !== 'visible') return <div style={{ color: ui.color.textMuted, fontSize: 12 }}>This comment is no longer available.</div>
-  return <div style={{ color: ui.color.text, fontSize: 13, overflowWrap: 'anywhere' }}>{renderAdf(comment.body, 'adf', { issueId, attachments, comment, inferredAttachmentIds: new Set() })}</div>
+  if (comment.availability !== 'visible') return <div className="jira-mentions-comment-body jira-mentions-comment-unavailable">This comment is no longer available.</div>
+  return <div className="jira-mentions-comment-body">{renderAdf(comment.body, 'adf', { issueId, attachments, comment, inferredAttachmentIds: new Set() })}</div>
 }
 
 function draftKeyFor(selected: { issueId: string; incomingCommentId: string } | null): string | null {
@@ -404,7 +415,6 @@ export function JiraMentions(): JSX.Element {
   const refresh = useJiraMentionsStore((state) => state.refresh)
   const select = useJiraMentionsStore((state) => state.select)
   const setAction = useJiraMentionsStore((state) => state.setAction)
-  const clearCache = useJiraMentionsStore((state) => state.clearCache)
   const postReply = useJiraMentionsStore((state) => state.postReply)
   const saveDraft = useJiraMentionsStore((state) => state.saveDraft)
   const drafts = useJiraMentionsStore((state) => state.drafts)
@@ -418,16 +428,22 @@ export function JiraMentions(): JSX.Element {
   const draft = draftEntry?.text ?? ''
   const draftMentions = draftEntry?.mentions ?? []
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false)
+  const [snoozeDuration, setSnoozeDuration] = useState('1')
+  const [snoozeUnit, setSnoozeUnit] = useState<SnoozeUnit>('hours')
   const [posting, setPosting] = useState(false)
   const [descriptionHeight, setDescriptionHeight] = useState<number | null>(null)
+  const [newerCommentsHeight, setNewerCommentsHeight] = useState<number | null>(null)
+  const [earlierCommentsHeight, setEarlierCommentsHeight] = useState<number | null>(null)
   const [descriptionCollapsed, setDescriptionCollapsed] = useState(false)
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false)
   const [suggestion, setSuggestion] = useState<{ start: number; end: number; query: string } | null>(null)
   const [suggestionIndex, setSuggestionIndex] = useState(0)
   const textRef = useRef<HTMLTextAreaElement | null>(null)
   const mainScrollRef = useRef<HTMLElement | null>(null)
+  const snoozeMenuRef = useRef<HTMLDivElement | null>(null)
   const pendingCaret = useRef<number | null>(null)
   const resizeRef = useRef<{ y: number; height: number } | null>(null)
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
 
   const visibleItems = useMemo(() => {
     const filtered = filterItems(projection.items, filter, Date.now())
@@ -437,25 +453,29 @@ export function JiraMentions(): JSX.Element {
   const groups = useMemo(() => issueGroups(visibleItems), [visibleItems])
   const selectedItem = projection.items.find((item) => item.issue.issueId === selected?.issueId && item.comment.commentId === selected?.incomingCommentId) ?? null
   const issueDetails = detail?.issue ?? selectedItem?.issue ?? null
-  const issueBadges: JiraIssueProperty[] = [
+  const devTesters = detail?.users.filter((user) => user.displayName && user.sources.includes('field-name:dev tester')) ?? []
+  const mainDevs = detail?.users.filter((user) => user.displayName && user.sources.includes('field-name:main dev')) ?? []
+  const issuePropertyCandidates: Array<JiraIssueProperty | null> = [
     issueDetails?.statusName ? { label: 'Status', value: issueDetails.statusName, kind: 'status', statusGroup: jiraStatusGroup(issueDetails.statusCategory) } : null,
     issueDetails?.issueType ? { label: 'Type', value: issueDetails.issueType, kind: 'type' } : null,
     issueDetails?.priority ? { label: 'Priority', value: issueDetails.priority, kind: 'priority' } : null,
-    issueDetails?.assignee?.displayName ? { label: 'Assignee', value: issueDetails.assignee.displayName, kind: 'assignee' } : null,
-  ].filter((item): item is JiraIssueProperty => item !== null)
-  const issueFacts = [
-    { label: 'Reporter', value: issueDetails?.reporter?.displayName ?? null },
-    { label: 'Parent', value: issueDetails?.parent?.issueKey ?? null },
-    { label: 'Due', value: issueDetails?.dueDate ?? null },
-    { label: 'Updated', value: issueDetails?.updatedAt == null ? null : displayTime(issueDetails.updatedAt) },
-  ].filter((item): item is { label: string; value: string } => Boolean(item.value))
+    issueDetails?.assignee?.displayName ? { label: 'Assignee', value: issueDetails.assignee.displayName, kind: 'assignee', user: issueDetails.assignee } : null,
+    issueDetails?.reporter?.displayName ? { label: 'Reporter', value: issueDetails.reporter.displayName, kind: 'person', user: issueDetails.reporter } : null,
+    devTesters.length > 0 ? { label: 'Dev Tester', value: devTesters.map((user) => user.displayName!).join(', '), kind: 'person', users: devTesters } : null,
+    mainDevs.length > 0 ? { label: 'Main Dev', value: mainDevs.map((user) => user.displayName!).join(', '), kind: 'person', users: mainDevs } : null,
+    issueDetails?.parent?.issueKey ? { label: 'Parent', value: issueDetails.parent.issueKey, kind: 'text' } : null,
+    issueDetails?.dueDate ? { label: 'Due', value: issueDetails.dueDate, kind: 'text' } : null,
+    issueDetails?.createdAt == null ? null : { label: 'Created', value: displayTime(issueDetails.createdAt), kind: 'text' },
+    issueDetails?.updatedAt == null ? null : { label: 'Updated', value: displayTime(issueDetails.updatedAt), kind: 'text' },
+  ]
+  const issueProperties = issuePropertyCandidates.filter((item): item is JiraIssueProperty => item !== null)
   const detailAttachments = detail?.issue.attachments.filter((attachment) =>
     Boolean(normalizeJiraInlineImageMimeType(attachment.mimeType))
       || (typeof attachment.contentUrl === 'string' && attachment.contentUrl.length > 0)) ?? []
   const commentAttachments = detail?.issue.attachments ?? []
   const sourceComment = detail?.comments.find((comment) => comment.commentId === selected?.incomingCommentId) ?? selectedItem?.comment ?? null
   const sourceCommentIndex = detail?.comments.findIndex((comment) => comment.commentId === selectedItem?.comment.commentId) ?? -1
-  const newestFirst = (a: JiraCommentRecord, b: JiraCommentRecord): number => b.createdAt - a.createdAt || b.updatedAt - a.updatedAt || b.commentId.localeCompare(a.commentId)
+  const newestFirst = (a: JiraCommentRecord, b: JiraCommentRecord): number => compareCommentsAscending(b, a)
   const earlierComments = sourceCommentIndex > 0 ? detail!.comments.slice(0, sourceCommentIndex).sort(newestFirst) : []
   const laterComments = sourceCommentIndex >= 0 ? detail!.comments.slice(sourceCommentIndex + 1).sort(newestFirst) : []
   const replyDisabled = !sourceComment || sourceComment.visibility?.type === 'unsupported' || selectedItem?.state.state !== 'unanswered'
@@ -480,9 +500,31 @@ export function JiraMentions(): JSX.Element {
 
   useEffect(() => { setSuggestionIndex(0) }, [suggestion?.start, suggestion?.query])
   useEffect(() => {
+    if (!snoozeMenuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!snoozeMenuRef.current?.contains(event.target as Node)) setSnoozeMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSnoozeMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [snoozeMenuOpen])
+  useEffect(() => {
     setDescriptionHeight(null)
     setDescriptionCollapsed(false)
   }, [detail?.issue.issueId])
+  useEffect(() => {
+    setAttachmentsExpanded(false)
+    setNewerCommentsHeight(null)
+    setEarlierCommentsHeight(null)
+    setSnoozeMenuOpen(false)
+  }, [selected?.issueId, selected?.incomingCommentId])
+  useEffect(() => () => { resizeCleanupRef.current?.() }, [])
   useLayoutEffect(() => {
     if (selected && mainScrollRef.current) mainScrollRef.current.scrollTop = 0
   }, [selected?.issueId, selected?.incomingCommentId])
@@ -500,8 +542,8 @@ export function JiraMentions(): JSX.Element {
     if (!input) return
     input.style.height = 'auto'
     const contentHeight = input.scrollHeight
-    input.style.height = `${Math.min(MAX_REPLY_EDITOR_HEIGHT, Math.max(MIN_REPLY_EDITOR_HEIGHT, contentHeight))}px`
-    input.style.overflowY = contentHeight > MAX_REPLY_EDITOR_HEIGHT ? 'auto' : 'hidden'
+    input.style.height = `${Math.max(MIN_REPLY_EDITOR_HEIGHT, contentHeight)}px`
+    input.style.overflowY = 'hidden'
   }, [draft, selectedItem?.comment.commentId])
 
   function handleDraftChange(nextValue: string, caret: number): void {
@@ -620,6 +662,7 @@ export function JiraMentions(): JSX.Element {
     const content = event.currentTarget.previousElementSibling as HTMLElement | null
     if (!content) return
     event.preventDefault()
+    resizeCleanupRef.current?.()
     resizeRef.current = { y: event.clientY, height: content.getBoundingClientRect().height }
     const move = (moveEvent: PointerEvent) => {
       if (!resizeRef.current) return
@@ -629,134 +672,208 @@ export function JiraMentions(): JSX.Element {
       resizeRef.current = null
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null
     }
+    const cleanup = () => {
+      resizeRef.current = null
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    resizeCleanupRef.current = cleanup
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
 
+  function handleResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>, setHeight: React.Dispatch<React.SetStateAction<number | null>>, minimumHeight: number): void {
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setHeight(null)
+      return
+    }
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    const content = event.currentTarget.previousElementSibling as HTMLElement | null
+    if (!content) return
+    event.preventDefault()
+    const delta = event.key === 'ArrowUp' ? -24 : 24
+    setHeight((current) => Math.max(minimumHeight, (current ?? content.getBoundingClientRect().height) + delta))
+  }
+
   return (
     <AttachmentPreviewCacheProvider scopeKey={attachmentPreviewScopeKey}>
-    <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, background: ui.color.appBg, color: ui.color.text }}>
-      <aside style={{ width: 390, minWidth: 330, maxWidth: '40%', display: 'flex', flexDirection: 'column', borderRight: border.default, background: ui.color.panel, minHeight: 0 }}>
-        <div style={{ padding: '12px 12px 9px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: border.default }}>
-          <strong style={{ color: ui.color.textStrong, fontSize: 13, whiteSpace: 'nowrap' }}>Needs your reply</strong>
-          <span style={{ color: ui.color.textMuted, fontSize: 11 }}>{projection.activeCount}</span>
-          <span style={{ marginLeft: 'auto', color: ui.color.textDim, fontSize: 10, whiteSpace: 'nowrap' }}>
+    <div className="jira-mentions-shell">
+    <div className="jira-mentions-root" style={{
+      background: ui.color.appBg,
+      color: ui.color.text,
+      '--jira-mentions-border': ui.color.border,
+      '--jira-mentions-border-subtle': ui.color.borderSubtle,
+      '--jira-mentions-text': ui.color.text,
+      '--jira-mentions-text-strong': ui.color.textStrong,
+      '--jira-mentions-text-muted': ui.color.textMuted,
+      '--jira-mentions-text-dim': ui.color.textDim,
+      '--jira-mentions-panel': ui.color.panel,
+      '--jira-mentions-panel-raised': ui.color.panelRaised,
+      '--jira-mentions-panel-subtle': ui.color.panelSubtle,
+      '--jira-mentions-input': ui.color.input,
+      '--jira-mentions-control': ui.color.control,
+      '--jira-mentions-control-hover': ui.color.controlHover,
+      '--jira-mentions-accent': ui.color.accent,
+      '--jira-mentions-accent-bg': ui.color.accentBg,
+      '--jira-mentions-waiting': ui.color.statusWaiting,
+      '--jira-mentions-danger': ui.color.danger,
+      '--jira-mentions-menu-shadow': ui.shadow.menu,
+    } as React.CSSProperties}>
+      <aside className="jira-mentions-inbox">
+        <div className="jira-mentions-inbox-header">
+          <span className="jira-mentions-inbox-kicker">MENTION INBOX</span>
+          <div className="jira-mentions-inbox-title-row">
+            <strong>Needs your reply</strong>
+            <span className="jira-mentions-inbox-count" aria-label={`${projection.activeCount} active mentions`}>{projection.activeCount}</span>
+          </div>
+          <span className="jira-mentions-checked" data-checked={Boolean(projection.lastSuccessAt)}>
+            <i aria-hidden="true" />
             {projection.lastSuccessAt ? `Checked ${displayTime(projection.lastSuccessAt)}` : 'Not checked'}
           </span>
-          <button title="Clear cached Jira data" aria-label="Clear Jira mentions cache" onClick={() => { void clearCache() }} style={{ ...buttonStyle, width: 28, height: 27, padding: 4 }}>×</button>
         </div>
-        <div style={{ padding: '8px 10px', display: 'flex', gap: 6, borderBottom: border.default }}>
-          <input aria-label="Search Jira mentions" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" style={{ flex: 1, minWidth: 0, background: ui.color.input, color: ui.color.text, border: border.default, borderRadius: 4, padding: '5px 7px', fontSize: 11, outline: 'none', caretColor: ui.color.accent }} />
-          <select aria-label="Jira mentions filter" value={filter} onChange={(event) => setFilter(event.target.value as JiraMentionsFilter)} style={{ width: 100, background: ui.color.input, color: ui.color.text, border: border.default, borderRadius: 4, padding: '4px 5px', fontSize: 11 }}>
+        <div className="jira-mentions-inbox-controls">
+          <label className="jira-mentions-search-field">
+            <span className="jira-mentions-search-icon" aria-hidden="true" />
+            <input aria-label="Search Jira mentions" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" style={{ outline: 'none', caretColor: ui.color.accent }} />
+          </label>
+          <select aria-label="Jira mentions filter" value={filter} onChange={(event) => setFilter(event.target.value as JiraMentionsFilter)}>
             <option value="all">All</option><option value="active">Active</option><option value="snoozed">Snoozed</option><option value="dismissed">Dismissed</option><option value="answered">Answered</option>
           </select>
-          <button title="Refresh Jira mentions" aria-label="Refresh Jira mentions" onClick={() => { void refresh('manual') }} style={{ ...buttonStyle, width: 28, height: 27, padding: 4 }}>
-            <img src={refreshIcon} alt="" style={{ width: 14, height: 14, display: 'block', margin: 'auto' }} />
+          <button className="jira-mentions-refresh" title="Refresh Jira mentions" aria-label="Refresh Jira mentions" onClick={() => { void refresh('manual') }}>
+            <img src={refreshIcon} alt="" />
           </button>
         </div>
-        {projection.status !== 'ready' && <div role="status" style={{ padding: '8px 10px', borderBottom: border.default, color: projection.status === 'loading' ? ui.color.statusWorking : ui.color.textMuted, fontSize: 11, lineHeight: 1.4 }}>{stateMessage(projection.status, projection.errorCode)}</div>}
-        <div className={`dark-scrollbar`} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 7 }}>
-          {projection.status === 'ready' && groups.length === 0 && <div style={{ padding: 16, color: ui.color.textMuted, fontSize: 12 }}>{filter === 'active' ? 'No unanswered mentions.' : filter === 'all' ? 'No Jira mentions.' : `No ${filter} mentions.`}</div>}
+        {projection.status !== 'ready' && <div className="jira-mentions-state-message" role="status" data-status={projection.status}>{stateMessage(projection.status, projection.errorCode)}</div>}
+        <div className="jira-mentions-inbox-list dark-scrollbar">
+          {projection.status === 'ready' && groups.length === 0 && <div className="jira-mentions-empty-inbox">{filter === 'active' ? 'No unanswered mentions.' : filter === 'all' ? 'No Jira mentions.' : `No ${filter} mentions.`}</div>}
+          {groups.length > 0 && <div className="jira-mentions-list-summary"><span>MENTIONS</span><span>{visibleItems.length} shown</span></div>}
           {groups.map((group, index) => (
-            <div key={group.issue.issueId} style={{ marginBottom: 8, borderBottom: index < groups.length - 1 ? border.default : 'none' }}>
-              <div style={{ padding: '6px 7px 4px', color: ui.color.textDim, fontSize: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="jira-mentions-issue-group" key={group.issue.issueId} data-last={index === groups.length - 1}>
+              <div className="jira-mentions-group-heading">
+                <div>
                   <strong>
                     <button type="button" aria-label={`Open ${group.issue.issueKey} in Jira`} title="Open issue in Jira" onClick={() => { void window.ipc.invoke('jira:open-issue', group.issue.issueKey) }} style={{ ...linkButtonStyle, fontSize: 10, fontWeight: 600 }}>{group.issue.issueKey}</button>
                   </strong>
-                  <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>{group.items.length} comment{group.items.length === 1 ? '' : 's'}</span>
+                  <span>{group.items.length} comment{group.items.length === 1 ? '' : 's'}</span>
                 </div>
-                <div style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{group.issue.summary}</div>
+                <p>{group.issue.summary}</p>
               </div>
               {group.items.map((item) => {
                 const isSelected = selected?.issueId === item.issue.issueId && selected?.incomingCommentId === item.comment.commentId
                 return (
-                  <button key={item.comment.commentId} onClick={() => { void select(item.issue.issueId, item.comment.commentId) }} style={{
-                    display: 'block', width: '100%', textAlign: 'left', background: isSelected ? ui.color.control : 'transparent',
-                    border: `1px solid ${isSelected ? ui.color.border : 'transparent'}`, borderRadius: 5, cursor: 'pointer', color: ui.color.text, padding: '7px 8px', marginBottom: 2,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 11, color: ui.color.textStrong, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.comment.authorDisplayName ?? 'Unknown user'}</span>
-                      <span style={{ fontSize: 10, color: ui.color.textDim, whiteSpace: 'nowrap' }}>{displayTime(item.comment.createdAt)}</span>
-                    </div>
-                    <div style={{ fontSize: 11, lineHeight: 1.4, color: ui.color.textMuted, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{item.comment.excerpt || 'Mentioned you in a comment'}</div>
-                    {item.state.state === 'unknown' && <div style={{ marginTop: 4, fontSize: 10, color: ui.color.statusWaiting }}>Could not verify</div>}
+                  <button className="jira-mentions-mention-row" data-selected={isSelected} aria-pressed={isSelected} key={item.comment.commentId} onClick={() => { void select(item.issue.issueId, item.comment.commentId) }}>
+                    <span className="jira-mentions-mention-mark" aria-hidden="true">@</span>
+                    <span className="jira-mentions-mention-copy">
+                      <span className="jira-mentions-mention-row-head">
+                        <strong>{item.comment.authorDisplayName ?? 'Unknown user'}</strong>
+                        <time>{displayTime(item.comment.createdAt)}</time>
+                      </span>
+                      <span className="jira-mentions-mention-title">{item.issue.summary}</span>
+                      <span className="jira-mentions-mention-excerpt">{item.comment.excerpt || 'Mentioned you in a comment'}</span>
+                      {item.state.state === 'unknown' && <span className="jira-mentions-unverified">Could not verify</span>}
+                    </span>
                   </button>
                 )
               })}
             </div>
           ))}
         </div>
-        {projection.historyFrom && <div style={{ padding: '7px 10px', borderTop: border.default, color: ui.color.textDim, fontSize: 10 }}>
+        {projection.historyFrom && <div className="jira-mentions-inbox-footer">
           Initial history since {displayTime(projection.historyFrom)}
         </div>}
       </aside>
 
-      <main ref={mainScrollRef} className="dark-scrollbar" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto', padding: '18px 24px', containerType: 'size' }}>
+      <main ref={mainScrollRef} className="jira-mentions-detail dark-scrollbar" style={{ minWidth: 0, minHeight: 0, overflow: 'auto', containerType: 'size' }}>
         {selectedItem && (
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <header style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div className="jira-mentions-detail-workspace">
+            <header className="jira-mentions-issue-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ color: ui.color.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                  {issueDetails?.projectName ?? issueDetails?.projectKey ?? 'Jira'} / <button type="button" aria-label={`Open issue ${selectedItem.issue.issueKey} in Jira`} title="Open issue in Jira" onClick={() => { void window.ipc.invoke('jira:open-issue', selectedItem.issue.issueKey) }} style={{ ...linkButtonStyle, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em' }}>{selectedItem.issue.issueKey}</button>
+                <div className="jira-mentions-issue-keyline">
+                  <span>{issueDetails?.projectName ?? issueDetails?.projectKey ?? 'Jira'}</span>
+                  <span className="jira-mentions-issue-keyline-separator" aria-hidden="true">›</span>
+                  <button type="button" aria-label={`Open issue ${selectedItem.issue.issueKey} in Jira`} title="Open issue in Jira" onClick={() => { void window.ipc.invoke('jira:open-issue', selectedItem.issue.issueKey) }} style={linkButtonStyle}>{selectedItem.issue.issueKey}</button>
                 </div>
-                <h1 style={{ fontSize: 20, lineHeight: 1.35, margin: '8px 0 0', color: ui.color.textStrong, fontWeight: 600 }}>{selectedItem.issue.summary}</h1>
+                <h1 className="jira-mentions-issue-title">{selectedItem.issue.summary}</h1>
               </div>
               {selectedItem.action && <button style={buttonStyle} onClick={() => { void setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'restored' }) }}>{selectedItem.action.disposition === 'snoozed' ? 'Unsnooze' : 'Restore'}</button>}
             </header>
 
-            {issueBadges.length > 0 && <div aria-label="Issue details" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 2 }}>
-              {issueBadges.map((item) => {
-                const style = item.kind === 'status'
-                  ? { ...issuePropertyChipStyle, ...jiraStatusStyles[item.statusGroup ?? 'in-progress'] }
-                  : item.kind === 'type' ? jiraIssueTypeStyle
-                    : item.kind === 'priority' ? jiraPriorityStyle : jiraAssigneeStyle
-                return <span key={item.label} data-property={item.kind} data-category={item.statusGroup} aria-label={`${item.label} ${item.value}`} style={style}>
-                  {item.kind === 'assignee' && <span style={{ color: ui.color.textMuted }}>Assignee </span>}{item.value}
-                </span>
-              })}
-            </div>}
-            {issueFacts.length > 0 && <div aria-label="Issue facts" style={{ display: 'flex', flexWrap: 'wrap', columnGap: 22, rowGap: 6, margin: '2px 0 6px', color: ui.color.textMuted, fontSize: 11 }}>
-              {issueFacts.map((item) => <span key={item.label}>{item.label} <strong style={{ color: ui.color.text, fontWeight: 400, marginLeft: 5 }}>{item.value}</strong></span>)}
-            </div>}
+            {issueProperties.length > 0 && <aside className="jira-mentions-details-rail" aria-label="Issue details">
+              <div className="jira-mentions-details-kicker">TICKET DETAILS</div>
+              <dl className="jira-mentions-properties">
+                {issueProperties.map((item) => {
+                  const style = item.kind === 'status'
+                    ? { ...issuePropertyChipStyle, ...jiraStatusStyles[item.statusGroup ?? 'in-progress'] }
+                    : item.kind === 'type' ? jiraIssueTypeStyle
+                      : item.kind === 'priority' ? jiraPriorityStyle
+                        : item.kind === 'assignee' ? jiraAssigneeStyle
+                          : item.kind === 'person' ? jiraPersonStyle : { display: 'block' }
+                  const statusColor = item.statusGroup === 'new' ? ui.color.jiraStatusNew
+                    : item.statusGroup === 'done' ? ui.color.jiraStatusDone : ui.color.jiraStatusProgress
+                  const propertyUsers = item.users ?? (item.user ? [item.user] : [])
+                  return <div className="jira-mentions-property-row" key={item.label}>
+                    <dt>{item.label}</dt>
+                    <dd>
+                      <span data-property={item.kind} data-category={item.statusGroup} aria-label={`${item.label} ${item.value}`} style={{ ...style, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                        {item.kind === 'status' && <span className="jira-mentions-status-dot" aria-hidden="true" style={{ background: statusColor }} />}
+                        {propertyUsers.map((user) => <span className="jira-mentions-avatar" key={user.accountId} aria-hidden="true">{initials(user.displayName ?? item.value)}</span>)}
+                        {item.value}
+                      </span>
+                    </dd>
+                  </div>
+                })}
+              </dl>
+            </aside>}
 
+            <div className="jira-mentions-detail-content">
             {detailLoading && <div role="status" style={{ color: ui.color.textMuted, fontSize: 12 }}>Loading issue context…</div>}
             {detail && (
               <>
                 {detail.issue.description && (
-                  <section aria-label="Description" style={{ borderTop: border.default, borderBottom: border.default }}>
+                  <section className="jira-mentions-section jira-mentions-description-section" aria-label="Description">
                     <details open={!descriptionCollapsed}>
-                      <summary onClick={(event) => { event.preventDefault(); setDescriptionCollapsed((current) => !current) }} style={{ cursor: 'pointer', padding: '10px 0 8px', color: ui.color.textMuted, fontSize: 11 }}>Description</summary>
-                      <div className="dark-scrollbar" style={{ height: descriptionHeight ?? 'auto', maxHeight: descriptionHeight === null ? `min(${DESCRIPTION_MAX_HEIGHT}px, ${DESCRIPTION_MAX_VIEWPORT_RATIO * 100}cqh)` : 'none', overflow: 'auto', padding: '0 12px 8px 0', fontSize: 12, lineHeight: 1.6 }}>{renderAdf(detail.issue.description)}</div>
-                      <div role="separator" aria-label="Resize description" aria-orientation="horizontal" aria-valuemin={DESCRIPTION_MIN_HEIGHT} aria-valuenow={descriptionHeight ?? undefined} onPointerDown={(event) => startVerticalResize(event, setDescriptionHeight, DESCRIPTION_MIN_HEIGHT)} style={{ height: 8, cursor: 'ns-resize', display: 'flex', justifyContent: 'center', alignItems: 'center', touchAction: 'none', userSelect: 'none' }}>
-                        <span aria-hidden="true" style={{ width: 36, height: 2, borderRadius: 2, background: ui.color.textDim }} />
+                      <summary onClick={(event) => { event.preventDefault(); setDescriptionCollapsed((current) => !current) }}>Description</summary>
+                      <div className="jira-mentions-description-copy dark-scrollbar" style={{ height: descriptionHeight ?? 'auto', maxHeight: descriptionHeight === null ? `min(${DESCRIPTION_MAX_HEIGHT}px, ${DESCRIPTION_MAX_VIEWPORT_RATIO * 100}cqh)` : 'none', overflow: 'auto' }}>{renderAdf(detail.issue.description)}</div>
+                      <div className="jira-mentions-resize-handle" role="separator" aria-label="Resize description" aria-orientation="horizontal" aria-valuemin={DESCRIPTION_MIN_HEIGHT} aria-valuenow={descriptionHeight ?? undefined} tabIndex={0} onKeyDown={(event) => handleResizeKeyDown(event, setDescriptionHeight, DESCRIPTION_MIN_HEIGHT)} onPointerDown={(event) => startVerticalResize(event, setDescriptionHeight, DESCRIPTION_MIN_HEIGHT)} style={{ cursor: 'ns-resize' }}>
+                        <span aria-hidden="true" style={{ width: 36, height: 2 }} />
                       </div>
                     </details>
                   </section>
                 )}
-                {detailAttachments.length > 0 && <details aria-label="Attachments" open={attachmentsExpanded} style={{ marginTop: 4 }}>
-                  <summary onClick={(event) => { event.preventDefault(); setAttachmentsExpanded((expanded) => !expanded) }} style={{ marginTop: 8, color: ui.color.textMuted, fontSize: 11, cursor: 'pointer' }}>
-                    Attachments <span style={{ marginLeft: 5, color: ui.color.text }}>{detailAttachments.length}</span>
+                {detailAttachments.length > 0 && <details className="jira-mentions-section jira-mentions-attachments" aria-label="Attachments" open={attachmentsExpanded}>
+                  <summary onClick={(event) => { event.preventDefault(); setAttachmentsExpanded((expanded) => !expanded) }}>
+                    Attachments <span className="jira-mentions-section-count">{detailAttachments.length}</span>
                   </summary>
-                  {attachmentsExpanded && <div className="dark-scrollbar" role="group" aria-label="Attachment previews" style={{ display: 'flex', gap: 9, overflowX: 'auto', padding: '9px 0 6px', alignItems: 'stretch' }}>
+                  {attachmentsExpanded && <div className="jira-mentions-attachment-list dark-scrollbar" role="group" aria-label="Attachment previews" style={{ overflowX: 'auto' }}>
                     {detailAttachments.map((attachment) => {
                       const size = formatAttachmentSize(attachment.size)
-                      const metadata = [attachment.mimeType, size, attachment.author?.displayName, attachment.createdAt === null ? null : displayTime(attachment.createdAt)].filter(Boolean)
+                      const metadata = [attachment.mimeType, size, attachment.author?.displayName].filter(Boolean)
+                      const createdAt = attachment.createdAt === null ? null : displayTime(attachment.createdAt)
                       const isImage = Boolean(normalizeJiraInlineImageMimeType(attachment.mimeType))
-                      return <div key={attachment.id} title={metadata.join(' · ')} style={{ flex: '0 0 140px', width: 140, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, padding: 4, border: border.default, borderRadius: 6, background: ui.color.panelSubtle, fontSize: 10 }}>
+                      return <div className="jira-mentions-attachment-card" key={attachment.id} title={metadata.join(' · ')}>
                         {isImage
                           ? <JiraInlineImage issueId={selectedItem.issue.issueId} attachment={attachment} linkMode thumbnailMode />
                           : <button type="button" aria-label={`Open attachment ${attachment.name} in Jira`} title="Open attachment in Jira" onClick={() => { void window.ipc.invoke('jira-mentions:open-attachment', selectedItem.issue.issueId, attachment.id) }} style={{ ...linkButtonStyle, color: ui.color.text, minHeight: 88, overflowWrap: 'anywhere' }}>{attachment.name}</button>}
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: ui.color.text }} title={attachment.name}>{attachment.name}</span>
-                        {metadata.length > 0 && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: ui.color.textDim }}>{metadata.join(' · ')}</span>}
+                        <span className="jira-mentions-attachment-name" title={attachment.name}>{attachment.name}</span>
+                        {metadata.length > 0 && <span className="jira-mentions-attachment-metadata">{metadata.join(' · ')}</span>}
+                        {createdAt && <span className="jira-mentions-attachment-date">{createdAt}</span>}
                       </div>
                     })}
                   </div>}
                 </details>}
-                <section aria-label="Reply composer" style={{ borderBottom: border.default, padding: '12px 0 14px', position: 'relative' }}>
-                  <label htmlFor="jira-mentions-reply" style={{ display: 'block', marginBottom: 6, color: ui.color.textMuted, fontSize: 10, letterSpacing: '.11em', textTransform: 'uppercase', fontWeight: 700 }}>Reply</label>
-                  <div style={{ position: 'relative', margin: '10px 0' }}>
+                <section className="jira-mentions-reply-composer" aria-label="Reply composer">
+                  <div className="jira-mentions-reply-heading">
+                    <div>
+                      <span className="jira-mentions-reply-mark" aria-hidden="true">
+                        <svg viewBox="0 0 16 16"><path d="M5 4 2 7l3 3M2 7h6a4 4 0 0 1 4 4v1" /></svg>
+                      </span>
+                      <label htmlFor="jira-mentions-reply" aria-label={`Reply to selected mention on ${selectedItem.issue.issueKey}`}>Reply to mention</label>
+                    </div>
+                  </div>
+                  <div className="jira-mentions-reply-input-wrap">
                     <textarea
                       id="jira-mentions-reply"
                       ref={textRef}
@@ -769,7 +886,7 @@ export function JiraMentions(): JSX.Element {
                       placeholder={replyDisabled ? 'Open this issue in Jira to reply to this audience.' : 'Write a reply'}
                       disabled={replyDisabled}
                       rows={4}
-                      style={{ display: 'block', width: '100%', boxSizing: 'border-box', minHeight: MIN_REPLY_EDITOR_HEIGHT, maxHeight: MAX_REPLY_EDITOR_HEIGHT, resize: 'vertical', overflowY: 'hidden', background: 'transparent', border: 0, borderRadius: 0, color: ui.color.text, padding: 0, font: 'inherit', fontSize: 12, lineHeight: 1.8, outline: 'none', caretColor: ui.color.accent }}
+                      style={{ minHeight: MIN_REPLY_EDITOR_HEIGHT, overflowY: 'hidden', resize: 'vertical', outline: 'none', caretColor: ui.color.accent }}
                     />
                     {suggestion && !replyDisabled && suggestionUsers.length > 0 && (
                       <div role="listbox" aria-label="Mention suggestions" style={{ position: 'absolute', top: '100%', left: 0, width: 'min(350px, 100%)', maxHeight: 180, overflow: 'auto', background: ui.color.panelRaised, border: border.default, borderRadius: 5, boxShadow: ui.shadow.menu, zIndex: 5 }}>
@@ -781,67 +898,100 @@ export function JiraMentions(): JSX.Element {
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                    {selectedItem?.replyUncertain && <span role="status" style={{ color: ui.color.statusWaiting, fontSize: 10 }}>Delivery is uncertain. Refresh Jira mentions before trying again.</span>}
-                    {lastReplyResult && !lastReplyResult.ok && !selectedItem?.replyUncertain && <span role="status" style={{ color: lastReplyResult.outcome === 'unknown' ? ui.color.statusWaiting : ui.color.danger, fontSize: 10 }}>{lastReplyResult.outcome === 'unknown' ? 'Delivery is uncertain. Refresh Jira mentions before trying again.' : replyErrorMessage(lastReplyResult.errorCode)}</span>}
-                    {lastReplyResult?.ok && <span role="status" style={{ color: ui.color.accent, fontSize: 10 }}>Reply posted.</span>}
-                    <button style={{ ...buttonStyle, marginLeft: 'auto', background: ui.color.accentBg, color: ui.color.accent }} disabled={replyDisabled || selectedItem?.replyUncertain === true || !draft.trim() || posting} onClick={() => { void submitReply() }}>{posting ? 'Posting…' : 'Post reply'}</button>
+                  <div className="jira-mentions-reply-footer">
+                    {(selectedItem?.replyUncertain || lastReplyResult) && <span className="jira-mentions-reply-feedback">
+                      {selectedItem?.replyUncertain && <span role="status" style={{ color: ui.color.statusWaiting }}>Delivery is uncertain. Refresh Jira mentions before trying again.</span>}
+                      {lastReplyResult && !lastReplyResult.ok && !selectedItem?.replyUncertain && <span role="status" style={{ color: lastReplyResult.outcome === 'unknown' ? ui.color.statusWaiting : ui.color.danger }}>{lastReplyResult.outcome === 'unknown' ? 'Delivery is uncertain. Refresh Jira mentions before trying again.' : replyErrorMessage(lastReplyResult.errorCode)}</span>}
+                      {lastReplyResult?.ok && <span role="status" style={{ color: ui.color.accent }}>Reply posted.</span>}
+                    </span>}
+                    <button className="jira-mentions-reply-post" disabled={replyDisabled || selectedItem?.replyUncertain === true || !draft.trim() || posting} onClick={() => { void submitReply() }}>{posting ? 'Posting…' : 'Post reply'}</button>
                   </div>
                 </section>
 
-                <section aria-label="Comment history" style={{ border: border.default, borderRadius: 7, overflow: 'hidden', background: ui.color.panel }}>
-                  {laterComments.length > 0 && <section aria-label="Later comments" style={{ borderBottom: border.default, background: ui.color.panelSubtle }}>
-                    <div style={{ padding: '10px 16px', color: ui.color.textMuted, fontSize: 11, borderBottom: border.default }}>
-                      Later comments <span style={{ marginLeft: 5, color: ui.color.text }}>{laterComments.length}</span>
-                    </div>
-                    {laterComments.map((comment) => (
-                      <div key={comment.commentId} style={{ padding: '9px 16px', borderBottom: border.default }}>
-                        <div style={{ color: ui.color.textMuted, fontSize: 10, marginBottom: 5 }}>{comment.authorDisplayName ?? 'Unknown user'} · {displayTime(comment.createdAt)}</div>
-                        <CommentBody comment={comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />
-                      </div>
-                    ))}
-                  </section>}
-                  <div style={{ padding: '10px 12px', borderBottom: border.default, display: 'flex', gap: 10, alignItems: 'center', position: 'relative' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <strong style={{ color: ui.color.textStrong, fontSize: 12 }}>{sourceComment?.authorDisplayName ?? 'Unknown user'}</strong>
-                      <span style={{ marginLeft: 8, color: ui.color.textDim, fontSize: 10 }}>{displayTime(sourceComment?.createdAt)}</span>
-                    </div>
-                    {selectedItem.state.state === 'unanswered' && <>
-                      <button style={buttonStyle} onClick={() => setSnoozeMenuOpen((open) => !open)}>Snooze</button>
-                      <button style={buttonStyle} onClick={() => setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'dismissed' })}>Dismiss</button>
-                    </>}
-                    {snoozeMenuOpen && <div role="menu" style={{ position: 'absolute', right: 10, top: 'calc(100% + 4px)', display: 'flex', gap: 4, background: ui.color.panelRaised, border: border.default, borderRadius: 5, padding: 5, boxShadow: ui.shadow.menu, zIndex: 5 }}>
-                      {(['2-hours', '1-day', 'next-monday'] as JiraQuickSnooze[]).map((kind) => {
-                        const until = getQuickSnoozeUntil(kind, Date.now())
-                        const label = kind === '2-hours' ? '2 hours' : kind === '1-day' ? '1 day' : 'Next Monday'
-                        return <button key={kind} title={displayTime(until)} role="menuitem" style={{ ...buttonStyle, whiteSpace: 'nowrap' }} onClick={() => {
-                          void setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'snoozed', snoozeUntil: until })
-                          setSnoozeMenuOpen(false)
-                        }}>{label}<span style={{ display: 'block', color: ui.color.textDim, fontSize: 9, marginTop: 3 }}>{new Date(until).toLocaleString()}</span></button>
-                      })}
-                    </div>}
+                <section className="jira-mentions-comment-history" aria-label="Comment history">
+                  <div className="jira-mentions-comments-heading">
+                    <div><h2>Comments</h2><span className="jira-mentions-section-count">{detail.observedCommentCount}</span></div>
+                    <span>Newest first</span>
                   </div>
-                  <div role="region" aria-label="Selected mention" style={{ borderLeft: `2px solid ${ui.color.accent}`, background: ui.color.panelSubtle, padding: '14px 16px', boxSizing: 'border-box' }}>
-                    <CommentBody comment={sourceComment ?? selectedItem.comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />
-                  </div>
-                  {earlierComments.length > 0 && <section aria-label="Earlier comments" style={{ borderTop: border.default, background: ui.color.panelSubtle }}>
-                    <div style={{ padding: '10px 16px', color: ui.color.textMuted, fontSize: 11, borderBottom: border.default }}>
-                      Earlier comments <span style={{ marginLeft: 5, color: ui.color.text }}>{earlierComments.length}</span>
+                  {laterComments.length > 0 && <section className="jira-mentions-comment-group" aria-label="Newer comments">
+                    <div className="jira-mentions-comment-group-heading">Newer comments <span>{laterComments.length}</span></div>
+                    <div className="jira-mentions-comment-context dark-scrollbar" style={{ height: newerCommentsHeight ?? 'auto', overflowY: newerCommentsHeight === null ? 'visible' : 'auto' }}>
+                      {laterComments.map((comment) => (
+                        <article className="jira-mentions-comment-row" key={comment.commentId}>
+                          <span className="jira-mentions-comment-avatar" aria-hidden="true">{initials(comment.authorDisplayName ?? 'Unknown user')}</span>
+                          <div className="jira-mentions-comment-copy">
+                            <div className="jira-mentions-comment-head"><strong>{comment.authorDisplayName ?? 'Unknown user'}</strong><time>{displayTime(comment.createdAt)}</time></div>
+                            <CommentBody comment={comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                    {earlierComments.map((comment) => (
-                      <div key={comment.commentId} style={{ padding: '9px 16px', borderBottom: border.default }}>
-                        <div style={{ color: ui.color.textMuted, fontSize: 10, marginBottom: 5 }}>{comment.authorDisplayName ?? 'Unknown user'} · {displayTime(comment.createdAt)}</div>
-                        <CommentBody comment={comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />
-                      </div>
-                    ))}
+                    <div className="jira-mentions-resize-handle" role="separator" aria-label="Resize newer comments" aria-orientation="horizontal" aria-valuemin={COMMENT_MIN_HEIGHT} aria-valuenow={newerCommentsHeight ?? undefined} tabIndex={0} onKeyDown={(event) => handleResizeKeyDown(event, setNewerCommentsHeight, COMMENT_MIN_HEIGHT)} onPointerDown={(event) => startVerticalResize(event, setNewerCommentsHeight, COMMENT_MIN_HEIGHT)}><span aria-hidden="true" /></div>
                   </section>}
+                  <div role="region" aria-label="Selected mention" className="jira-mentions-comment-row" data-selected="true">
+                    <span className="jira-mentions-comment-avatar" aria-hidden="true">{initials(sourceComment?.authorDisplayName ?? selectedItem.comment.authorDisplayName ?? 'Unknown user')}</span>
+                    <div className="jira-mentions-comment-copy">
+                      <div className="jira-mentions-comment-head">
+                        <strong>{sourceComment?.authorDisplayName ?? selectedItem.comment.authorDisplayName ?? 'Unknown user'}</strong>
+                        <time>{displayTime(sourceComment?.createdAt ?? selectedItem.comment.createdAt)}</time>
+                        <span className="jira-mentions-source-tag">Mention</span>
+                        {selectedItem.state.state === 'unanswered' && <span className="jira-mentions-source-actions">
+                          <div className="jira-mentions-snooze-control" ref={snoozeMenuRef}>
+                            <button className="jira-mentions-action-snooze" type="button" aria-haspopup="dialog" aria-expanded={snoozeMenuOpen} onClick={() => setSnoozeMenuOpen((open) => !open)}>Snooze</button>
+                            {snoozeMenuOpen && <div className="jira-mentions-snooze-menu" role="dialog" aria-label="Snooze duration">
+                              <form className="jira-mentions-snooze-form" onSubmit={(event) => {
+                                event.preventDefault()
+                                const duration = Number(snoozeDuration)
+                                const durationMilliseconds = duration * SNOOZE_UNIT_MILLISECONDS[snoozeUnit]
+                                if (!Number.isInteger(duration) || duration < 1 || durationMilliseconds > MAX_SNOOZE_MILLISECONDS) return
+                                void setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'snoozed', snoozeUntil: Date.now() + durationMilliseconds })
+                                setSnoozeMenuOpen(false)
+                              }}>
+                                <span className="jira-mentions-snooze-label">Snooze for</span>
+                                <div className="jira-mentions-snooze-fields">
+                                  <input aria-label="Snooze duration" type="number" min="1" max={Math.floor(MAX_SNOOZE_MILLISECONDS / SNOOZE_UNIT_MILLISECONDS[snoozeUnit])} step="1" required value={snoozeDuration} onChange={(event) => setSnoozeDuration(event.currentTarget.value)} />
+                                  <select aria-label="Snooze unit" value={snoozeUnit} onChange={(event) => setSnoozeUnit(event.currentTarget.value as SnoozeUnit)}>
+                                    <option value="minutes">minutes</option>
+                                    <option value="hours">hours</option>
+                                    <option value="days">days</option>
+                                  </select>
+                                </div>
+                                <button type="submit" className="jira-mentions-snooze-submit">Apply snooze</button>
+                              </form>
+                            </div>}
+                          </div>
+                          <button className="jira-mentions-action-dismiss" type="button" onClick={() => setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'dismissed' })}>Dismiss</button>
+                        </span>}
+                      </div>
+                      <div className="jira-mentions-comment-context-body">
+                        <CommentBody comment={sourceComment ?? selectedItem.comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />
+                      </div>
+                    </div>
+                  </div>
+                  {earlierComments.length > 0 && <section className="jira-mentions-comment-group" aria-label="Earlier comments">
+                    <div className="jira-mentions-comment-group-heading">Earlier comments <span>{earlierComments.length}</span></div>
+                    <div className="jira-mentions-comment-context dark-scrollbar" style={{ height: earlierCommentsHeight ?? 'auto', overflowY: earlierCommentsHeight === null ? 'visible' : 'auto' }}>
+                      {earlierComments.map((comment) => (
+                        <article className="jira-mentions-comment-row" key={comment.commentId}>
+                          <span className="jira-mentions-comment-avatar" aria-hidden="true">{initials(comment.authorDisplayName ?? 'Unknown user')}</span>
+                          <div className="jira-mentions-comment-copy">
+                            <div className="jira-mentions-comment-head"><strong>{comment.authorDisplayName ?? 'Unknown user'}</strong><time>{displayTime(comment.createdAt)}</time></div>
+                            <CommentBody comment={comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="jira-mentions-resize-handle" role="separator" aria-label="Resize earlier comments" aria-orientation="horizontal" aria-valuemin={COMMENT_MIN_HEIGHT} aria-valuenow={earlierCommentsHeight ?? undefined} tabIndex={0} onKeyDown={(event) => handleResizeKeyDown(event, setEarlierCommentsHeight, COMMENT_MIN_HEIGHT)} onPointerDown={(event) => startVerticalResize(event, setEarlierCommentsHeight, COMMENT_MIN_HEIGHT)}><span aria-hidden="true" /></div>
+                  </section>}
+                  <div className="jira-mentions-history-end">{detail.commentsComplete ? 'End of available comments' : 'Older comments were not included in the available history'}</div>
                 </section>
-                {issueDetails?.createdAt != null && <div style={{ color: ui.color.textDim, fontSize: 10, marginTop: -3 }}>Created {displayTime(issueDetails.createdAt)}</div>}
               </>
             )}
+            </div>
           </div>
         )}
       </main>
+    </div>
     </div>
     </AttachmentPreviewCacheProvider>
   )

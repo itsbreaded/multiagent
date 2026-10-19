@@ -50,6 +50,142 @@ function emptyProjection(): JiraMentionsProjection {
 }
 
 describe('JiraMentionsService', () => {
+  it('adds unique named custom people markers only to cloned cached details after catalog readiness', async () => {
+    const settings = settingsStore()
+    const detail = {
+      ...snapshot(),
+      users: [
+        { accountId: 'dev-id', displayName: 'Dev User', sources: ['field:customfield_10001'] },
+        { accountId: 'main-id', displayName: 'Main User', sources: ['field:customfield_10002'] },
+        { accountId: 'other-id', displayName: 'Other User', sources: ['field:customfield_10003'] },
+        { accountId: 'dev-second-id', displayName: 'Second Dev User', sources: ['field:customfield_10001'] },
+        { accountId: 'shared-id', displayName: 'Shared User', sources: ['field:customfield_10001', 'field:customfield_10002'] },
+      ],
+    }
+    const catalog = [
+      { id: 'customfield_10001', name: 'dEv TeStEr', userValued: true },
+      { id: 'customfield_10002', name: 'MAIN DEV', userValued: true },
+      { id: 'customfield_10003', name: 'Other Field', userValued: true },
+    ]
+    const duplicateCatalog = [
+      ...catalog,
+      { id: 'customfield_10004', name: 'Dev Tester', userValued: false },
+    ]
+    const repository = {
+      getProjection: vi.fn(() => ({ items: [{ issue: detail.issue }] })),
+      getIssueDetail: vi.fn(() => detail),
+    }
+    const client = { getCustomFieldCatalog: vi.fn().mockResolvedValueOnce(catalog).mockResolvedValueOnce(duplicateCatalog) }
+    const service = new JiraMentionsService(repository as never, settings, client as never, vi.fn())
+    Object.assign(service as unknown as { contextId: string | null; identityVerified: boolean }, { contextId: 'ctx', identityVerified: true })
+    const internal = service as unknown as {
+      getCustomFieldCatalog: (settings: ReturnType<JiraSettingsStore['getStoredSettings']>, generation: number, signal: AbortSignal) => Promise<typeof catalog>
+      configGeneration: number
+    }
+
+    await expect(service.getIssueDetail('100')).resolves.toBe(detail)
+    expect(client.getCustomFieldCatalog).not.toHaveBeenCalled()
+
+    const signal = new AbortController().signal
+    await internal.getCustomFieldCatalog(settings.getStoredSettings(), 0, signal)
+    await internal.getCustomFieldCatalog(settings.getStoredSettings(), 0, signal)
+    expect(client.getCustomFieldCatalog).toHaveBeenCalledOnce()
+    const decorated = await service.getIssueDetail('100')
+    expect(decorated).not.toBe(detail)
+    expect(decorated?.users.map((user) => user.sources)).toEqual([
+      ['field:customfield_10001', 'field-name:dev tester'],
+      ['field:customfield_10002', 'field-name:main dev'],
+      ['field:customfield_10003'],
+      ['field:customfield_10001', 'field-name:dev tester'],
+      ['field:customfield_10001', 'field:customfield_10002', 'field-name:dev tester', 'field-name:main dev'],
+    ])
+    expect(decorated?.users[0].sources).not.toBe(detail.users[0].sources)
+    expect(detail.users.map((user) => user.sources)).toEqual([
+      ['field:customfield_10001'], ['field:customfield_10002'], ['field:customfield_10003'],
+      ['field:customfield_10001'],
+      ['field:customfield_10001', 'field:customfield_10002'],
+    ])
+
+    internal.configGeneration = 1
+    await expect(service.getIssueDetail('100')).resolves.toBe(detail)
+    await internal.getCustomFieldCatalog(settings.getStoredSettings(), 1, signal)
+    const duplicateNameDetail = await service.getIssueDetail('100')
+    expect(client.getCustomFieldCatalog).toHaveBeenCalledTimes(2)
+    expect(duplicateNameDetail?.users[0].sources).toEqual(['field:customfield_10001'])
+    expect(duplicateNameDetail?.users[1].sources).toContain('field-name:main dev')
+    expect(duplicateNameDetail?.users[4].sources).not.toContain('field-name:dev tester')
+    expect(duplicateNameDetail?.users[4].sources).toContain('field-name:main dev')
+  })
+
+  it('allows open-if-stale to return cached state while startup refresh continues through catalog readiness', async () => {
+    const settings = settingsStore()
+    const context = {
+      contextId: 'ctx', siteUrl: 'https://jira.example.test', selfAccountId: 'self-id',
+      trackingStartedAt: 0, historyFrom: 0, identityVerifiedAt: 900,
+      ruleVersion: JIRA_MENTION_RULE_VERSION, discoveryVersion: 1, committedGeneration: 0,
+    }
+    const cachedIssue = snapshot().issue
+    let now = 1_000
+    let catalogReady = false
+    let releaseCatalog!: () => void
+    let outcome: JiraMentionsProjection = {
+      ...emptyProjection(), status: 'ready', lastAttemptAt: 900, lastSuccessAt: 950, cached: true,
+      items: [{ issue: cachedIssue } as never],
+    }
+    const repo = {
+      markInterruptedWork: vi.fn(),
+      getContext: vi.fn(() => context),
+      getSyncState: vi.fn(() => ({
+        lastAttemptAt: 900, lastSuccessAt: 950, lastSuccessStartedAt: 900, lastFullAt: 900,
+        checkpoint: null, coverageFrom: 0, coverageThrough: 950, backfillComplete: true,
+        generation: 1, retryNotBefore: null, lastOutcome: 'success', lastErrorCode: null,
+      })),
+      getIssueIdsForRecheck: vi.fn(() => []),
+      startRun: vi.fn((_contextId, input) => {
+        outcome = { ...outcome, status: 'loading', lastAttemptAt: now }
+        return { ...input, contextId: 'ctx', runId: 'startup-catalog-race' }
+      }),
+      setExpectedIssueCount: vi.fn(),
+      stageIssueSnapshot: vi.fn(),
+      stageIssueFailure: vi.fn(),
+      commitRun: vi.fn(() => {
+        outcome = { ...outcome, status: 'ready', lastAttemptAt: now, lastSuccessAt: now, cached: true }
+      }),
+      failRun: vi.fn(),
+      getProjection: vi.fn(() => outcome),
+    }
+    const client = {
+      searchAll: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => {
+        await new Promise<void>((resolve) => { releaseCatalog = resolve })
+        catalogReady = true
+        return [{ id: 'customfield_10001', name: 'Dev Tester', userValued: true }]
+      }),
+    }
+    const broadcasts: Array<{ status: JiraMentionsProjection['status']; catalogReady: boolean }> = []
+    const service = new JiraMentionsService(repo as never, settings, client as never, (projection) => {
+      broadcasts.push({ status: projection.status, catalogReady })
+    }, { now: () => now })
+    const credentialKey = settings.getCredentialRecordKey()!
+    expect(settings.saveVerifiedIdentityBinding(credentialKey, {
+      contextId: 'ctx', siteUrl: 'https://jira.example.test', accountId: 'self-id', verifiedAt: 950,
+      credentialRecordKey: credentialKey,
+    })).toBe(true)
+
+    await service.start()
+    await vi.waitFor(() => expect(client.getCustomFieldCatalog).toHaveBeenCalledOnce())
+    const earlyOpen = await service.refresh('open-if-stale')
+    expect(earlyOpen).toMatchObject({ status: 'loading', lastAttemptAt: 1_000, lastSuccessAt: 950 })
+    expect(catalogReady).toBe(false)
+    expect(broadcasts.some((entry) => entry.status === 'loading')).toBe(true)
+
+    releaseCatalog()
+    await vi.waitFor(() => expect(broadcasts.some((entry) => entry.status === 'ready' && entry.catalogReady)).toBe(true))
+    expect(broadcasts.at(-1)).toEqual({ status: 'ready', catalogReady: true })
+    expect(client.searchAll).toHaveBeenCalledOnce()
+    await service.close()
+  })
+
   it('serves previews only for image attachments in the verified cached issue snapshot', async () => {
     const settings = settingsStore()
     const detail = snapshot()
@@ -126,7 +262,7 @@ describe('JiraMentionsService', () => {
     let searchCount = 0
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => {
         searchCount++
         if (searchCount === 2) {
@@ -219,7 +355,7 @@ describe('JiraMentionsService', () => {
     }
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -267,7 +403,7 @@ describe('JiraMentionsService', () => {
     let requestedJql = ''
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async (_settings: unknown, jql: string) => { requestedJql = jql; return [] }),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -317,7 +453,7 @@ describe('JiraMentionsService', () => {
     let requestedJql = ''
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async (_settings: unknown, jql: string) => { requestedJql = jql; return [] }),
       getIssueCandidate: vi.fn(async () => trackedCandidate),
       fetchIssueSnapshot: vi.fn(async () => snapshot()),
@@ -368,7 +504,7 @@ describe('JiraMentionsService', () => {
     }
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -411,7 +547,7 @@ describe('JiraMentionsService', () => {
     }
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => [{
         issueId: '100', issueKey: 'APP-1', updatedMarker: null, updatedAt: null, commentTotal: 0,
         inlineComments: [], inlineStartAt: 0, inlineMaxResults: 20, summary: 'A test issue',
@@ -465,7 +601,7 @@ describe('JiraMentionsService', () => {
     let releaseSearch: () => void = () => undefined
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => {
         fetchStarted()
         await new Promise<void>((resolve) => { releaseSearch = resolve })
@@ -531,7 +667,7 @@ describe('JiraMentionsService', () => {
     const started = new Promise<void>((resolve) => { searchStarted = resolve })
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async (_settings: unknown, _jql: string, signal: AbortSignal) => {
         searchStarted()
         await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
@@ -589,7 +725,7 @@ describe('JiraMentionsService', () => {
     }
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -638,7 +774,7 @@ describe('JiraMentionsService', () => {
     }
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => [{
         issueId: '100', issueKey: 'APP-1', updatedMarker: null, updatedAt: null, commentTotal: 0,
         inlineComments: [], inlineStartAt: 0, inlineMaxResults: 20, summary: 'A test issue',
@@ -690,7 +826,7 @@ describe('JiraMentionsService', () => {
       getIdentity: vi.fn()
         .mockImplementationOnce(() => new Promise((resolve) => { oldIdentityControl.release = resolve }))
         .mockResolvedValueOnce({ accountId: 'new-account', displayName: 'New account', timeZone: 'UTC' }),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -750,7 +886,7 @@ describe('JiraMentionsService', () => {
     }
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -786,7 +922,7 @@ describe('JiraMentionsService', () => {
     const sensitiveError = 'token=synthetic-secret comment=private-reply-body'
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => { throw new Error(sensitiveError) }),
       fetchIssueSnapshot: vi.fn(),
     }
@@ -926,7 +1062,7 @@ describe('JiraMentionsService', () => {
     const broadcasts: JiraMentionsProjection[] = []
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
-      getUserFieldIds: vi.fn(async () => []),
+      getCustomFieldCatalog: vi.fn(async () => []),
       searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
     }

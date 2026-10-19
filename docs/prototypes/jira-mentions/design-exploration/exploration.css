@@ -126,11 +126,10 @@ a { color: inherit; }
 .reply-heading > div { display: flex; align-items: center; gap: 7px; }
 .reply-heading h3 { color: #e1e9e2; }
 .reply-mark { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; background: #293d2e; color: #9be0a7; font-size: 11px; }
-.reply-issue { color: #738078; font: 9px var(--mono); }
 .reply-section textarea { width: 100%; min-height: 75px; display: block; margin-top: 9px; padding: 8px 9px; resize: vertical; border: 1px solid #343b36; border-radius: 4px; outline: none; background: #151917; color: #e1e6e2; font-size: 11px; line-height: 1.6; }
 .reply-section textarea:focus { border-color: #56735b; box-shadow: 0 0 0 1px #354a39; }
 .reply-section textarea::placeholder { color: #77827b; }
-.reply-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 7px; color: #7c8880; font-size: 8px; }
+.reply-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 7px; }
 .reply-footer button { min-height: 26px; padding: 0 10px; border: 1px solid #6ec680; border-radius: 4px; background: #5fba72; color: #112116; font-size: 9px; font-weight: 700; }
 
 .conversation-section { padding: 19px 0 23px; }

@@ -12,7 +12,7 @@ import {
   JIRA_INLINE_IMAGE_MAX_BYTES,
   normalizeJiraInlineImageMimeType,
 } from '../../shared/jiraMentions'
-import { JiraMentionsClient, JiraApiError, buildMentionCandidateJql, type JiraIdentity } from './JiraMentionsClient'
+import { JiraMentionsClient, JiraApiError, buildMentionCandidateJql, type JiraCustomFieldDescriptor, type JiraIdentity } from './JiraMentionsClient'
 import { JIRA_MENTION_RULE_VERSION, type JiraMentionsRepository, type JiraSyncRun } from './JiraMentionsRepository'
 import { JiraSettingsStore } from './JiraSettingsStore'
 
@@ -106,8 +106,8 @@ export class JiraMentionsService {
   private refreshPromise: Promise<JiraMentionsProjection> | null = null
   private queuedFull = false
   private identityPromise: Promise<boolean> | null = null
-  private fieldIds: string[] = []
-  private fieldIdsGeneration = -1
+  private customFieldCatalog: JiraCustomFieldDescriptor[] = []
+  private customFieldCatalogGeneration = -1
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private snoozeTimer: ReturnType<typeof setTimeout> | null = null
   private closed = false
@@ -175,8 +175,8 @@ export class JiraMentionsService {
       this.contextId = null
       this.identity = null
       this.identityVerified = false
-      this.fieldIds = []
-      this.fieldIdsGeneration = -1
+      this.customFieldCatalog = []
+      this.customFieldCatalogGeneration = -1
       if (!newKey && oldBinding && this.repository) this.repository.deleteContext(oldBinding.contextId)
     }
     const settings = this.settingsStore.getStoredSettings()
@@ -202,7 +202,33 @@ export class JiraMentionsService {
     if (!contextId || !this.repository || !this.identityVerified || typeof issueId !== 'string') return null
     const projection = this.repository.getProjection(contextId, this.settingsStore.getStoredSettings().mentionsEnabled, true, this.now())
     if (!projection.items.some((item) => item.issue.issueId === issueId)) return null
-    return this.repository.getIssueDetail(contextId, issueId)
+    const snapshot = this.repository.getIssueDetail(contextId, issueId)
+    if (!snapshot || this.customFieldCatalogGeneration !== this.configGeneration) return snapshot
+
+    const labelsByFieldId = new Map<string, string>()
+    for (const propertyName of ['dev tester', 'main dev'] as const) {
+      const matchingFields = this.customFieldCatalog.filter((field) => field.name?.toLowerCase() === propertyName)
+      const matchingIds = new Set(matchingFields.map((field) => field.id))
+      if (matchingIds.size !== 1) continue
+      const [fieldId] = matchingIds
+      if (matchingFields.some((field) => field.id === fieldId && field.userValued)) {
+        labelsByFieldId.set(fieldId, `field-name:${propertyName}`)
+      }
+    }
+
+    return {
+      ...snapshot,
+      users: snapshot.users.map((user) => {
+        const propertyMarkers = user.sources
+          .map((source) => source.startsWith('field:') ? labelsByFieldId.get(source.slice('field:'.length)) : undefined)
+          .filter((marker): marker is string => marker !== undefined)
+        const sources = [...user.sources]
+        for (const propertyMarker of propertyMarkers) {
+          if (!sources.includes(propertyMarker)) sources.push(propertyMarker)
+        }
+        return { ...user, sources }
+      }),
+    }
   }
 
   async openAttachment(issueId: string, attachmentId: string): Promise<JiraOpenIssueResult> {
@@ -478,7 +504,8 @@ export class JiraMentionsService {
           }
         }
       }
-      const userFieldIds = await this.getUserFieldIds(settings, run.configGeneration, signal)
+      const customFieldCatalog = await this.getCustomFieldCatalog(settings, run.configGeneration, signal)
+      const userFieldIds = customFieldCatalog.filter((field) => field.userValued).map((field) => field.id)
       this.repository.setExpectedIssueCount(run, issueById.size)
       const candidates = [...issueById.values()]
       await mapConcurrent(candidates, ISSUE_WORKERS, async (candidate) => {
@@ -604,11 +631,14 @@ export class JiraMentionsService {
     this.identity = { accountId: context.selfAccountId, displayName: null, timeZone: null }
   }
 
-  private async getUserFieldIds(settings: ReturnType<JiraSettingsStore['getStoredSettings']>, generation: number, signal: AbortSignal): Promise<string[]> {
-    if (this.fieldIdsGeneration === generation) return this.fieldIds
-    this.fieldIds = await this.client.getUserFieldIds(settings, signal)
-    this.fieldIdsGeneration = generation
-    return this.fieldIds
+  private async getCustomFieldCatalog(settings: ReturnType<JiraSettingsStore['getStoredSettings']>, generation: number, signal: AbortSignal): Promise<JiraCustomFieldDescriptor[]> {
+    if (this.customFieldCatalogGeneration === generation) return this.customFieldCatalog
+    const catalog = await this.client.getCustomFieldCatalog(settings, signal)
+    if (this.configGeneration === generation) {
+      this.customFieldCatalog = catalog
+      this.customFieldCatalogGeneration = generation
+    }
+    return catalog
   }
 
   private projection(errorCode?: string): JiraMentionsProjection {

@@ -347,9 +347,9 @@
     const button = count ? '<button class="section-action" type="button" data-toggle-attachments>' + (expanded ? 'Hide attachments' : 'Show attachments') + '</button>' : '';
     return '<section class="content-section attachment-section"><div class="section-heading"><h3>Attachments <span class="section-count">' + count + '</span></h3>' + button + '</div>' + list + '</section>';
   };
-  const renderReply = function (issue) {
-    return '<section class="reply-section"><div class="reply-heading"><div><span class="reply-mark" aria-hidden="true">↩</span><h3>Reply to mention</h3></div><span class="reply-issue">' + escapeHtml(issue.issueKey) + '</span></div>' +
-      '<textarea aria-label="Write a reply" placeholder="Write a reply…"></textarea><div class="reply-footer"><span>Reply in the issue comment thread</span><button type="button">Post reply</button></div></section>';
+  const renderReply = function () {
+    return '<section class="reply-section"><div class="reply-heading"><div><span class="reply-mark" aria-hidden="true">↩</span><h3>Reply to mention</h3></div></div>' +
+      '<textarea aria-label="Write a reply" placeholder="Write a reply…"></textarea><div class="reply-footer"><button type="button">Post reply</button></div></section>';
   };
   const renderComment = function (comment, issue, selectedCommentId) {
     const isSource = comment.commentId === selectedCommentId;
@@ -368,7 +368,7 @@
     const issue = item.issue;
     const snapshot = snapshots.get(issue.issueId) || { issue: issue, comments: [item.comment], observedCommentCount: 1, commentsComplete: true };
     const chosen = { issueId: issue.issueId, commentId: item.comment.commentId };
-    return '<main class="ticket-area"><div class="ticket-layout">' + renderIssueHeader(issue) + '<div class="ticket-primary">' + renderDescription(issue) + renderAttachments(issue, expanded) + renderReply(issue) + renderConversation(snapshot, chosen) + '</div>' + renderFacts(issue) + '</div></main>';
+    return '<main class="ticket-area"><div class="ticket-layout">' + renderIssueHeader(issue) + '<div class="ticket-primary">' + renderDescription(issue) + renderAttachments(issue, expanded) + renderReply() + renderConversation(snapshot, chosen) + '</div>' + renderFacts(issue) + '</div></main>';
   };
 
   let selected = selectedInitially;

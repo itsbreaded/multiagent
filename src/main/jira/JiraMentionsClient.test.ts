@@ -163,13 +163,26 @@ describe('JiraMentionsClient', () => {
     expect(new Headers(fetch.mock.calls[1][1].headers).get('Range')).toBeNull()
   })
 
-  it('reads user-valued custom fields from Jira’s array-shaped field response', async () => {
+  it('retains custom-field names while identifying the existing user-valued query subset', async () => {
     const fetch = vi.fn().mockResolvedValue(response(200, [
-      { id: 'customfield_10001', schema: { type: 'user' } },
-      { id: 'customfield_10002', schema: { type: 'array', items: 'user' } },
-      { id: 'customfield_10003', schema: { type: 'string' } },
+      { id: 'customfield_10001', name: 'dEv TeStEr', schema: { type: 'user' } },
+      { id: 'customfield_10002', name: 'Main Dev', schema: { type: 'array', items: 'user' } },
+      { id: 'customfield_10003', name: 'Other Field', schema: { type: 'user' } },
+      { id: 'customfield_10004', name: 'Dev Tester', schema: { type: 'string' } },
+      { id: 'assignee', name: 'Assignee', schema: { type: 'user' } },
     ]))
-    await expect(new JiraMentionsClient({ fetch }).getUserFieldIds(settings)).resolves.toEqual(['customfield_10001', 'customfield_10002'])
+    const client = new JiraMentionsClient({ fetch })
+    const catalog = await client.getCustomFieldCatalog(settings)
+    expect(catalog).toEqual([
+      { id: 'customfield_10001', name: 'dEv TeStEr', userValued: true },
+      { id: 'customfield_10002', name: 'Main Dev', userValued: true },
+      { id: 'customfield_10003', name: 'Other Field', userValued: true },
+      { id: 'customfield_10004', name: 'Dev Tester', userValued: false },
+    ])
+    expect(catalog.filter((field) => field.userValued).map((field) => field.id)).toEqual([
+      'customfield_10001', 'customfield_10002', 'customfield_10003',
+    ])
+    expect(fetch).toHaveBeenCalledOnce()
   })
 
   it('keeps standard and comment users available when field discovery is permission-limited', async () => {
@@ -183,7 +196,9 @@ describe('JiraMentionsClient', () => {
         assignee: { accountId: 'assignee-id', displayName: 'Assignee' }, reporter: null, creator: null,
       } }))
     const client = new JiraMentionsClient({ fetch })
-    const userFieldIds = await client.getUserFieldIds(settings)
+    const catalog = await client.getCustomFieldCatalog(settings)
+    const userFieldIds = catalog.filter((field) => field.userValued).map((field) => field.id)
+    expect(catalog).toEqual([])
     expect(userFieldIds).toEqual([])
 
     const snapshot = await client.fetchIssueSnapshot(settings, {

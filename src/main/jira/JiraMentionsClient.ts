@@ -38,6 +38,12 @@ export interface JiraIdentity {
   timeZone: string | null
 }
 
+export interface JiraCustomFieldDescriptor {
+  id: string
+  name: string | null
+  userValued: boolean
+}
+
 export interface JiraSearchIssue {
   issueId: string
   issueKey: string
@@ -314,7 +320,7 @@ export class JiraMentionsClient {
     }
   }
 
-  async getUserFieldIds(settings: JiraStoredSettings, signal?: AbortSignal): Promise<string[]> {
+  async getCustomFieldCatalog(settings: JiraStoredSettings, signal?: AbortSignal): Promise<JiraCustomFieldDescriptor[]> {
     let body: unknown
     try {
       body = await this.requestJsonValue(settings, '/rest/api/3/field', { signal })
@@ -323,15 +329,17 @@ export class JiraMentionsClient {
       throw error
     }
     if (!Array.isArray(body)) throw new JiraApiError('invalid_response')
-    const ids: string[] = []
+    const fields: JiraCustomFieldDescriptor[] = []
     for (const fieldValue of body) {
       const field = record(fieldValue)
       const schema = record(field?.schema)
       const id = str(field?.id)
       const isUser = schema?.type === 'user' || (schema?.type === 'array' && schema.items === 'user')
-      if (id?.startsWith('customfield_') && isUser) ids.push(id)
+      if (id?.startsWith('customfield_')) {
+        fields.push({ id, name: str(field?.name), userValued: isUser })
+      }
     }
-    return ids
+    return fields
   }
 
   async searchAll(settings: JiraStoredSettings, jql: string, signal?: AbortSignal): Promise<JiraSearchIssue[]> {

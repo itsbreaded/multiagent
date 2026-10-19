@@ -1,8 +1,8 @@
 # Spec: Jira Mentions UI Redesign
 
-Status: draft
+Status: done
 Created: 2026-10-18
-Completed:
+Completed: 2026-10-18
 
 ## Problem
 
@@ -19,10 +19,12 @@ selected mention. These are starting behaviors to preserve. The composer
 currently caps its height and scrolls internally for long drafts; selected
 and surrounding comments currently have no resize controls.
 
-The selected Ticket details rail mockup gives ticket properties a compact
-secondary column and gives the description, attachments, reply, and discussion
-a clearer primary reading path. It is a visual direction, not an executable
-feature contract or a source of Jira data.
+The selected Ticket details rail mockup defines the production visual design
+for the inbox, ticket header, details rail, reading sections, reply area, and
+comment rows. Jira Mentions should follow its spacing, dividers, selected-row
+highlighting, and visual emphasis as closely as the app theme allows. Its sample
+data and simplified behaviors are not production requirements; explicit
+behavioral differences below take precedence.
 
 ## Goal
 
@@ -42,10 +44,11 @@ comments appear above it in the timeline.
 References:
 
 - Existing functional contract: `jira-unanswered-mentions`.
-- Approved visual direction: [Ticket details rail, mockup #4](../../docs/prototypes/jira-mentions/design-exploration/04-context-rail.html),
+- Production visual baseline: [Ticket details rail, mockup #4](../../docs/prototypes/jira-mentions/design-exploration/04-context-rail.html),
   with intent described in the [gallery index](../../docs/prototypes/jira-mentions/design-exploration/index.html).
-  Its accompanying stylesheet and script describe illustrative presentation
-  and interactions; the requirements below govern production behavior.
+  Its accompanying stylesheet and script define the intended visual treatment
+  and hierarchy. The requirements below specify product data and explicit
+  behavior differences.
 - Earlier layout and data-shape context: [real-ticket context prototype](../../docs/prototypes/jira-mentions/02-real-ticket-context.html)
   and its accompanying styles/script. Its ignored local data is not a design
   input and must not be inspected or copied for this work.
@@ -65,19 +68,33 @@ References:
    Rendered description panels MUST NOT acquire generic card framing.
    Comments MUST read as a continuous timeline with lightweight separation,
    rather than a collection of nested cards. The selected mention and reply
-   area MUST remain visually identifiable. Remove redundant surrounding
-   padding and framing while retaining readable text and concise labels.
+   area MUST remain visually identifiable. Description, ticket-detail,
+   comment, and reply text MUST use a reading size approximately one point
+   larger than the prior presentation. This increase MUST stay within those
+   regions and MUST NOT change inbox/global application text or attachment
+   tile metadata. Remove redundant surrounding padding and framing while
+   retaining concise labels.
 
 3. **Available ticket properties.** The rail MUST show populated status,
    issue type, priority, assignee, reporter, parent key, due date, and updated
    time from existing ticket context. Status MUST retain Jira status-category
    colors; issue type MUST use a distinct neutral badge and priority the
    existing gold treatment. People and dates MUST have readable labels and
-   values. The already displayed created time MUST remain available. Missing
-   optional values MUST be omitted, without empty property rows, invented
+   values. Created time, when available, MUST appear as a labeled Created
+   property in the rail alongside Updated, replacing its current placement
+   after the comment history. Missing optional values MUST be omitted,
+   without empty property rows, invented
    names, dates, or default statuses. Color MUST accompany readable values,
-   not replace them. No additional fields or requests are required by the
-   mockup's illustrative content.
+   not replace them. When existing Jira data includes populated user-valued
+   custom fields whose display names are Dev Tester or Main Dev
+   (case-insensitive), those people MUST also appear under matching labels in
+   the rail. Use the existing field catalog and issue detail response; do not
+   add a Jira request or display unrelated custom fields. If multiple custom
+   field IDs share either matching name, omit that property rather than
+   combining ambiguous values. The mockup's illustrative content does not
+   authorize fetching additional fields or making unrelated custom fields
+   visible. Treat field names as presentation labels only; do not persist
+   catalog names or change existing user-source markers.
 
 4. **Issue identity and link.** The issue key MUST remain the clickable Jira
    link in both the inbox group and selected ticket header, using the existing
@@ -90,11 +107,14 @@ References:
    timeline. The editor MUST sit immediately below the attachment section,
    including when that section is collapsed; if attachments are absent, it
    follows the description or available header content. The editor MUST
-   identify the selected issue and that it replies to the selected mention.
-   Post reply and submission feedback MUST stay with the editor. Neither the
-   composer nor its text-entry area may impose a fixed height or maximum
-   content height that forces a separate vertical scrollbar; long drafts MUST
-   expand the page and remain accessible through normal detail-page scrolling.
+   identify that it replies to the selected mention; the selected issue MUST
+   remain identifiable through its ticket header without repeating its key in
+   the reply panel. Post reply and any submission feedback MUST stay with the
+   editor. The default editor footer MUST NOT show redundant explanatory copy.
+   Neither the composer nor its text-entry area may impose a fixed height or
+   maximum content height that forces a separate vertical scrollbar; long
+   drafts MUST expand the page and remain accessible through normal detail-page
+   scrolling.
 
 6. **Description sizing.** Before manual resizing, description height MUST
    follow its content up to the smaller of 35% of the detail viewport height
@@ -111,26 +131,39 @@ References:
    below it, labeled Earlier comments where grouped. Each context group MUST
    also run newest to oldest. The selected comment MUST appear exactly once
    in its chronological position, with a visible Mention indicator, author,
-   time, and existing applicable local actions beside its header. Equal-time
-   ordering MUST be deterministic without inventing later creation times;
+   time, and existing applicable local actions beside its header. Snooze and
+   Dismiss MUST use distinct, readable semantic colors (amber for Snooze and
+   the app's danger color for Dismiss) that remain visually separate from the
+   selected mention's green highlight. Snooze MUST open a compact duration form
+   anchored to its action, with a numeric amount, minutes/hours/days unit, and
+   submit action; its increment/decrement controls MUST follow the dark form
+   theme. It MUST NOT show a large expanded time display at the end of
+   the selected comment. Clicking outside the form or pressing Escape MUST
+   close it. Equal-time ordering MUST be deterministic
+   without inventing later creation times;
    editing an old comment MUST NOT move it ahead of genuinely newer comments.
 
-8. **Comment reading space.** The selected mention body and the newer and
-   earlier context areas MUST each be independently vertically resizable
-   when present. Resizing one MUST NOT resize the others, alter their order,
-   change the column width, or hide actions. All content MUST remain reachable
-   when an area is shortened. Initially, comments MUST flow at natural content
-   height and the page MUST provide the normal history scrolling; internal
-   scrolling is permitted only within a comment area the user has explicitly
-   shortened. No fixed-height wrapper may contain the reply editor. Returning
-   to the top on a different mention selection MUST be preserved.
+8. **Comment reading space.** The newer and earlier context areas MUST each
+   be independently vertically resizable when present. The selected mention
+   body MUST remain at natural content height and MUST NOT have a resize handle
+   or area-local scrollbar. Resizing a context area MUST NOT resize the other,
+   alter timeline order, change the column width, or hide actions. All content
+   MUST remain reachable when a context area is shortened. Initially, comments
+   MUST flow at natural content height and the page MUST provide the normal
+   history scrolling; internal scrolling is permitted only within a context
+   area the user has explicitly shortened. No fixed-height wrapper may contain
+   the reply editor. Returning to the top on a different mention selection MUST
+   be preserved.
 
 9. **Attachment presentation.** Attachments MUST start collapsed for each
-   newly selected mention. Expansion MUST reveal a horizontal row of Jira
+   newly selected mention. Expansion MUST reveal a single horizontal row of Jira
    Cloud-style tiles with an image thumbnail where supported, filename, and
    size/date where available. Overflowing tiles MUST remain accessible
-   horizontally. Non-image attachments may retain their existing validated
-   open/download links with a file representation instead of a thumbnail.
+   through horizontal scrolling at both desktop and narrow widths; tiles MUST
+   NOT wrap into additional rows. This takes precedence over the mockup's
+   wrapping desktop attachment layout. Non-image attachments may retain their
+   existing validated open/download links with a file representation instead
+   of a thumbnail.
    Missing metadata MUST NOT become invented values. The page MUST NOT have
    a redundant Show previews control or a cache-clearing button.
 
@@ -171,8 +204,15 @@ References:
 13. **Inbox continuity.** Search, All, Active, Snoozed, Dismissed, Answered,
     refresh, counts, selected-row indication, checked time, and history/coverage
     information MUST remain available. Search, filter, and refresh MUST share
-    a compact row. Preserve existing filter membership and ordering: active
-    issue groups are newest first by their newest active incoming comment,
+    a compact row. The count beside Needs your reply MUST remain the global
+    active unanswered-comment count for the tracked site/account, excluding
+    dismissed and unexpired snoozed comments. Search and filter changes MUST
+    NOT replace it with the number of visible results. Existing group counts
+    remain scoped to the displayed group; any separate result count, if shown,
+    MUST be labeled as shown results and reflect the current search/filter.
+    No additional result counter is required. Preserve existing filter
+    membership and ordering: active issue groups are newest first by their
+    newest active incoming comment,
     with existing chronological ordering within those groups; All retains
     newest-first result ordering before issue grouping. This redesign MUST
     NOT replace these rules with issue-update ordering or the mockup's sample
@@ -198,14 +238,41 @@ References:
     empty inbox. Safe structured description/comment rendering, including
     aligned ADF tables and media fallbacks, MUST be preserved.
 
+16. **Visual fidelity to mockup #4.** The mockup MUST be treated as the new
+    design baseline, not a loose source of inspiration. At desktop widths, the
+    inbox MUST retain the mockup's compact sidebar proportions, compact header
+    and controls, selected mention's green-tinted row with a left accent, and
+    subtle issue-group dividers. The ticket header MUST span the primary and
+    rail columns and end with a thin divider. The details rail MUST have a
+    visible vertical divider, a small `TICKET DETAILS` kicker, compact stacked
+    label/value pairs, and the mockup's restrained status/type/priority badge
+    treatments. The description and attachment sections MUST use concise
+    headings/actions and subtle bottom dividers without card framing. The reply
+    section MUST be a distinct, softly tinted panel with a restrained green
+    border, a reply icon and heading that identifies the reply target, an inset
+    bordered text field, and a footer that places Post reply at the lower right without a repeated
+    ticket key at the upper right or a default helper description at the lower
+    left. Submission feedback MUST still appear in the footer when available. The
+    comment area MUST read as one light timeline with compact author/time rows,
+    avatar initials where a name is available, thin separators, and the selected
+    mention visibly called out with a green accent, a Mention tag, and adjacent
+    actions. Use app theme tokens for all colors, focus, and text treatment; do
+    not copy prototype hex values or gallery chrome. At narrow widths, preserve
+    these visual relationships as the mockup stacks the inbox and details rail.
+    Explicit behavior and content differences in this spec (including the
+    one-row attachment scroller, creation-time ordering, live state/actions,
+    Created property, and unbounded reply growth) MUST remain in effect.
+
 ## Non-Goals
 
 - Change discovery JQL, identity/account lookup, eligibility or answered-state
-  rules, Jira API permissions, requests for ticket fields, refresh/polling,
-  persistence, database schema, or attachment caching semantics.
+  rules, Jira API permissions, add Jira requests or expand the existing fetched
+  issue field set, refresh/polling, persistence, database schema, or attachment
+  caching semantics.
 - Build a generic Jira clone, add issue transitions/assignment/editing,
-  unrelated Jira controls, new ticket fields, user-directory search, uploads,
-  a rich-text toolbar, persistent drafts, or automatic sends/retries.
+  unrelated Jira controls, request other ticket fields or render unrelated
+  custom fields, add user-directory search or uploads, a rich-text toolbar,
+  persistent drafts, or automatic sends/retries.
 - Redesign settings, sidebar navigation, status badges, or other feature pages.
   Removing the Mentions page cache button does not remove existing settings
   cache management or change its semantics.
@@ -221,9 +288,12 @@ References:
   **When** a mention is selected, **Then** a clear issue header precedes the
   primary reading column and compact right rail; the description is flat,
   the collapsed attachments precede the editor, and the timeline follows it.
-  The selected comment is identified within that timeline.
+  The selected comment is identified within that timeline. When created time
+  is available, it appears once as Created in the rail beside the other ticket
+  properties, with no duplicate Created footer after the timeline.
 - **S02 Optional content (R3, R5, R9).** **Given** a ticket without priority,
-  assignee, reporter, parent, due date, description, or attachments,
+  assignee, reporter, parent, due date, created time, Dev Tester, Main Dev,
+  description, or attachments,
   **When** selected, **Then** absent values and sections do not create empty
   property rows or fake values, remaining properties keep their labels, and
   the reply editor remains before the timeline without a blank attachment area.
@@ -237,9 +307,11 @@ References:
 - **S04 Attachment expansion (R9-R10).** **Given** an uncached mention with
   image and non-image attachments, **When** selected with attachments collapsed,
   **Then** hidden tile previews are not fetched. **When** expanded, **Then**
-  tiles form a horizontal row with available filename/size/date metadata and
-  supported thumbnails, requesting previews lazily. No Show previews or
-  cache-clearing button appears. Non-image actions retain validated opening.
+  tiles form one horizontal row with available filename/size/date metadata and
+  supported thumbnails, requesting previews lazily. **Given** more tiles than
+  fit at either desktop or narrow widths, **When** expanded, **Then** they
+  remain in one row with horizontal scrolling and do not wrap. No Show previews
+  or cache-clearing button appears. Non-image actions retain validated opening.
 - **S05 Preview reuse and release (R10).** **Given** a preview already loaded
   or loading in the current mention, **When** its attachment section is reopened
   or the same image is revealed in comment context, **Then** it reuses that
@@ -257,10 +329,12 @@ References:
   to oldest below it. The selected mention appears once. Equal-time comments
   retain deterministic order; a later edit does not reverse creation chronology.
 - **S08 Independent resizing (R6, R8).** **Given** the description, selected
-  mention, and both context areas, **When** the user resizes each independently,
-  **Then** only the chosen reading area changes height and all content remains
-  reachable without changing column width, timeline order, or reply target.
-  Initially comments have natural height; shortening one may introduce its
+  mention, and both context areas, **When** the user resizes the description
+  and each context area independently, **Then** only the chosen resizable area
+  changes height and all content remains reachable without changing column
+  width, timeline order, or reply target. The selected mention body remains at
+  natural height without a resize handle or local scrollbar. Initially all
+  comments have natural height; shortening a context area may introduce its
   own content scroll, while the reply remains in the page flow.
 - **S09 Reply composition (R5, R11, R14).** **Given** a selected mention and
   available ticket users, **When** the user inserts several @mentions by
@@ -301,6 +375,55 @@ References:
   **When** its width changes, **Then** the rail, reading content, inbox
   controls, and reply actions remain reachable and legible without overlap
   or clipped actions, consistent with the selected mockup's compact intent.
+- **S16 Count meanings (R13).** **Given** active unanswered comments across
+  several issues, **When** a search matches only some or none, or the user
+  selects Answered, Snoozed, Dismissed, or All, **Then** the Needs your reply
+  count stays equal to the global active count, while displayed group counts
+  reflect their visible comments. A separate shown-results count, if present,
+  follows the search/filter and is labeled distinctly. **When** a local action
+  or confirmed reply changes active work, **Then** the global count follows
+  the existing active-count rules independently of the selected view.
+- **S17 Named custom people fields (R3).** **Given** existing issue detail
+  includes one populated user-valued custom field named Dev Tester and one
+  named Main Dev, plus another unrelated user-valued custom field, **When** the
+  issue is selected, **Then** only populated Dev Tester and Main Dev values
+  appear as labeled people properties in the rail. Field names match without
+  case sensitivity, empty values are omitted, and no additional Jira request is
+  made. A matching field name with multiple field IDs is omitted as ambiguous.
+  Field names remain transient presentation labels; cached user data and
+  existing user-source markers are unchanged.
+- **S18 Visual match to mockup #4 (R16).** **Given** the synthetic populated
+  fixture at the same desktop width as a mockup #4 reference capture, **When**
+  the production Jira Mentions view is compared section by section, **Then** it
+  matches the mockup's compact inbox proportions and selected-row treatment,
+  header divider, rail divider/kicker/stacked property rhythm, flat description
+  and attachment sections with bottom dividers, framed green reply panel and
+  inset text field, and compact separated comment rows with a highlighted
+  selected Mention and adjacent actions. Colors come from the app theme. At
+  narrow width the inbox and rail retain the same emphasis when stacked.
+  Explicit spec differences remain intact, including the horizontal
+  attachment row, Created property, newer/selected/earlier chronology, actual
+  Jira state/actions, and page-growing reply editor. Any other visual departure
+  from the mockup requires a documented spec decision before acceptance.
+- **S19 Snooze duration form (R7).** **Given** an unanswered selected mention,
+  **When** Snooze is activated, **Then** a compact duration form appears beside
+  the Snooze action with a numeric amount, minutes/hours/days unit, and submit
+  button, with the number stepper styled for the dark theme and without an
+  expanded time display at the end of the comment. Clicking outside or pressing
+  Escape closes the form; submitting applies the computed duration to the
+  selected mention through the existing snooze action.
+- **S20 Compact reply panel (R5, R16).** **Given** a selected issue and
+  mention, **When** the reply editor renders without a prior submission,
+  **Then** its heading identifies the selected mention and its footer shows
+  Post reply without a duplicated issue key or static helper description.
+  After submission, any delivery result or error feedback remains with the
+  editor.
+- **S21 Scoped reading typography (R2, R14, R16).** **Given** a populated issue
+  at desktop or narrow width, **When** Description, ticket details, comments,
+  and reply composition render, **Then** their reading text is approximately
+  one point larger than the prior presentation and wraps without horizontal
+  overflow. Inbox/global UI and attachment tile metadata retain their existing
+  sizes.
 
 ## Open Questions
 
@@ -310,40 +433,71 @@ belong in the separately authored implementation plan.
 
 ## Resolved Decisions
 
-- Mockup #4 is the selected direction. Its sample values, preview-only controls,
-  and simplified behaviors do not override the existing functional contract.
+- Mockup #4 is the production visual baseline for layout, spacing, dividers,
+  inbox selection emphasis, reply framing, and comment treatment. Its sample
+  values, preview-only controls, and simplified behaviors do not override the
+  explicit production behavior below.
+- Attachment tiles remain one horizontally scrolling row at all widths,
+  preserving the agreed row layout and avoiding expansion that pushes the
+  reply farther down. This intentionally supersedes the mockup's desktop wrap.
+- Needs your reply retains the existing global active count. The mockup's
+  filtered/searched header count is illustrative and must not change that
+  meaning; a shown-results count, if present, is separate and clearly labeled.
+- Created joins Updated and the other populated ticket properties in the rail,
+  so ticket dates are available together rather than below a long timeline.
+  This relocates an existing value and does not request a new field.
 - This spec supersedes `jira-unanswered-mentions` presentation language
   requiring one connected comment/composer card (R19), and the prohibition on
-  comment resize handles/internal scrolling (R25/R27, S48). The composer stays
-  before the timeline; comment areas gain independent optional resizing under
-  R8. Natural initial comment height and normal page scrolling remain.
+  context-group resize handles/internal scrolling (R25/R27, S48). The composer
+  stays before the timeline; Newer and Earlier context areas gain independent
+  optional resizing under R8, while the selected Mention body remains at
+  natural height without a resize handle. Natural initial comment height and
+  normal page scrolling remain.
 - Preserve the existing description automatic-height bound rather than
   copying the mockup's unrestricted initial description. Remove the existing
   reply height cap so long drafts remain part of normal page scrolling.
 - Ticket properties use only populated existing context. The rail relocates
-  the existing status/type/priority/people/date/parent information; it does
-  not expand the fetched field set or make every available data field visible.
+  the existing status/type/priority/people/date/parent information and surfaces
+  the already-fetched Dev Tester/Main Dev custom people fields; it does not
+  expand the fetched field set or make unrelated custom fields visible. Their
+  catalog names are transient presentation labels; cached Jira user data and
+  its existing source markers remain unchanged.
+- Match mockup #4's compact inbox, selected-row highlight, header/rail dividers,
+  restrained detail labels, bordered reply panel, and lightweight timeline
+  rows. The app theme replaces prototype colors, and explicit requirements
+  override prototype behaviors and content.
 - Newest-first timeline order is distinct from existing filter-specific
   inbox grouping/order. The redesign preserves those inbox rules.
+- Snooze and Dismiss need separate semantic treatments so the selected
+  mention's green tint does not make the actions look like the same state:
+  Snooze uses amber and Dismiss uses the theme danger color.
 
 ## Out-of-Scope Notes
 
 Broader Jira functionality and additional visual variants require separate
-product work. Prototype local fixtures are unnecessary for this redesign;
-synthetic populated, sparse, and long-content cases can describe its outcomes.
+product work. Prototype local fixtures are unnecessary; use synthetic
+populated, sparse, and long-content cases to compare the production page with
+mockup #4 without copying prototype sample values.
 
 ## Handoff Contract
 
 - Deliver only this draft at this stage. A separate agent owns the adjacent
   implementation plan and its independent review; implementation requires the
   repository's normal readiness and plan-approval gates.
-- The non-negotiables are the selected hierarchy, available-data-only rail,
+- The non-negotiables are faithful visual treatment from mockup #4 (including
+  inbox selection emphasis, dividers, reply framing, and comment-row styling),
+  the selected hierarchy, available-data-only rail,
   composer placement and page scrolling, independent reading-area resizing,
   chronological selected mention, and preservation of the existing functional
-  and privacy boundaries. Leave the original functional spec intact.
+  and privacy boundaries. Show Dev Tester/Main Dev only when their existing
+  user-valued custom fields are unambiguous and populated. Do not persist field
+  catalog names or alter existing cached user-source markers. Leave the
+  original functional spec intact.
 - Definition of done for the eventual redesign: every requirement and scenario
-  has concrete passing evidence, the populated/sparse/long-content and existing
-  state cases have been visually assessed against mockup #4 in the app theme,
+  has concrete passing evidence, a same-viewport, section-by-section visual
+  comparison against mockup #4 records only the explicit differences in this
+  spec, and populated/sparse/long-content and existing state cases have been
+  visually assessed in the app theme,
   and preserved reply, link, inbox, and attachment behaviors have been verified.
   Record evidence in the adjacent plan during implementation/verification;
   this draft asserts no runtime verification or implementation completion.

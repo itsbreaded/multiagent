@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { installMockIpc } from '../../../../../tests/mockIpc'
 import type { JiraIssueSnapshot, JiraMentionsProjection } from '../../../../shared/jiraMentions'
@@ -97,7 +97,7 @@ function prepareStore(): void {
 }
 
 describe('JiraMentions composer', () => {
-  it('grows the reply editor with its content and caps its height for long drafts', async () => {
+  it('grows the reply editor with its content without an internal height cap', async () => {
     prepareStore()
     useJiraMentionsStore.setState({
       selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId },
@@ -105,7 +105,8 @@ describe('JiraMentions composer', () => {
     })
     render(<JiraMentions />)
 
-    const editor = screen.getByRole('textbox', { name: 'Reply' }) as HTMLTextAreaElement
+    const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ }) as HTMLTextAreaElement
+    expect(editor).toHaveAccessibleName('Reply to selected mention on APP-1')
     let contentHeight = 0
     Object.defineProperty(editor, 'scrollHeight', { configurable: true, get: () => contentHeight })
     expect(editor.style.height).toBe('95px')
@@ -117,9 +118,13 @@ describe('JiraMentions composer', () => {
     contentHeight = 360
     await userEvent.setup().type(editor, ' with more context')
     await waitFor(() => {
-      expect(editor.style.height).toBe('300px')
-      expect(editor.style.overflowY).toBe('auto')
+      expect(editor.style.height).toBe('360px')
+      expect(editor.style.maxHeight).toBe('')
+      expect(editor.style.overflowY).toBe('hidden')
     })
+    contentHeight = 720
+    await userEvent.setup().type(editor, ' and a much longer draft')
+    await waitFor(() => expect(editor.style.height).toBe('720px'))
     expect(editor.style.resize).toBe('vertical')
   })
 
@@ -140,8 +145,8 @@ describe('JiraMentions composer', () => {
     const search = screen.getByRole('textbox', { name: 'Search Jira mentions' })
     const filter = screen.getByRole('combobox', { name: 'Jira mentions filter' })
     const refresh = screen.getByRole('button', { name: 'Refresh Jira mentions' })
-    expect(search.parentElement).toBe(filter.parentElement)
-    expect(search.parentElement).toBe(refresh.parentElement)
+    expect(search.closest('.jira-mentions-inbox-controls')).toBe(filter.closest('.jira-mentions-inbox-controls'))
+    expect(search.closest('.jira-mentions-inbox-controls')).toBe(refresh.closest('.jira-mentions-inbox-controls'))
   })
 
   it('uses the app text-field focus treatment for search and reply', () => {
@@ -153,7 +158,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     const search = screen.getByRole('textbox', { name: 'Search Jira mentions' })
-    const reply = screen.getByRole('textbox', { name: 'Reply' })
+    const reply = screen.getByRole('textbox', { name: /Reply to selected mention/ })
     expect(search).toHaveStyle({ outline: 'none', caretColor: ui.color.accent })
     expect(reply).toHaveStyle({ outline: 'none', caretColor: ui.color.accent })
   })
@@ -196,6 +201,57 @@ describe('JiraMentions composer', () => {
     }
   })
 
+  it('keeps the global active count unchanged through search and every filter', async () => {
+    prepareStore()
+    const base = projection.items[0]
+    const makeItem = (index: number, state: 'answered' | 'unanswered' | 'unknown', disposition?: 'dismissed' | 'snoozed') => {
+      const issueId = `issue-${index}`
+      const commentId = `comment-${index}`
+      return {
+        ...base,
+        issue: { ...issue, issueId, issueKey: `APP-${index}`, summary: `Needle issue ${index}` },
+        comment: { ...incomingComment, commentId, issueId, excerpt: `Needle request ${index}` },
+        state: { ...base.state, issueId, incomingCommentId: commentId, state },
+        action: disposition ? {
+          issueId, incomingCommentId: commentId, disposition,
+          snoozeUntil: disposition === 'snoozed' ? Date.now() + 60_000 : null, updatedAt: Date.now(),
+        } : null,
+      }
+    }
+    const allItems = [
+      makeItem(1, 'unanswered'),
+      makeItem(2, 'answered'),
+      makeItem(3, 'unanswered', 'snoozed'),
+      makeItem(4, 'unanswered', 'dismissed'),
+      makeItem(5, 'unknown'),
+    ]
+    useJiraMentionsStore.setState({ projection: { ...projection, activeCount: 3, status: 'ready', items: allItems } })
+    const userEventInstance = userEvent.setup()
+    render(<JiraMentions />)
+
+    const globalCount = screen.getByLabelText('3 active mentions')
+    const search = screen.getByRole('textbox', { name: 'Search Jira mentions' })
+    const filter = screen.getByRole('combobox', { name: 'Jira mentions filter' })
+    await userEventInstance.type(search, 'needle')
+
+    for (const [value, shown] of [['active', 2], ['snoozed', 1], ['dismissed', 1], ['answered', 1], ['all', 5]] as const) {
+      await userEventInstance.selectOptions(filter, value)
+      expect(globalCount).toHaveTextContent('3')
+      expect(screen.getByText(`${shown} shown`)).toBeInTheDocument()
+      expect(document.querySelectorAll('.jira-mentions-group-heading span')).toHaveLength(shown)
+      expect(document.querySelectorAll('.jira-mentions-mention-row')).toHaveLength(shown)
+    }
+
+    await userEventInstance.clear(search)
+    await userEventInstance.type(search, 'no-such-match')
+    for (const value of ['active', 'snoozed', 'dismissed', 'answered', 'all']) {
+      await userEventInstance.selectOptions(filter, value)
+      expect(globalCount).toHaveTextContent('3')
+      expect(document.querySelectorAll('.jira-mentions-group-heading')).toHaveLength(0)
+      expect(document.querySelectorAll('.jira-mentions-mention-row')).toHaveLength(0)
+    }
+  })
+
   it('shows a checked empty state instead of an unanswered count when the scan completes with no items', () => {
     prepareStore()
     useJiraMentionsStore.setState({ projection: {
@@ -235,6 +291,55 @@ describe('JiraMentions composer', () => {
     expect(screen.queryByText('Select a comment to view its Jira context.')).not.toBeInTheDocument()
   })
 
+  it('resets attachment expansion when the selected mention changes', async () => {
+    prepareStore()
+    const attachment = { id: 'attachment-reset', name: 'notes.txt', contentUrl: 'https://jira.example.test/attachment/notes.txt', mimeType: 'text/plain', size: 64, author: user, createdAt: incomingComment.createdAt }
+    const detailWithAttachment = { ...detail, issue: { ...issue, attachments: [attachment] } }
+    useJiraMentionsStore.setState({ projection: projectionWithSecondComment, selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId }, detail: detailWithAttachment })
+    const ipc = installMockIpc()
+    ipc.invoke.mockImplementation(async (channel: string) => channel === 'jira-mentions:get-issue-detail' ? detailWithAttachment : projectionWithSecondComment)
+    const userEventInstance = userEvent.setup()
+    render(<JiraMentions />)
+
+    const attachments = screen.getByLabelText('Attachments')
+    await userEventInstance.click(attachments.querySelector('summary')!)
+    expect(attachments).toHaveAttribute('open')
+    const card = document.querySelector('.jira-mentions-attachment-card')!
+    expect(card.querySelector('.jira-mentions-attachment-metadata')).toHaveTextContent('text/plain · 64 B')
+    expect(card.querySelector('.jira-mentions-attachment-date')).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(incomingComment.createdAt),
+    )
+    await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
+    await waitFor(() => expect(useJiraMentionsStore.getState().selected?.incomingCommentId).toBe(secondIncomingComment.commentId))
+    expect(screen.getByLabelText('Attachments')).not.toHaveAttribute('open')
+    expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:get-issue-detail', issue.issueId)
+  })
+
+  it('orders comment ties by ID and ignores edits when placing the timeline', () => {
+    prepareStore()
+    const bodyWith = (text: string) => ({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+    const tiedBefore = { ...incomingComment, commentId: 'comment-0-before', createdAt: incomingComment.createdAt, updatedAt: incomingComment.createdAt + 9_000_000, excerpt: 'Tie before selected', body: bodyWith('Tie before selected') }
+    const tiedAfter = { ...incomingComment, commentId: 'comment-2-after', createdAt: incomingComment.createdAt, updatedAt: incomingComment.createdAt - 9_000_000, excerpt: 'Tie after selected', body: bodyWith('Tie after selected') }
+    const editedOlder = { ...earlierComment, commentId: 'comment-edited-older', updatedAt: incomingComment.createdAt + 9_000_000, excerpt: 'Old comment edited today', body: bodyWith('Old comment edited today') }
+    const genuinelyNewer = { ...laterComment, createdAt: incomingComment.createdAt + 1_000, updatedAt: incomingComment.createdAt - 9_000_000, excerpt: 'Created later, edited earlier', body: bodyWith('Created later, edited earlier') }
+    const timelineDetail = { ...detail, comments: [editedOlder, tiedBefore, incomingComment, tiedAfter, genuinelyNewer] }
+    useJiraMentionsStore.setState({ selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId }, detail: timelineDetail })
+    render(<JiraMentions />)
+
+    const history = screen.getByRole('region', { name: 'Comment history' })
+    const text = history.textContent ?? ''
+    const positions = [
+      text.indexOf('Created later, edited earlier'),
+      text.indexOf('Tie after selected'),
+      text.indexOf('Can you take a look?'),
+      text.indexOf('Tie before selected'),
+      text.indexOf('Old comment edited today'),
+    ]
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(within(history).getAllByText('Can you take a look?', { exact: true })).toHaveLength(1)
+  })
+
   it('opens the selected issue through the main-owned Jira link and disables replies to unsupported audiences', async () => {
     prepareStore()
     const restrictedDetail: JiraIssueSnapshot = {
@@ -248,7 +353,7 @@ describe('JiraMentions composer', () => {
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
     expect(await screen.findByRole('heading', { name: 'A test issue' })).toBeInTheDocument()
-    const reply = screen.getByRole('textbox', { name: 'Reply' })
+    const reply = screen.getByRole('textbox', { name: /Reply to selected mention/ })
     expect(reply).toBeDisabled()
     expect(reply).toHaveAttribute('placeholder', 'Open this issue in Jira to reply to this audience.')
     expect(screen.getByRole('button', { name: 'Post reply' })).toBeDisabled()
@@ -263,7 +368,7 @@ describe('JiraMentions composer', () => {
     expect(screen.queryByRole('button', { name: 'A test issue' })).not.toBeInTheDocument()
   })
 
-  it('shows the complete comment history without nested scrolling and keeps reply above it', () => {
+  it('keeps natural comment flow with context-only resize controls and reply above history', () => {
     prepareStore()
     useJiraMentionsStore.setState({
       selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId },
@@ -273,14 +378,50 @@ describe('JiraMentions composer', () => {
 
     const reply = screen.getByRole('region', { name: 'Reply composer' })
     const history = screen.getByRole('region', { name: 'Comment history' })
+    expect(within(reply).getByText('Reply to mention')).toBeVisible()
+    expect(reply).not.toHaveTextContent(issue.issueKey)
+    expect(reply.querySelector('.jira-mentions-reply-issue')).toBeNull()
+    expect(within(reply).queryByText('Reply in the issue comment thread')).not.toBeInTheDocument()
+    expect(within(reply).queryByRole('status')).not.toBeInTheDocument()
+    expect(within(reply).getByRole('button', { name: 'Post reply' })).toBeVisible()
     expect(screen.getByText('Earlier context')).toBeVisible()
     expect(screen.getByText('Later context')).toBeVisible()
     expect(reply.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(history.querySelector('.dark-scrollbar')).toBeNull()
-    expect(screen.queryByRole('separator', { name: /Resize (earlier|later|selected mention)/ })).not.toBeInTheDocument()
+    const newerContext = history.querySelector('[aria-label="Newer comments"] .jira-mentions-comment-context') as HTMLElement
+    const earlierContext = history.querySelector('[aria-label="Earlier comments"] .jira-mentions-comment-context') as HTMLElement
+    expect(newerContext.style.height).toBe('auto')
+    expect(newerContext.style.overflowY).toBe('visible')
+    expect(earlierContext.style.height).toBe('auto')
+    expect(earlierContext.style.overflowY).toBe('visible')
+    const newerResize = screen.getByRole('separator', { name: 'Resize newer comments' })
+    const earlierResize = screen.getByRole('separator', { name: 'Resize earlier comments' })
     const selectedMention = screen.getByRole('region', { name: 'Selected mention' }) as HTMLElement
+    const selectedBody = selectedMention.querySelector('.jira-mentions-comment-context-body') as HTMLElement
     expect(selectedMention.style.height).toBe('')
     expect(selectedMention.style.overflow).toBe('')
+    expect(selectedBody.style.height).toBe('')
+    expect(selectedBody.style.overflowY).toBe('')
+    expect(selectedBody).not.toHaveClass('dark-scrollbar')
+    expect(screen.queryByRole('separator', { name: 'Resize selected mention' })).not.toBeInTheDocument()
+    fireEvent.keyDown(newerResize, { key: 'ArrowDown' })
+    expect(newerContext.style.height).toBe('48px')
+    expect(earlierContext.style.height).toBe('auto')
+    fireEvent.keyDown(earlierResize, { key: 'ArrowDown' })
+    expect(earlierContext.style.height).toBe('48px')
+    expect(screen.getAllByRole('separator').map((separator) => separator.getAttribute('aria-label'))).toEqual([
+      'Resize newer comments', 'Resize earlier comments',
+    ])
+    const selectedInboxRow = document.querySelector('.jira-mentions-mention-row[data-selected="true"]') as HTMLElement
+    expect(selectedInboxRow.querySelector('.jira-mentions-mention-tag')).toBeNull()
+    expect(selectedInboxRow.querySelector('.jira-mentions-mention-row-head strong')?.textContent).toBe('Requester')
+
+    const snooze = screen.getByRole('button', { name: 'Snooze' })
+    const dismiss = screen.getByRole('button', { name: 'Dismiss' })
+    expect(snooze).toHaveClass('jira-mentions-action-snooze')
+    expect(dismiss).toHaveClass('jira-mentions-action-dismiss')
+    const mentionsRoot = document.querySelector('.jira-mentions-root') as HTMLElement
+    expect(mentionsRoot.style.getPropertyValue('--jira-mentions-waiting')).toBe(ui.color.statusWaiting)
+    expect(mentionsRoot.style.getPropertyValue('--jira-mentions-danger')).toBe(ui.color.danger)
   })
 
   it('returns the detail pane to the composer when switching to another mention', () => {
@@ -312,7 +453,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: 'Reply' }) as HTMLTextAreaElement
+    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ }) as HTMLTextAreaElement
     await userEventInstance.type(editor, 'I will check @ tomorrow.')
     const insertionPoint = 'I will check @'.length
     editor.focus()
@@ -333,6 +474,41 @@ describe('JiraMentions composer', () => {
       ],
     })))
     await waitFor(() => expect(editor).toHaveValue(''))
+    expect(await screen.findByRole('status')).toHaveTextContent('Reply posted.')
+  })
+
+  it('posts multiple selected recipients as structured mentions and leaves a typed name as text', async () => {
+    prepareStore()
+    const ipc = installMockIpc()
+    ipc.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'jira-mentions:get-issue-detail') return detailWithSecondComment
+      if (channel === 'jira-mentions:post-reply') return { ok: true, commentId: 'reply-2' }
+      return projectionWithSecondComment
+    })
+    const userEventInstance = userEvent.setup()
+    render(<JiraMentions />)
+
+    await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
+    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    await userEventInstance.type(editor, 'Ping @Req')
+    await userEventInstance.keyboard('{ArrowDown}{Enter}')
+    await userEventInstance.type(editor, ' and @Tay')
+    await userEventInstance.keyboard('{ArrowDown}{Enter}')
+    await userEventInstance.type(editor, ' and @Requester')
+    await userEventInstance.keyboard('{Escape}')
+    await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
+
+    await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:post-reply', expect.objectContaining({
+      issueId: issue.issueId,
+      sourceCommentId: incomingComment.commentId,
+      tokens: [
+        { kind: 'text', id: 'text-0', text: 'Ping ' },
+        { kind: 'mention', id: expect.any(String), accountId: user.accountId, displayName: user.displayName },
+        { kind: 'text', id: expect.any(String), text: ' and ' },
+        { kind: 'mention', id: expect.any(String), accountId: secondRequester.accountId, displayName: secondRequester.displayName },
+        { kind: 'text', id: expect.any(String), text: ' and @Requester' },
+      ],
+    })))
   })
 
   it('restores an inline account-ID mention after navigating to another request', async () => {
@@ -349,15 +525,15 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    let editor = await screen.findByRole('textbox', { name: 'Reply' })
+    let editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.type(editor, 'Ping @Req')
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     expect(editor).toHaveValue('Ping @Requester')
 
     await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
-    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Reply' })).toHaveValue(''))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /Reply to selected mention/ })).toHaveValue(''))
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    editor = await screen.findByRole('textbox', { name: 'Reply' })
+    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await waitFor(() => expect(editor).toHaveValue('Ping @Requester'))
 
     await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
@@ -380,19 +556,19 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    let editor = await screen.findByRole('textbox', { name: 'Reply' })
+    let editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.type(editor, 'Draft for first request')
 
     await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
-    editor = await screen.findByRole('textbox', { name: 'Reply' })
+    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await waitFor(() => expect(editor).toHaveValue(''))
     await userEventInstance.type(editor, 'Draft for second request')
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    editor = await screen.findByRole('textbox', { name: 'Reply' })
+    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await waitFor(() => expect(editor).toHaveValue('Draft for first request'))
     await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
-    editor = await screen.findByRole('textbox', { name: 'Reply' })
+    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await waitFor(() => expect(editor).toHaveValue('Draft for second request'))
   })
 
@@ -408,7 +584,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: 'Reply' })
+    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.type(editor, 'Please review this change.')
     await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
 
@@ -432,7 +608,7 @@ describe('JiraMentions composer', () => {
     const userEventInstance = userEvent.setup()
     render(<JiraMentions />)
 
-    const editor = screen.getByRole('textbox', { name: 'Reply' })
+    const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.type(editor, 'Please review this change.')
 
     expect(screen.getByRole('status')).toHaveTextContent(message)
@@ -478,7 +654,8 @@ describe('JiraMentions composer', () => {
     const userEventInstance = userEvent.setup()
     render(<JiraMentions />)
 
-    expect(screen.getByText('A test issue')).toBeInTheDocument()
+    expect(document.querySelector('.jira-mentions-group-heading p')).toHaveTextContent('A test issue')
+    expect(screen.getAllByText('A test issue', { exact: true })).toHaveLength(3)
     expect(screen.getByText('APP-1').compareDocumentPosition(screen.getByText('APP-2')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await userEventInstance.click(screen.getByRole('button', { name: /Newest request/ }))
     await screen.findByRole('heading', { name: 'A test issue' })
@@ -504,7 +681,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: 'Reply' })
+    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.type(editor, 'Ask @')
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     expect(editor).toHaveValue('Ask @Requester')
@@ -535,13 +712,22 @@ describe('JiraMentions composer', () => {
     }
     const richDetail: JiraIssueSnapshot = {
       ...detail,
+      users: [
+        ...detail.users,
+        { accountId: 'dev-tester-id', displayName: 'Dev Tester One', sources: ['field-name:dev tester'] },
+        { accountId: 'dev-tester-second-id', displayName: 'Dev Tester Two', sources: ['field-name:dev tester'] },
+        { accountId: 'main-dev-id', displayName: 'Main Developer', sources: ['field-name:main dev'] },
+      ],
       comments: [earlierComment, earlierNewerComment, incomingComment, laterComment, laterNewerComment],
       issue: {
         ...issue,
         statusName: 'In Progress', statusCategory: 'In Progress', priority: 'High', issueType: 'Bug',
         assignee: { accountId: 'assignee-id', displayName: 'Morgan', sources: ['assignee'] },
         reporter: { accountId: 'reporter-id', displayName: 'Taylor', sources: ['reporter'] },
-        updatedAt: Date.parse('2026-10-16T12:00:00Z'),
+         createdAt: Date.parse('2026-10-14T08:30:00Z'),
+         updatedAt: Date.parse('2026-10-16T12:00:00Z'),
+         dueDate: '2026-10-31',
+         parent: { issueKey: 'APP-2', summary: 'Parent issue' },
         description: { type: 'doc', version: 1, content: [
           { type: 'paragraph', content: [{ type: 'text', text: 'Issue description' }] },
           { type: 'table', content: [
@@ -564,15 +750,22 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const issueBadges = await screen.findByLabelText('Issue details')
-    expect(issueBadges).toHaveTextContent('High')
-    expect(issueBadges).toHaveTextContent('In Progress')
-    expect(issueBadges).toHaveTextContent('Bug')
-    expect(issueBadges).toHaveTextContent('Assignee Morgan')
-    const statusChip = issueBadges.querySelector('[data-property="status"]') as HTMLElement
-    const typeChip = issueBadges.querySelector('[data-property="type"]') as HTMLElement
-    const priorityValue = issueBadges.querySelector('[data-property="priority"]') as HTMLElement
-    const assigneeValue = issueBadges.querySelector('[data-property="assignee"]') as HTMLElement
+    const issueRail = await screen.findByLabelText('Issue details')
+    expect(issueRail).toHaveTextContent('High')
+    expect(issueRail).toHaveTextContent('In Progress')
+    expect(issueRail).toHaveTextContent('Bug')
+    expect(issueRail).toHaveTextContent('Morgan')
+    expect(issueRail).toHaveTextContent('Dev Tester One')
+    expect(issueRail).toHaveTextContent('Dev Tester Two')
+    expect(issueRail).toHaveTextContent('Main Developer')
+    const devTesterProperty = screen.getByLabelText('Dev Tester Dev Tester One, Dev Tester Two')
+    expect(devTesterProperty).toBeInTheDocument()
+    expect(devTesterProperty.querySelectorAll('.jira-mentions-avatar')).toHaveLength(2)
+    expect(screen.getByLabelText('Main Dev Main Developer')).toBeInTheDocument()
+    const statusChip = issueRail.querySelector('[data-property="status"]') as HTMLElement
+    const typeChip = issueRail.querySelector('[data-property="type"]') as HTMLElement
+    const priorityValue = issueRail.querySelector('[data-property="priority"]') as HTMLElement
+    const assigneeValue = issueRail.querySelector('[data-property="assignee"]') as HTMLElement
     expect(statusChip).toHaveAttribute('data-category', 'in-progress')
     expect(statusChip).toHaveTextContent(/^In Progress$/)
     expect(statusChip.style.background).toBe(ui.color.jiraStatusProgressBackground)
@@ -585,9 +778,15 @@ describe('JiraMentions composer', () => {
     expect(priorityValue.style.color).toBe(ui.color.jiraPriority)
     expect(priorityValue.style.borderLeft).toBe(`1px solid ${ui.color.border}`)
     expect(assigneeValue.style.background).toBe('')
-    const issueFacts = screen.getByLabelText('Issue facts')
-    expect(issueFacts).toHaveTextContent('Reporter Taylor')
-    expect(issueFacts).toHaveTextContent('Updated')
+    expect(issueRail).toHaveTextContent('Taylor')
+    expect(issueRail).toHaveTextContent('ParentAPP-2')
+    expect(issueRail).toHaveTextContent('Due2026-10-31')
+    expect(issueRail).toHaveTextContent('Created')
+    expect(issueRail).toHaveTextContent('Updated')
+    expect(Array.from(issueRail.querySelectorAll('dt')).map((label) => label.textContent)).toEqual([
+      'Status', 'Type', 'Priority', 'Assignee', 'Reporter', 'Dev Tester', 'Main Dev', 'Parent', 'Due', 'Created', 'Updated',
+    ])
+    expect(screen.getAllByText('Created').filter((element) => issueRail.contains(element))).toHaveLength(1)
     const attachments = screen.getByLabelText('Attachments')
     expect(attachments.querySelector('summary')).toHaveTextContent('Attachments 1')
     expect(attachments).not.toHaveAttribute('open')
@@ -627,17 +826,30 @@ describe('JiraMentions composer', () => {
       ...detail,
       issue: {
         ...issue,
+        issueType: null,
+        priority: null,
+        assignee: null,
+        reporter: null,
+        parent: null,
+        dueDate: null,
+        createdAt: null,
+        updatedAt: null,
         attachments: [{ id: 'attachment-1', name: 'unlinked.txt', contentUrl: null, mimeType: 'text/plain', size: 100, author: null, createdAt: null }],
       },
     }
     useJiraMentionsStore.setState({ selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId }, detail: detailWithoutAttachmentLinks })
     render(<JiraMentions />)
 
-    const issueBadges = screen.getByLabelText('Issue details')
+    const issueRail = screen.getByLabelText('Issue details')
     expect(screen.getByLabelText('Status Open')).toBeInTheDocument()
-    expect(issueBadges).not.toHaveTextContent('Priority')
-    expect(issueBadges).not.toHaveTextContent('Assignee')
-    expect(screen.queryByLabelText('Issue facts')).not.toBeInTheDocument()
+    expect(issueRail).not.toHaveTextContent('Priority')
+    expect(issueRail).not.toHaveTextContent('Assignee')
+    expect(issueRail).not.toHaveTextContent('Reporter')
+    expect(issueRail).not.toHaveTextContent('Parent')
+    expect(issueRail).not.toHaveTextContent('Due')
+    expect(issueRail).not.toHaveTextContent('Created')
+    expect(issueRail).not.toHaveTextContent('Updated')
+    expect(Array.from(issueRail.querySelectorAll('dt')).map((label) => label.textContent)).toEqual(['Status'])
     expect(screen.queryByRole('region', { name: 'Attachments' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Attachments')).not.toBeInTheDocument()
   })
@@ -662,26 +874,54 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     const comment = screen.getAllByText('Can you take a look?')[1]
-    const editor = screen.getByRole('textbox', { name: 'Reply' })
+    const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ })
     const history = screen.getByRole('region', { name: 'Comment history' })
     const composer = screen.getByRole('region', { name: 'Reply composer' })
     expect(history).toContainElement(comment)
     expect(history).not.toContainElement(editor)
-    expect(history.style.borderRadius).toBe('7px')
+    expect(history.style.border).toBe('')
+    expect(history.style.borderRadius).toBe('')
     expect(composer.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const snooze = screen.getByRole('button', { name: 'Snooze' })
     const dismiss = screen.getByRole('button', { name: 'Dismiss' })
-    const commentHeader = history.firstElementChild
-    expect(snooze.parentElement).toBe(commentHeader)
-    expect(dismiss.parentElement).toBe(commentHeader)
+    const commentHeader = history.querySelector('.jira-mentions-comment-head')
+    expect(snooze.parentElement?.parentElement?.parentElement).toBe(commentHeader)
+    expect(dismiss.parentElement?.parentElement).toBe(commentHeader)
+    expect(history.querySelector('[data-selected="true"]')).toHaveClass('jira-mentions-comment-row')
+    expect(history.querySelector('.jira-mentions-source-tag')).toHaveTextContent('Mention')
+    expect(history.querySelector('.jira-mentions-comment-avatar')).toBeInTheDocument()
     expect(commentHeader?.textContent).toContain('Requester')
     expect(commentHeader?.textContent).toContain('2026')
     expect(editor).toHaveAttribute('placeholder', 'Write a reply')
     expect(screen.queryByPlaceholderText(/Type @/)).not.toBeInTheDocument()
   })
 
-  it('shows the snooze wake-up in local time and submits the same instant after a zone change', async () => {
-    vi.stubEnv('TZ', 'America/Chicago')
+  it('opens a compact Snooze duration form beside the action and closes on outside click or Escape', async () => {
+    prepareStore()
+    useJiraMentionsStore.setState({ selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId }, detail })
+    render(<JiraMentions />)
+    const user = userEvent.setup()
+    const snooze = screen.getByRole('button', { name: 'Snooze' })
+
+    await user.click(snooze)
+    const menu = screen.getByRole('dialog', { name: 'Snooze duration' })
+    expect(snooze).toHaveAttribute('aria-expanded', 'true')
+    expect(within(menu).getByRole('spinbutton', { name: 'Snooze duration' })).toHaveValue(1)
+    expect(within(menu).getByRole('combobox', { name: 'Snooze unit' })).toHaveValue('hours')
+    expect(within(menu).getByRole('button', { name: 'Apply snooze' })).toBeInTheDocument()
+    expect(menu).toHaveClass('jira-mentions-snooze-menu')
+
+    await user.click(screen.getByRole('region', { name: 'Reply composer' }))
+    expect(screen.queryByRole('dialog', { name: 'Snooze duration' })).not.toBeInTheDocument()
+    expect(snooze).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(snooze)
+    expect(screen.getByRole('dialog', { name: 'Snooze duration' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Snooze duration' })).not.toBeInTheDocument()
+  })
+
+  it('submits the typed Snooze duration in the selected unit', async () => {
     const now = Date.parse('2026-03-07T16:00:00Z')
     vi.spyOn(Date, 'now').mockReturnValue(now)
     prepareStore()
@@ -692,27 +932,20 @@ describe('JiraMentions composer', () => {
       return projection
     })
     const userEventInstance = userEvent.setup()
-    const { rerender } = render(<JiraMentions />)
+    render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    await screen.findByRole('textbox', { name: 'Reply' })
+    await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.click(screen.getByRole('button', { name: 'Snooze' }))
-    const option = screen.getByRole('menuitem', { name: /2 hours/ })
-    const snoozeUntil = now + 2 * 60 * 60 * 1000
-    const chicagoLabel = new Date(snoozeUntil).toLocaleString()
-    expect(option.querySelector('span')?.textContent).toBe(chicagoLabel)
-    await userEventInstance.click(option)
+    const menu = screen.getByRole('dialog', { name: 'Snooze duration' })
+    await userEventInstance.clear(within(menu).getByRole('spinbutton', { name: 'Snooze duration' }))
+    await userEventInstance.type(within(menu).getByRole('spinbutton', { name: 'Snooze duration' }), '90')
+    await userEventInstance.selectOptions(within(menu).getByRole('combobox', { name: 'Snooze unit' }), 'minutes')
+    await userEventInstance.click(within(menu).getByRole('button', { name: 'Apply snooze' }))
+    const snoozeUntil = now + 90 * 60_000
     await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:set-action', expect.objectContaining({
       issueId: issue.issueId, incomingCommentId: incomingComment.commentId, action: 'snoozed', snoozeUntil,
     })))
-
-    vi.stubEnv('TZ', 'America/Los_Angeles')
-    rerender(<JiraMentions />)
-    await userEventInstance.click(screen.getByRole('button', { name: 'Snooze' }))
-    const sameInstantOption = screen.getByRole('menuitem', { name: /2 hours/ })
-    const losAngelesLabel = new Date(snoozeUntil).toLocaleString()
-    expect(losAngelesLabel).not.toBe(chicagoLabel)
-    expect(sameInstantOption.querySelector('span')?.textContent).toBe(losAngelesLabel)
   })
 
   it('renders hostile structured text as text and never creates a clickable Jira link', async () => {
@@ -735,7 +968,7 @@ describe('JiraMentions composer', () => {
     await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:get-issue-detail', issue.issueId))
     await waitFor(() => expect(useJiraMentionsStore.getState().detail).toEqual(hostileDetail))
 
-    const renderedDescription = container.querySelector('p')?.textContent ?? ''
+    const renderedDescription = container.querySelector('.jira-mentions-description-copy p')?.textContent ?? ''
     expect(renderedDescription).toContain('unsafe link')
     expect(container.querySelector('a')).toBeNull()
     expect(container.querySelector('img[onerror]')).toBeNull()
@@ -758,7 +991,7 @@ describe('JiraMentions composer', () => {
     const originalWidth = body.style.width
     expect(descriptionSection.style.borderRadius).toBe('')
     expect(descriptionSection.style.background).toBe('')
-    expect(descriptionSection.style.borderTop).toBe(`1px solid ${ui.color.border}`)
+    expect(descriptionSection).toHaveClass('jira-mentions-section')
     expect(body.style.height).toBe('auto')
     expect(body.style.maxHeight).toBe('min(360px, 35cqh)')
     expect(body.style.overflow).toBe('auto')
@@ -776,7 +1009,8 @@ describe('JiraMentions composer', () => {
       expect(body.style.width).toBe(originalWidth)
       expect(body.style.maxHeight).toBe('none')
     }
-    const automaticMaxHeight = Math.min(360, Math.floor((detailViewport.clientHeight - Number.parseFloat(window.getComputedStyle(detailViewport).paddingTop) - Number.parseFloat(window.getComputedStyle(detailViewport).paddingBottom)) * 0.35))
+    const detailPadding = window.getComputedStyle(detailViewport)
+    const automaticMaxHeight = Math.min(360, Math.floor((detailViewport.clientHeight - (Number.parseFloat(detailPadding.paddingTop) || 18) - (Number.parseFloat(detailPadding.paddingBottom) || 18)) * 0.35))
     fireEvent.pointerDown(separator, { clientY: 100 })
     fireEvent.pointerMove(window, { clientY: 1000 })
     fireEvent.pointerUp(window, { clientY: 1000 })
@@ -808,6 +1042,29 @@ describe('JiraMentions composer', () => {
     expect(description.querySelector('p')).toHaveTextContent('Panel description text')
     expect(description.querySelector('p')?.parentElement).toBe(description.querySelector('.dark-scrollbar'))
     expect(description.querySelector('div[style*="border-radius"]')).toBeNull()
+  })
+
+  it('does not guess unmatched or ambiguous ADF image attachments', () => {
+    prepareStore()
+    const duplicateOne = { id: 'duplicate-one', name: 'duplicate.png', contentUrl: null, mimeType: 'image/png', size: 16, author: user, createdAt: incomingComment.createdAt }
+    const duplicateTwo = { ...duplicateOne, id: 'duplicate-two' }
+    const mediaComment = {
+      ...incomingComment,
+      body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
+        { type: 'media', attrs: { id: 'unmatched-id', type: 'file', alt: 'duplicate.png' } },
+        { type: 'media', attrs: { id: 'another-unmatched-id', type: 'file', alt: 'missing.png' } },
+      ] }] },
+    }
+    useJiraMentionsStore.setState({
+      selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId },
+      detail: { ...detail, issue: { ...issue, attachments: [duplicateOne, duplicateTwo] }, comments: [mediaComment] },
+    })
+    const ipc = installMockIpc()
+    render(<JiraMentions />)
+
+    expect(screen.getAllByText('Attachment preview unavailable')).toHaveLength(2)
+    expect(ipc.invoke).not.toHaveBeenCalledWith('jira-mentions:get-attachment-preview', issue.issueId, expect.any(String))
+    expect(screen.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
   })
 
   it('loads image attachments inside comments and opens them in a zoom viewer', async () => {
@@ -863,6 +1120,15 @@ describe('JiraMentions composer', () => {
       expect(namedZoomButton.querySelector('img')).toHaveAttribute('alt', 'latency-chart.png')
       await userEventInstance.click(zoomButton)
       expect(screen.getByRole('dialog', { name: 'Image preview: database-flow.png' })).toBeInTheDocument()
+      await userEventInstance.keyboard('{Escape}')
+      expect(screen.queryByRole('dialog', { name: 'Image preview: database-flow.png' })).not.toBeInTheDocument()
+      await userEventInstance.click(zoomButton)
+      const dialog = screen.getByRole('dialog', { name: 'Image preview: database-flow.png' })
+      await userEventInstance.click(dialog)
+      expect(screen.queryByRole('dialog', { name: 'Image preview: database-flow.png' })).not.toBeInTheDocument()
+      await userEventInstance.click(zoomButton)
+      await userEventInstance.click(screen.getByRole('button', { name: 'Close image preview' }))
+      expect(screen.queryByRole('dialog', { name: 'Image preview: database-flow.png' })).not.toBeInTheDocument()
       expect(ipc.invoke).toHaveBeenNthCalledWith(1, 'jira-mentions:get-attachment-preview', issue.issueId, attachment.id)
       expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'jira-mentions:get-attachment-preview', issue.issueId, namedAttachment.id)
     } finally {
@@ -933,9 +1199,15 @@ describe('JiraMentions composer', () => {
       detail: imageDetail,
     })
     const ipc = installMockIpc()
-    ipc.invoke.mockImplementation(async (channel: string) => channel === 'jira-mentions:get-attachment-preview'
-      ? { ok: true, mimeType: 'image/png', bytes: Uint8Array.from([137, 80, 78, 71]) }
-      : channel === 'jira-mentions:get-issue-detail' ? imageDetail : projection)
+    let resolveFirstPreview!: (result: { ok: true; mimeType: string; bytes: Uint8Array }) => void
+    const firstPreview = new Promise<{ ok: true; mimeType: string; bytes: Uint8Array }>((resolve) => { resolveFirstPreview = resolve })
+    ipc.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'jira-mentions:get-attachment-preview') {
+        const callCount = ipc.invoke.mock.calls.filter(([calledChannel]) => calledChannel === 'jira-mentions:get-attachment-preview').length
+        return callCount === 1 ? firstPreview : { ok: true, mimeType: 'image/png', bytes: Uint8Array.from([137, 80, 78, 71]) }
+      }
+      return channel === 'jira-mentions:get-issue-detail' ? imageDetail : projection
+    })
     const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
     const revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:jira-shared-preview') })
@@ -960,10 +1232,12 @@ describe('JiraMentions composer', () => {
       expect(ipc.invoke).not.toHaveBeenCalledWith('jira-mentions:get-attachment-preview', issue.issueId, attachment.id)
 
       await act(async () => { observers.forEach((observer) => observer.intersect()) })
-      await screen.findByRole('button', { name: 'Zoom image shared.png' })
       expect(ipc.invoke.mock.calls.filter(([channel]) => channel === 'jira-mentions:get-attachment-preview')).toHaveLength(1)
-
       await userEventInstance.click(screen.getByLabelText('Attachments').querySelector('summary')!)
+      await screen.findByText('Loading preview…')
+      await act(async () => { observers.forEach((observer) => observer.intersect()) })
+      expect(ipc.invoke.mock.calls.filter(([channel]) => channel === 'jira-mentions:get-attachment-preview')).toHaveLength(1)
+      await act(async () => { resolveFirstPreview({ ok: true, mimeType: 'image/png', bytes: Uint8Array.from([137, 80, 78, 71]) }) })
       await waitFor(() => expect(screen.getAllByRole('button', { name: 'Zoom image shared.png' })).toHaveLength(2))
       expect(ipc.invoke.mock.calls.filter(([channel]) => channel === 'jira-mentions:get-attachment-preview')).toHaveLength(1)
 
@@ -979,6 +1253,114 @@ describe('JiraMentions composer', () => {
       else delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL
       if (revokeObjectUrlDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeObjectUrlDescriptor)
       else delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL
+    }
+  })
+
+  it('discards an inline image preview that resolves after the selected mention changes', async () => {
+    prepareStore()
+    const attachment = { id: 'slow-preview', name: 'slow.png', contentUrl: null, mimeType: 'image/png', size: 16, author: user, createdAt: incomingComment.createdAt }
+    const imageComment = {
+      ...incomingComment,
+      body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'media', attrs: { id: attachment.id, type: 'file', alt: attachment.name } }] }] },
+    }
+    const imageDetail: JiraIssueSnapshot = { ...detail, issue: { ...issue, attachments: [attachment] }, comments: [imageComment] }
+    const otherIssue = { ...issue, issueId: 'issue-other', issueKey: 'APP-2', summary: 'Second issue' }
+    const otherComment = { ...secondIncomingComment, issueId: otherIssue.issueId }
+    const otherItem = {
+      ...projection.items[0], issue: otherIssue, comment: otherComment,
+      state: { ...projection.items[0].state, issueId: otherIssue.issueId, incomingCommentId: otherComment.commentId },
+    }
+    const otherProjection: JiraMentionsProjection = { ...projection, activeCount: 2, items: [projection.items[0], otherItem] }
+    const otherDetail: JiraIssueSnapshot = { ...detail, issue: otherIssue, comments: [otherComment] }
+    useJiraMentionsStore.setState({ selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId }, detail: imageDetail })
+    let resolvePreview!: (result: { ok: true; mimeType: string; bytes: Uint8Array }) => void
+    const pendingPreview = new Promise<{ ok: true; mimeType: string; bytes: Uint8Array }>((resolve) => { resolvePreview = resolve })
+    const ipc = installMockIpc()
+    ipc.invoke.mockImplementation(async (channel: string) => channel === 'jira-mentions:get-attachment-preview'
+      ? pendingPreview
+      : channel === 'jira-mentions:get-issue-detail' ? otherDetail : otherProjection)
+    const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    const createObjectUrl = vi.fn(() => 'blob:stale-preview')
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    class ImmediateIntersectionObserver {
+      private readonly callback: IntersectionObserverCallback
+      constructor(callback: IntersectionObserverCallback) { this.callback = callback }
+      observe(target: Element) { this.callback([{ isIntersecting: true, target } as IntersectionObserverEntry], this as unknown as IntersectionObserver) }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return [] }
+    }
+    vi.stubGlobal('IntersectionObserver', ImmediateIntersectionObserver)
+    try {
+      render(<JiraMentions />)
+      await screen.findByText('Loading image preview: slow.png')
+      expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:get-attachment-preview', issue.issueId, attachment.id)
+
+      act(() => useJiraMentionsStore.setState({
+        projection: otherProjection,
+        selected: { issueId: otherIssue.issueId, incomingCommentId: otherComment.commentId },
+        detail: otherDetail,
+      }))
+      await waitFor(() => expect(screen.queryByText('Loading image preview: slow.png')).not.toBeInTheDocument())
+      await act(async () => { resolvePreview({ ok: true, mimeType: 'image/png', bytes: Uint8Array.from([137, 80, 78, 71]) }) })
+
+      expect(createObjectUrl).not.toHaveBeenCalled()
+      expect(screen.queryByRole('button', { name: 'Zoom image slow.png' })).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Second issue' })).toBeInTheDocument()
+      expect(screen.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
+    } finally {
+      vi.unstubAllGlobals()
+      if (createObjectUrlDescriptor) Object.defineProperty(URL, 'createObjectURL', createObjectUrlDescriptor)
+      else delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL
+      if (revokeObjectUrlDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeObjectUrlDescriptor)
+      else delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL
+    }
+  })
+
+  it.each([
+    ['unavailable', 'Image preview unavailable: fallback.png'],
+    ['too_large', 'Image is too large to preview: fallback.png'],
+    ['unsupported', 'Image format cannot be previewed: fallback.png'],
+    ['rejected', 'Image preview unavailable: fallback.png'],
+  ] as const)('shows an actionable %s inline image fallback while keeping reply available', async (outcome, message) => {
+    prepareStore()
+    const attachment = { id: `fallback-${outcome}`, name: 'fallback.png', contentUrl: null, mimeType: 'image/png', size: 16, author: user, createdAt: incomingComment.createdAt }
+    const imageComment = {
+      ...incomingComment,
+      body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'media', attrs: { id: attachment.id, type: 'file', alt: attachment.name } }] }] },
+    }
+    useJiraMentionsStore.setState({
+      selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId },
+      detail: { ...detail, issue: { ...issue, attachments: [attachment] }, comments: [imageComment] },
+    })
+    const ipc = installMockIpc()
+    ipc.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'jira-mentions:get-attachment-preview') {
+        if (outcome === 'rejected') throw new Error('synthetic preview failure')
+        return { ok: false, reason: outcome }
+      }
+      return projection
+    })
+    class ImmediateIntersectionObserver {
+      private readonly callback: IntersectionObserverCallback
+      constructor(callback: IntersectionObserverCallback) { this.callback = callback }
+      observe(target: Element) { this.callback([{ isIntersecting: true, target } as IntersectionObserverEntry], this as unknown as IntersectionObserver) }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return [] }
+    }
+    vi.stubGlobal('IntersectionObserver', ImmediateIntersectionObserver)
+    try {
+      render(<JiraMentions />)
+      expect(await screen.findByText(message)).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Zoom image fallback.png' })).not.toBeInTheDocument()
+      const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ })
+      await userEvent.setup().type(editor, 'Reply remains editable')
+      expect(editor).toHaveValue('Reply remains editable')
+    } finally {
+      vi.unstubAllGlobals()
     }
   })
 
@@ -1002,12 +1384,12 @@ describe('JiraMentions composer', () => {
     const userEventInstance = userEvent.setup()
     const first = render(<JiraMentions />)
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: 'Reply' })
+    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
     await userEventInstance.type(editor, 'Draft for later')
     first.unmount()
 
     render(<JiraMentions />)
-    expect(await screen.findByRole('textbox', { name: 'Reply' })).toHaveValue('Draft for later')
+    expect(await screen.findByRole('textbox', { name: /Reply to selected mention/ })).toHaveValue('Draft for later')
     useJiraMentionsStore.getState().receiveProjection({ ...projection, identityVerified: false, enabled: false, items: [] })
     expect(useJiraMentionsStore.getState().drafts).toEqual({})
   })

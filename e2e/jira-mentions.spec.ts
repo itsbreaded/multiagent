@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
@@ -118,6 +119,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
   let includeLateMention = false
   let searchRequestCount = 0
   const searchJqls: Array<{ jql: string; accountId: string }> = []
+  const issueDetailFieldQueries: string[][] = []
   let holdNextSearchResponse = false
   let resolveSearchResponseHeld: (() => void) | null = null
   const searchResponseHeld = new Promise<void>((resolveHeld) => { resolveSearchResponseHeld = resolveHeld })
@@ -153,7 +155,11 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       if (request.method === 'GET' && url.pathname === '/rest/api/3/myself') {
         sendJson(response, 200, { accountId: identityAccountId, displayName: 'Self', timeZone: 'UTC' })
       } else if (request.method === 'GET' && url.pathname === '/rest/api/3/field') {
-        sendJson(response, 200, [])
+        sendJson(response, 200, [
+          { id: 'customfield_10001', name: 'Dev Tester', schema: { type: 'array', items: 'user', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiuserpicker' } },
+          { id: 'customfield_10002', name: 'Main Dev', schema: { type: 'user', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:userpicker' } },
+          { id: 'customfield_10003', name: 'Story Points', schema: { type: 'number', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:float' } },
+        ])
       } else if (request.method === 'POST' && url.pathname === '/rest/api/3/search/jql') {
         searchRequestCount++
         const searchBody = await readRequestBody(request)
@@ -173,6 +179,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
             comment: { total: marker?.total ?? 5 + deliveredReplies.length + (includeLateMention ? 1 : 0) },
           } })
         } else {
+          issueDetailFieldQueries.push((url.searchParams.get('fields') ?? '').split(','))
           const issueDetails = { ...jiraIssue(currentIssueUpdated, deliveredReplies, includeLateMention), fields: {
             ...jiraIssue(currentIssueUpdated, deliveredReplies, includeLateMention).fields,
             status: { id: '1', name: 'In Progress', statusCategory: { name: 'In Progress' } },
@@ -180,6 +187,11 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
             assignee: { accountId: 'alice-account', displayName: 'Alex' },
             reporter: { accountId: 'requester-account', displayName: 'Requester' },
             creator: { accountId: 'creator-account', displayName: 'Creator' },
+            customfield_10001: [
+              { accountId: 'dev-tester-account', displayName: 'Morgan' },
+              { accountId: 'dev-tester-second-account', displayName: 'Casey' },
+            ],
+            customfield_10002: { accountId: 'main-dev-account', displayName: 'Alex' },
             created: issueUpdated, duedate: null, resolution: null,
             description: { type: 'doc', version: 1, content: [
               { type: 'paragraph', content: [
@@ -200,8 +212,14 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
                 ] },
               ] },
             ] },
-            attachment: [{ id: 'attachment-1', filename: 'context.txt', content: `http://127.0.0.1:${jiraServerPort}/rest/api/3/attachment/content/attachment-1`, mimeType: 'text/plain', size: 18,
-              author: { accountId: 'requester-account', displayName: 'Requester' }, created: issueUpdated }],
+            attachment: [
+              { id: 'attachment-1', filename: 'context.txt', content: `http://127.0.0.1:${jiraServerPort}/rest/api/3/attachment/content/attachment-1`, mimeType: 'text/plain', size: 18,
+                author: { accountId: 'requester-account', displayName: 'Requester' }, created: issueUpdated },
+              { id: 'attachment-2', filename: 'query-plan.txt', content: `http://127.0.0.1:${jiraServerPort}/rest/api/3/attachment/content/attachment-2`, mimeType: 'text/plain', size: 1_024,
+                author: { accountId: 'context-account', displayName: 'Pat' }, created: issueUpdated },
+              { id: 'attachment-3', filename: 'run-log.txt', content: `http://127.0.0.1:${jiraServerPort}/rest/api/3/attachment/content/attachment-3`, mimeType: 'text/plain', size: 2_048,
+                author: { accountId: 'alice-account', displayName: 'Alex' }, created: earlierContextAt },
+            ],
             parent: null, subtasks: [], issuelinks: [],
           } }
           if (holdNextRefreshSnapshot) {
@@ -285,6 +303,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       },
     })
     const page: Page = await app.firstWindow()
+    await page.setViewportSize({ width: 1280, height: 800 })
     await app.evaluate(({ shell }) => {
       const state = globalThis as typeof globalThis & { __jiraOpenedUrls?: string[] }
       state.__jiraOpenedUrls = []
@@ -346,23 +365,227 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(page.getByText('Could you also check this?', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: /Alex.*Can you take a look/ }).click()
     await expect(page.getByRole('heading', { name: 'Synthetic issue' })).toBeVisible()
-    await expect(page.getByRole('textbox', { name: 'Reply' })).toBeVisible()
-    const laterComments = page.getByRole('region', { name: 'Later comments' })
+    await expect(page.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
+    const newerComments = page.getByRole('region', { name: 'Newer comments' })
     const earlierComments = page.getByRole('region', { name: 'Earlier comments' })
     const commentHistory = page.getByRole('region', { name: 'Comment history' })
     const replyComposer = page.getByRole('region', { name: 'Reply composer' })
-    await expect(laterComments).toBeVisible()
+    await expect(replyComposer.getByText('Reply to mention')).toBeVisible()
+    await expect(replyComposer.locator('.jira-mentions-reply-issue')).toHaveCount(0)
+    await expect(replyComposer.getByText('Reply in the issue comment thread', { exact: true })).toHaveCount(0)
+    await expect(replyComposer.locator('.jira-mentions-reply-feedback')).toHaveCount(0)
+    expect(await replyComposer.locator('.jira-mentions-reply-footer').evaluate((element) => getComputedStyle(element).justifyContent)).toBe('flex-end')
+    await expect(newerComments).toBeVisible()
     await expect(earlierComments).toBeVisible()
     await expect(page.getByText('Context after the request')).toBeVisible()
     await expect(page.getByText('Context before the request')).toBeVisible()
-    expect(await commentHistory.locator('.dark-scrollbar').count()).toBe(0)
+    const devTesterProperty = page.locator('[data-property="person"][aria-label^="Dev Tester "]')
+    await expect(devTesterProperty).toHaveCount(1)
+    await expect(devTesterProperty).toContainText('Morgan')
+    await expect(devTesterProperty).toContainText('Casey')
+    await expect(page.getByLabel('Main Dev Alex')).toBeVisible()
+    expect(issueDetailFieldQueries.at(-1)).toContain('customfield_10001')
+    expect(issueDetailFieldQueries.at(-1)).toContain('customfield_10002')
+    expect(issueDetailFieldQueries.at(-1)).not.toContain('customfield_10003')
+    const inboxSelection = page.locator('.jira-mentions-mention-row[data-selected="true"]')
+    await expect(inboxSelection).toBeVisible()
+    await expect(inboxSelection.locator('.jira-mentions-mention-tag')).toHaveCount(0)
+    await expect(inboxSelection.locator('.jira-mentions-mention-row-head strong')).toHaveText('Alex')
+    expect(await inboxSelection.evaluate((element) => getComputedStyle(element).borderLeftWidth)).toBe('2px')
+    const selectionBackground = await inboxSelection.evaluate((element) => getComputedStyle(element).backgroundColor)
+    expect(selectionBackground).not.toBe('rgba(0, 0, 0, 0)')
+    const selectionGreen = await inboxSelection.evaluate((element) => {
+      const context = document.createElement('canvas').getContext('2d')!
+      context.fillStyle = getComputedStyle(element).backgroundColor
+      context.fillRect(0, 0, 1, 1)
+      return context.getImageData(0, 0, 1, 1).data[1]
+    })
+    expect(selectionGreen).toBeLessThan(58)
+    expect(await page.locator('.jira-mentions-issue-header').evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe('1px')
+    expect(await page.locator('.jira-mentions-details-rail').evaluate((element) => getComputedStyle(element).borderLeftWidth)).toBe('1px')
+    expect(await replyComposer.evaluate((element) => getComputedStyle(element).borderWidth)).toBe('1px')
+    const replyGreen = await replyComposer.evaluate((element) => {
+      const context = document.createElement('canvas').getContext('2d')!
+      context.fillStyle = getComputedStyle(element).backgroundColor
+      context.fillRect(0, 0, 1, 1)
+      return context.getImageData(0, 0, 1, 1).data[1]
+    })
+    expect(replyGreen).toBeLessThan(45)
+    const replySurface = await replyComposer.evaluate((element) => getComputedStyle(element).backgroundColor)
+    const selectedCommentSurface = page.getByRole('region', { name: 'Selected mention' })
+    const mentionSurface = await selectedCommentSurface.evaluate((element) => getComputedStyle(element).backgroundColor)
+    expect(mentionSurface).toBe(replySurface)
+    const mentionSurfaceChannels = await selectedCommentSurface.evaluate((element) => {
+      const context = document.createElement('canvas').getContext('2d')!
+      context.fillStyle = getComputedStyle(element).backgroundColor
+      context.fillRect(0, 0, 1, 1)
+      return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3)
+    })
+    expect(mentionSurfaceChannels[1]).toBeLessThan(45)
+    expect(mentionSurfaceChannels[1]! - mentionSurfaceChannels[0]!).toBeLessThan(10)
+    await expect(page.getByRole('region', { name: 'Selected mention' }).locator('.jira-mentions-source-tag')).toHaveText('Mention')
+    const expectFontAbove = async (selector: string, threshold: number) => {
+      const element = page.locator(selector).first()
+      await expect(element).toBeVisible()
+      const fontSize = Number.parseFloat(await element.evaluate((node) => getComputedStyle(node).fontSize))
+      expect(fontSize, `${selector} computed font size`).toBeGreaterThan(threshold)
+    }
+    await expectFontAbove('.jira-mentions-details-kicker', 11.3)
+    await expectFontAbove('.jira-mentions-property-row dt', 11.3)
+    await expectFontAbove('.jira-mentions-property-row dd [data-property]', 12.3)
+    await expectFontAbove('.jira-mentions-avatar', 10.3)
+    await expectFontAbove('.jira-mentions-description-section summary', 12.3)
+    await expectFontAbove('.jira-mentions-description-copy', 12.3)
+    await expectFontAbove('.jira-mentions-comments-heading h2', 13.3)
+    await expectFontAbove('.jira-mentions-comment-group-heading', 12.3)
+    await expectFontAbove('.jira-mentions-comment-head strong', 12.3)
+    await expectFontAbove('.jira-mentions-comment-head time', 11.3)
+    await expectFontAbove('.jira-mentions-comment-body', 12.3)
+    await expectFontAbove('.jira-mentions-source-tag', 10.3)
+    await expectFontAbove('.jira-mentions-source-actions button', 10.3)
+    await expectFontAbove('.jira-mentions-reply-heading label', 13.3)
+    await expectFontAbove('.jira-mentions-reply-input-wrap textarea', 12.3)
+    await expectFontAbove('.jira-mentions-reply-footer', 10.3)
+    expect(await page.locator('.jira-mentions-inbox-title-row strong').evaluate((element) => getComputedStyle(element).fontSize)).toBe('13px')
+    const snoozeAction = page.getByRole('button', { name: 'Snooze' })
+    const dismissAction = page.getByRole('button', { name: 'Dismiss' })
+    const actionColor = async (button: typeof snoozeAction) => button.evaluate((element) => {
+      const context = document.createElement('canvas').getContext('2d')!
+      context.fillStyle = getComputedStyle(element).color
+      context.fillRect(0, 0, 1, 1)
+      return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3)
+    })
+    const snoozeColor = await actionColor(snoozeAction)
+    const dismissColor = await actionColor(dismissAction)
+    expect(snoozeColor[0]).toBeGreaterThan(180)
+    expect(snoozeColor[1]).toBeGreaterThan(120)
+    expect(snoozeColor[2]).toBeLessThan(100)
+    expect(dismissColor[0]).toBeGreaterThan(160)
+    expect(dismissColor[1]).toBeLessThan(130)
+    expect(dismissColor[2]).toBeLessThan(130)
+    expect(snoozeColor).not.toEqual(dismissColor)
+    expect(await commentHistory.locator('.jira-mentions-comment-context').evaluateAll((elements) => elements.every((element) => (element as HTMLElement).style.overflowY === 'visible'))).toBe(true)
     expect(await page.evaluate(() => {
       const reply = document.querySelector('[aria-label="Reply composer"]')
       const history = document.querySelector('[aria-label="Comment history"]')
       return Boolean(reply && history && (reply.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING))
     })).toBe(true)
     await expect(replyComposer).toBeVisible()
+    expect((await page.locator('.jira-mentions-inbox').boundingBox())?.width).toBe(280)
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-layout-desktop-1280x800.png') })
+    const desktopFeatureBox = await page.locator('.jira-mentions-root').boundingBox()
+    expect(desktopFeatureBox).not.toBeNull()
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-feature-desktop-1060x757.png'), clip: desktopFeatureBox! })
+    await page.getByRole('region', { name: 'Selected mention' }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-comments-desktop-1280x800.png') })
+    await page.locator('.jira-mentions-detail').evaluate((element) => element.scrollTo(0, 0))
     await page.screenshot({ path: join(evidenceDir, 'jira-mentions-populated.png') })
+    const attachmentSummary = page.getByLabel('Attachments').locator('summary')
+    await attachmentSummary.click()
+    expect(await page.locator('.jira-mentions-attachment-metadata').first().evaluate((element) => getComputedStyle(element).fontSize)).toBe('10px')
+    expect(await page.locator('.jira-mentions-attachment-date').first().evaluate((element) => getComputedStyle(element).fontSize)).toBe('10px')
+    await attachmentSummary.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-attachments-desktop-1280x800.png') })
+    await attachmentSummary.click()
+
+    await page.setViewportSize({ width: 700, height: 900 })
+    expect(await page.locator('.jira-mentions-root').evaluate((element) => getComputedStyle(element).flexDirection)).toBe('column')
+    expect(await page.locator('.jira-mentions-details-rail').evaluate((element) => getComputedStyle(element).borderLeftWidth)).toBe('0px')
+    expect(await page.locator('.jira-mentions-properties').evaluate((element) => getComputedStyle(element).display)).toBe('contents')
+    const narrowReadingOverflow = await page.locator([
+      '.jira-mentions-property-row dd',
+      '.jira-mentions-description-copy',
+      '.jira-mentions-comment-body',
+      '.jira-mentions-reply-input-wrap textarea',
+    ].join(',')).evaluateAll((elements) => elements.some((element) => {
+      const node = element as HTMLElement
+      return node.scrollWidth > node.clientWidth + 1
+    }))
+    expect(narrowReadingOverflow).toBe(false)
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-layout-narrow-700x900.png') })
+    const narrowFeatureBox = await page.locator('.jira-mentions-root').boundingBox()
+    expect(narrowFeatureBox).not.toBeNull()
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-feature-narrow-480x857.png'), clip: narrowFeatureBox! })
+    await attachmentSummary.scrollIntoViewIfNeeded()
+    await attachmentSummary.click()
+    const narrowAttachmentCards = page.getByRole('group', { name: 'Attachment previews' }).locator('.jira-mentions-attachment-card')
+    const narrowAttachmentLayout = await narrowAttachmentCards.evaluateAll((elements) => {
+      const scroller = elements[0]?.parentElement as HTMLElement | null
+      if (!scroller) return { tops: [], clientWidth: 0, scrollWidth: 0, lastTileReachable: false }
+      scroller.scrollLeft = scroller.scrollWidth
+      const scrollerBounds = scroller.getBoundingClientRect()
+      const lastTileBounds = elements[elements.length - 1]!.getBoundingClientRect()
+      return {
+        tops: elements.map((element) => element.getBoundingClientRect().top),
+        clientWidth: scroller.clientWidth,
+        scrollWidth: scroller.scrollWidth,
+        lastTileReachable: lastTileBounds.left >= scrollerBounds.left - 1 && lastTileBounds.right <= scrollerBounds.right + 1,
+      }
+    })
+    expect(new Set(narrowAttachmentLayout.tops).size).toBe(1)
+    expect(narrowAttachmentLayout.scrollWidth).toBeGreaterThan(narrowAttachmentLayout.clientWidth)
+    expect(narrowAttachmentLayout.lastTileReachable).toBe(true)
+    await narrowAttachmentCards.last().scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-attachments-narrow-700x900.png') })
+    await attachmentSummary.click()
+    await page.setViewportSize({ width: 480, height: 857 })
+    await page.locator('.jira-mentions-detail').evaluate((element) => element.scrollTo(0, 0))
+    const longContentOriginals = await page.evaluate(() => {
+      const property = document.querySelector('.jira-mentions-property-row dd [data-property="person"]') as HTMLElement | null
+      const comment = document.querySelector('[aria-label="Selected mention"] .jira-mentions-comment-body p') as HTMLElement | null
+      if (!property || !comment) throw new Error('Expected a custom person property and selected comment body')
+      const originals = { property: property.textContent ?? '', comment: comment.textContent ?? '' }
+      property.textContent = 'LongUserPropertyWithoutSpaces'.repeat(12)
+      comment.textContent = 'LongCommentTokenWithoutSpaces'.repeat(20)
+      return {
+        originals,
+        propertyWidth: property.parentElement!.clientWidth,
+        propertyScrollWidth: property.parentElement!.scrollWidth,
+        commentWidth: comment.parentElement!.clientWidth,
+        commentScrollWidth: comment.parentElement!.scrollWidth,
+        rootWidth: document.querySelector('.jira-mentions-root')!.clientWidth,
+        rootScrollWidth: document.querySelector('.jira-mentions-root')!.scrollWidth,
+        actionBounds: Array.from(document.querySelectorAll('[aria-label="Selected mention"] .jira-mentions-source-actions button')).map((button) => {
+          const rect = button.getBoundingClientRect()
+          return { left: rect.left, right: rect.right }
+        }),
+      }
+    })
+    expect(longContentOriginals.propertyScrollWidth).toBeLessThanOrEqual(longContentOriginals.propertyWidth + 1)
+    expect(longContentOriginals.commentScrollWidth).toBeLessThanOrEqual(longContentOriginals.commentWidth + 1)
+    expect(longContentOriginals.rootScrollWidth).toBeLessThanOrEqual(longContentOriginals.rootWidth + 1)
+    expect(longContentOriginals.actionBounds.length).toBe(2)
+    expect(longContentOriginals.actionBounds.every((bounds) => bounds.left >= 0 && bounds.right <= 480)).toBe(true)
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-long-content-narrow-480x857.png') })
+    await page.evaluate((originals) => {
+      document.querySelector('.jira-mentions-property-row dd [data-property="person"]')!.textContent = originals.property
+      document.querySelector('[aria-label="Selected mention"] .jira-mentions-comment-body p')!.textContent = originals.comment
+    }, longContentOriginals.originals)
+    await page.setViewportSize({ width: 1280, height: 800 })
+
+    const commentResizeTargets = [
+      { label: 'Resize newer comments', handle: page.getByRole('separator', { name: 'Resize newer comments' }), content: newerComments.locator('.jira-mentions-comment-context') },
+      { label: 'Resize earlier comments', handle: page.getByRole('separator', { name: 'Resize earlier comments' }), content: earlierComments.locator('.jira-mentions-comment-context') },
+    ]
+    const naturalCommentHeights = await Promise.all(commentResizeTargets.map(({ content }) => content.evaluate((element) => element.getBoundingClientRect().height)))
+    for (const [index, target] of commentResizeTargets.entries()) {
+      await target.handle.scrollIntoViewIfNeeded()
+      const handleBox = await target.handle.boundingBox()
+      expect(handleBox).not.toBeNull()
+      await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2 + 32, { steps: 3 })
+      await page.mouse.up()
+      await expect.poll(() => target.content.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(naturalCommentHeights[index]!)
+      for (const [otherIndex, other] of commentResizeTargets.entries()) {
+        if (otherIndex === index) continue
+        expect(await other.content.evaluate((element) => element.getBoundingClientRect().height)).toBeCloseTo(naturalCommentHeights[otherIndex]!, 0)
+      }
+      await target.handle.focus()
+      await page.keyboard.press('Home')
+      await expect.poll(() => target.content.evaluate((element) => (element as HTMLElement).style.height)).toBe('auto')
+    }
+    await page.locator('.jira-mentions-detail').evaluate((element) => element.scrollTo(0, 0))
 
     issuePermissionDenied = true
     currentIssueUpdated = new Date().toISOString()
@@ -380,7 +603,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }), { timeout: 30_000 }).toEqual({ status: 'ready', activeCount: 3 })
 
     await page.getByRole('button', { name: /Alex.*Could you check this/ }).click()
-    const uncertainEditor = page.getByRole('textbox', { name: 'Reply' })
+    const uncertainEditor = page.getByRole('textbox', { name: /Reply to selected mention/ })
     await uncertainEditor.fill('I will check @')
     const bobCandidates = page.getByRole('option', { name: /Alex.*comment author/i })
     await expect(bobCandidates).toHaveCount(2)
@@ -424,12 +647,12 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(page.getByLabel('Status In Progress')).toHaveText('In Progress')
     await expect(page.getByLabel('Type Task')).toHaveText('Task')
     await expect(page.getByLabel('Priority High')).toHaveText('High')
-    await expect(page.getByLabel('Issue details')).toContainText('Assignee Alex')
+    await expect(page.getByLabel('Assignee Alex')).toBeVisible()
+    await expect(page.getByLabel('Reporter Requester')).toBeVisible()
     await expect(page.getByLabel('Status In Progress')).toHaveAttribute('data-category', 'in-progress')
     expect(await page.getByLabel('Status In Progress').evaluate((element) => getComputedStyle(element).backgroundColor)).toBe('rgb(27, 43, 64)')
     expect(await page.getByLabel('Type Task').evaluate((element) => getComputedStyle(element).backgroundColor)).toBe('rgb(37, 40, 43)')
     expect(await page.getByLabel('Priority High').evaluate((element) => getComputedStyle(element).color)).toBe('rgb(229, 200, 140)')
-    await expect(page.getByLabel('Issue facts')).toContainText('Reporter Requester')
     const description = page.getByRole('region', { name: 'Description' })
     const descriptionContent = description.locator('.dark-scrollbar')
     expect(await description.evaluate((element) => (element as HTMLElement).style.borderRadius)).toBe('')
@@ -447,7 +670,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }))
     expect(descriptionLimit.scrollHeight).toBeGreaterThan(descriptionLimit.maxHeight)
     expect(descriptionLimit.height).toBeLessThanOrEqual(descriptionLimit.maxHeight + 1)
-    await expect(page.getByRole('textbox', { name: 'Reply' })).toBeInViewport()
+    await expect(page.getByRole('textbox', { name: /Reply to selected mention/ })).toBeInViewport()
     await page.screenshot({ path: join(evidenceDir, 'jira-mentions-long-description.png') })
 
     const resizeHandle = page.getByRole('separator', { name: 'Resize description' })
@@ -477,7 +700,40 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await selectedMention.scrollIntoViewIfNeeded()
     await expect(selectedMention.getByText('Can you take a look?', { exact: false })).toBeVisible()
     expect(await selectedMention.evaluate((element) => getComputedStyle(element).overflow)).toBe('visible')
+    const selectedBody = selectedMention.locator('.jira-mentions-comment-context-body')
     await expect(page.getByRole('separator', { name: 'Resize selected mention' })).toHaveCount(0)
+    expect(await selectedBody.evaluate((element) => (element as HTMLElement).style.height)).toBe('')
+    expect(await selectedBody.evaluate((element) => getComputedStyle(element).overflowY)).toBe('visible')
+    await expect(selectedBody).not.toHaveClass(/dark-scrollbar/)
+    await expect(selectedMention.getByRole('button', { name: 'Snooze' })).toBeVisible()
+
+    const newerBody = newerComments.locator('.jira-mentions-comment-context')
+    const newerResize = page.getByRole('separator', { name: 'Resize newer comments' })
+    await newerResize.scrollIntoViewIfNeeded()
+    const newerHeight = await newerBody.evaluate((element) => element.getBoundingClientRect().height)
+    const newerWidth = await newerBody.evaluate((element) => element.getBoundingClientRect().width)
+    const newerHandleBox = await newerResize.boundingBox()
+    expect(newerHandleBox).not.toBeNull()
+    await page.mouse.move(newerHandleBox!.x + newerHandleBox!.width / 2, newerHandleBox!.y + newerHandleBox!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(newerHandleBox!.x + newerHandleBox!.width / 2, newerHandleBox!.y + newerHandleBox!.height / 2 - 30, { steps: 4 })
+    await page.mouse.up()
+    expect(await newerBody.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(newerHeight - 10)
+    expect(await newerBody.evaluate((element) => element.getBoundingClientRect().width)).toBe(newerWidth)
+    expect(await newerBody.evaluate((element) => getComputedStyle(element).overflowY)).toBe('auto')
+
+    const earlierBody = earlierComments.locator('.jira-mentions-comment-context')
+    const earlierResize = page.getByRole('separator', { name: 'Resize earlier comments' })
+    await earlierResize.scrollIntoViewIfNeeded()
+    const earlierHeight = await earlierBody.evaluate((element) => element.getBoundingClientRect().height)
+    const earlierHandleBox = await earlierResize.boundingBox()
+    expect(earlierHandleBox).not.toBeNull()
+    await page.mouse.move(earlierHandleBox!.x + earlierHandleBox!.width / 2, earlierHandleBox!.y + earlierHandleBox!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(earlierHandleBox!.x + earlierHandleBox!.width / 2, earlierHandleBox!.y + earlierHandleBox!.height / 2 + 25, { steps: 4 })
+    await page.mouse.up()
+    expect(await earlierBody.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(earlierHeight)
+    await expect(selectedMention.getByRole('button', { name: 'Dismiss' })).toBeVisible()
 
     const descriptionDisclosure = description.locator('details')
     const descriptionSummary = description.locator('summary')
@@ -496,6 +752,37 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     const bodyColumnWidth = await issueTable.locator('td').first().evaluate((cell) => cell.getBoundingClientRect().width)
     expect(Math.abs(headerColumnWidth - bodyColumnWidth)).toBeLessThan(1)
     await page.getByLabel('Attachments').locator('summary').click()
+    const attachmentPreviews = page.getByRole('group', { name: 'Attachment previews' })
+    const attachmentCards = attachmentPreviews.locator('.jira-mentions-attachment-card')
+    await expect(attachmentCards).toHaveCount(3)
+    const attachmentDateLayout = await attachmentCards.locator('.jira-mentions-attachment-date').evaluateAll((elements) => elements.map((element) => {
+      const date = element as HTMLElement
+      const card = date.closest('.jira-mentions-attachment-card') as HTMLElement
+      return {
+        text: date.textContent,
+        whiteSpace: getComputedStyle(date).whiteSpace,
+        dateBottom: date.getBoundingClientRect().bottom,
+        cardBottom: card.getBoundingClientRect().bottom,
+      }
+    }))
+    expect(attachmentDateLayout).toHaveLength(3)
+    expect(attachmentDateLayout.every((date) => date.text?.trim() && date.whiteSpace === 'normal' && date.dateBottom <= date.cardBottom)).toBe(true)
+    const attachmentLayout = await attachmentCards.evaluateAll((elements) => {
+      const scroller = elements[0]?.parentElement as HTMLElement | null
+      if (!scroller) return { tops: [], clientWidth: 0, scrollWidth: 0, lastTileReachable: false }
+      scroller.scrollLeft = scroller.scrollWidth
+      const scrollerBounds = scroller.getBoundingClientRect()
+      const lastTileBounds = elements[elements.length - 1]!.getBoundingClientRect()
+      return {
+        tops: elements.map((element) => element.getBoundingClientRect().top),
+        clientWidth: scroller.clientWidth,
+        scrollWidth: scroller.scrollWidth,
+        lastTileReachable: lastTileBounds.left >= scrollerBounds.left - 1 && lastTileBounds.right <= scrollerBounds.right + 1,
+      }
+    })
+    expect(new Set(attachmentLayout.tops).size).toBe(1)
+    expect(attachmentLayout.scrollWidth).toBeGreaterThan(attachmentLayout.clientWidth)
+    expect(attachmentLayout.lastTileReachable).toBe(true)
     await expect(page.getByRole('button', { name: 'Open attachment context.txt in Jira' })).toBeVisible()
     await page.getByRole('button', { name: 'Open APP-1 in Jira' }).click()
     await page.getByRole('button', { name: 'Open issue APP-1 in Jira' }).click()
@@ -506,7 +793,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
         `http://127.0.0.1:${address.port}/browse/APP-1`,
         `http://127.0.0.1:${address.port}/rest/api/3/attachment/content/attachment-1`,
       ])
-    const editor = page.getByRole('textbox', { name: 'Reply' })
+    const editor = page.getByRole('textbox', { name: /Reply to selected mention/ })
     const compactEditorHeight = await editor.evaluate((element) => element.getBoundingClientRect().height)
     await editor.fill(Array.from({ length: 8 }, (_, index) => `Line ${index + 1}`).join('\n'))
     await expect.poll(() => editor.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(compactEditorHeight)
@@ -614,8 +901,25 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }).toEqual({ kind: 'feature', featureId: 'jira-mentions' })
 
     await page.getByRole('button', { name: /Casey.*Could you also check this/ }).click()
-    await page.getByRole('button', { name: 'Snooze' }).click()
-    await page.getByRole('menuitem', { name: /2 hours/ }).click()
+    const snoozeButton = page.getByRole('button', { name: 'Snooze', exact: true })
+    await snoozeButton.click()
+    const snoozeMenu = page.getByRole('dialog', { name: 'Snooze duration' })
+    await expect(snoozeMenu).toBeVisible()
+    const snoozeDuration = snoozeMenu.getByRole('spinbutton', { name: 'Snooze duration' })
+    await expect(snoozeDuration).toHaveValue('1')
+    await expect(snoozeDuration).toHaveCSS('color-scheme', 'dark')
+    await expect(snoozeMenu.getByRole('combobox', { name: 'Snooze unit' })).toHaveValue('hours')
+    await expect(snoozeMenu.getByText(/2 hours|1 day|Next Monday/)).toHaveCount(0)
+    const snoozeBounds = await snoozeButton.boundingBox()
+    const menuBounds = await snoozeMenu.boundingBox()
+    expect(snoozeBounds && menuBounds && menuBounds.y).toBeGreaterThan(snoozeBounds?.y ?? 0)
+    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-snooze-form.png') })
+    await page.getByRole('heading', { name: 'Synthetic issue' }).click()
+    await expect(snoozeMenu).toBeHidden()
+    await snoozeButton.click()
+    await snoozeMenu.getByRole('spinbutton', { name: 'Snooze duration' }).fill('2')
+    await snoozeMenu.getByRole('combobox', { name: 'Snooze unit' }).selectOption('hours')
+    await snoozeMenu.getByRole('button', { name: 'Apply snooze' }).click()
     await expect.poll(async () => page.evaluate(async () => (await window.ipc.invoke('jira-mentions:get-state')).activeCount)).toBe(0)
 
     const cachedStateBeforeRestart = await page.evaluate(async () => {
@@ -663,12 +967,14 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(restartedPage.getByRole('button', { name: /Casey.*Could you also check this/ })).toBeVisible()
     await restartedPage.getByRole('button', { name: /Casey.*Could you also check this/ }).click()
     await expect(restartedPage.getByRole('heading', { name: 'Synthetic issue' })).toBeVisible()
-    const cachedEditor = restartedPage.getByRole('textbox', { name: 'Reply' })
+    const cachedEditor = restartedPage.getByRole('textbox', { name: /Reply to selected mention/ })
     await expect(cachedEditor).toBeVisible()
     await expect(restartedPage.getByText('I will check @Alex today.', { exact: false }).first()).toBeVisible()
     await expect(restartedPage.getByText('Context after the request')).toBeVisible()
     await cachedEditor.fill('@Alex')
-    await expect(restartedPage.getByRole('option', { name: /Alex/i })).toHaveCount(2)
+    const alexSuggestions = restartedPage.getByRole('option', { name: /Alex/i })
+    await expect(alexSuggestions).toHaveCount(3)
+    await expect(alexSuggestions.filter({ hasText: 'ticket field' })).toHaveCount(1)
     await restartedPage.getByRole('button', { name: 'Unsnooze' }).click()
     await expect.poll(async () => restartedPage.evaluate(async () => (await window.ipc.invoke('jira-mentions:get-state')).activeCount)).toBe(1)
     await restartedPage.getByLabel('Jira mentions filter').selectOption('active')
@@ -701,7 +1007,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
 
     await detachedPage.getByTitle(/Open Jira mentions/).click()
     await detachedPage.getByRole('button', { name: /Drew.*One more request/ }).click()
-    const detachedEditor = detachedPage.getByRole('textbox', { name: 'Reply' })
+    const detachedEditor = detachedPage.getByRole('textbox', { name: /Reply to selected mention/ })
     await detachedEditor.fill('I will handle @')
     await detachedPage.getByRole('option', { name: /Drew.*comment author/i }).click()
     await detachedPage.getByRole('button', { name: 'Post reply' }).click()
@@ -755,6 +1061,52 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       expect(jql).toMatch(/^updated >= .+ AND comment ~ ".+" ORDER BY updated ASC, key ASC$/)
       expect(jql).toContain(`comment ~ "${accountId}"`)
     }
+    await identityChangedPage.setViewportSize({ width: 1280, height: 800 })
+    await identityChangedPage.goto(pathToFileURL(join(repoRoot, 'docs', 'prototypes', 'jira-mentions', 'design-exploration', '04-context-rail.html')).href)
+    await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
+    await identityChangedPage.addStyleTag({ content: '.preview-bar{display:none!important}.feature-page{min-height:100vh}.inbox{height:100vh;top:0}' })
+    await identityChangedPage.evaluate(() => window.scrollTo(0, 0))
+    expect((await identityChangedPage.locator('.ticket-area').boundingBox())?.y).toBeLessThan(2)
+    const mockupReply = identityChangedPage.locator('.reply-section')
+    await expect(mockupReply).toBeVisible()
+    await expect(mockupReply.locator('.reply-issue')).toHaveCount(0)
+    await expect(mockupReply.getByText('Reply in the issue comment thread')).toHaveCount(0)
+    expect(await mockupReply.innerText()).not.toContain('WEB-2081')
+    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-context-rail-1280x800.png') })
+    await identityChangedPage.locator('.source-comment').scrollIntoViewIfNeeded()
+    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-context-rail-comments-1280x800.png') })
+    await identityChangedPage.setViewportSize({ width: 1060, height: 757 })
+    await identityChangedPage.reload()
+    await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
+    await identityChangedPage.addStyleTag({ content: '.preview-bar{display:none!important}.feature-page{min-height:100vh}.inbox{height:100vh;top:0}' })
+    await identityChangedPage.evaluate(() => window.scrollTo(0, 0))
+    await expect(identityChangedPage.locator('.reply-section')).toBeVisible()
+    await expect(identityChangedPage.locator('.reply-section .reply-issue')).toHaveCount(0)
+    await expect(identityChangedPage.locator('.reply-section').getByText('Reply in the issue comment thread')).toHaveCount(0)
+    expect(await identityChangedPage.locator('.reply-section').innerText()).not.toContain('WEB-2081')
+    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-feature-desktop-1060x757.png') })
+    await identityChangedPage.setViewportSize({ width: 480, height: 857 })
+    await identityChangedPage.reload()
+    await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
+    await identityChangedPage.addStyleTag({ content: '.preview-bar{display:none!important}.feature-page{min-height:100vh}.inbox{height:auto;top:auto;position:static}' })
+    await identityChangedPage.evaluate(() => window.scrollTo(0, 0))
+    await expect(identityChangedPage.locator('.reply-section')).toBeAttached()
+    await expect(identityChangedPage.locator('.reply-section .reply-issue')).toHaveCount(0)
+    await expect(identityChangedPage.locator('.reply-section').getByText('Reply in the issue comment thread')).toHaveCount(0)
+    expect(await identityChangedPage.locator('.reply-section').innerText()).not.toContain('WEB-2081')
+    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-feature-narrow-480x857.png') })
+    await identityChangedPage.setViewportSize({ width: 700, height: 900 })
+    await identityChangedPage.reload()
+    await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
+    await identityChangedPage.addStyleTag({ content: '.preview-bar{display:none!important}.feature-page{min-height:100vh}.inbox{height:auto;top:auto;position:static}' })
+    await identityChangedPage.evaluate(() => window.scrollTo(0, 0))
+    const mockupStackedLayout = await identityChangedPage.evaluate(() => ({
+      inboxBottom: document.querySelector('.inbox')!.getBoundingClientRect().bottom,
+      ticketTop: document.querySelector('.ticket-area')!.getBoundingClientRect().top,
+    }))
+    expect(mockupStackedLayout.ticketTop).toBeGreaterThanOrEqual(mockupStackedLayout.inboxBottom - 1)
+    expect(mockupStackedLayout.ticketTop).toBeLessThan(900)
+    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-context-rail-700x900.png') })
   } finally {
     if (app) await closeApp(app)
     await new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()))

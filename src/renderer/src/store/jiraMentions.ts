@@ -39,6 +39,11 @@ interface JiraMentionsStoreState {
   setSearch: (search: string) => void
 }
 
+interface PendingRefreshAttempt {
+  lastAttemptAt: number
+  generation: number
+}
+
 const EMPTY: JiraMentionsProjection = {
   enabled: false,
   identityVerified: false,
@@ -53,7 +58,37 @@ const EMPTY: JiraMentionsProjection = {
   items: [],
 }
 
-export const useJiraMentionsStore = create<JiraMentionsStoreState>((set, get) => ({
+export const useJiraMentionsStore = create<JiraMentionsStoreState>((set, get) => {
+  let detailRequestGeneration = 0
+  let refreshAttemptGeneration = 0
+  let pendingRefreshAttempt: PendingRefreshAttempt | null = null
+  let completedRefreshAttempt: PendingRefreshAttempt | null = null
+
+  const readDetail = async (
+    selected: { issueId: string; incomingCommentId: string },
+    clearBeforeRead: boolean,
+  ): Promise<void> => {
+    const requestGeneration = ++detailRequestGeneration
+    if (clearBeforeRead) set({ selected, detail: null, detailLoading: true, lastReplyResult: null })
+    try {
+      const detail = await window.ipc.invoke('jira-mentions:get-issue-detail', selected.issueId)
+      const current = get()
+      if (requestGeneration === detailRequestGeneration
+        && current.selected?.issueId === selected.issueId
+        && current.selected?.incomingCommentId === selected.incomingCommentId) {
+        set({ detail, detailLoading: false })
+      }
+    } catch {
+      const current = get()
+      if (requestGeneration === detailRequestGeneration
+        && current.selected?.issueId === selected.issueId
+        && current.selected?.incomingCommentId === selected.incomingCommentId) {
+        set(clearBeforeRead ? { detail: null, detailLoading: false } : current.detailLoading ? { detailLoading: false } : {})
+      }
+    }
+  }
+
+  return ({
   projection: EMPTY,
   hydrated: false,
   selected: null,
@@ -75,6 +110,16 @@ export const useJiraMentionsStore = create<JiraMentionsStoreState>((set, get) =>
 
   receiveProjection: (projection) => {
     const current = get()
+    const receivedAttemptAt = projection.lastAttemptAt
+    const previousAttemptAt = current.projection.lastAttemptAt
+    // Refresh responses can arrive after their corresponding state-change
+    // broadcast. Do not let a late loading snapshot roll a completed attempt
+    // backwards or arm a second detail reconciliation for that same attempt.
+    if (projection.status === 'loading' && receivedAttemptAt !== null
+      && previousAttemptAt === receivedAttemptAt && current.projection.status !== 'loading'
+      && pendingRefreshAttempt === null) return
+    if (receivedAttemptAt !== null && previousAttemptAt !== null && receivedAttemptAt < previousAttemptAt) return
+
     const selected = current.selected
     const selectedStillVisible = projection.identityVerified && projection.enabled && selected && projection.items.some((item) => item.issue.issueId === selected.issueId
       && item.comment.commentId === selected.incomingCommentId)
@@ -90,13 +135,37 @@ export const useJiraMentionsStore = create<JiraMentionsStoreState>((set, get) =>
       ? { ok: false as const, outcome: 'rejected' as const, errorCode: selectedItem.state.state === 'unanswered' ? 'delivery_rechecked' : 'already_answered' }
       : null
     const identityBoundary = !projection.identityVerified || !projection.enabled
+    const selectionInvalidated = Boolean(selected && !selectedStillVisible)
+    let reconcileSelectedDetail = false
+    if (projection.status === 'loading' && receivedAttemptAt !== null) {
+      if (pendingRefreshAttempt?.lastAttemptAt !== receivedAttemptAt) {
+        if (completedRefreshAttempt?.lastAttemptAt === receivedAttemptAt) return
+        refreshAttemptGeneration++
+        pendingRefreshAttempt = { lastAttemptAt: receivedAttemptAt, generation: refreshAttemptGeneration }
+      }
+    } else if (pendingRefreshAttempt && receivedAttemptAt === pendingRefreshAttempt.lastAttemptAt
+      && pendingRefreshAttempt.generation === refreshAttemptGeneration
+      && (projection.status === 'ready' || projection.status === 'partial' || projection.status === 'error')) {
+      completedRefreshAttempt = pendingRefreshAttempt
+      pendingRefreshAttempt = null
+      reconcileSelectedDetail = Boolean(selectedStillVisible)
+    }
+    if (identityBoundary || selectionInvalidated) {
+      pendingRefreshAttempt = null
+      detailRequestGeneration++
+      if (identityBoundary) completedRefreshAttempt = null
+    }
     set({
       projection,
       hydrated: true,
       ...(recheckedReplyResult ? { lastReplyResult: recheckedReplyResult } : {}),
       ...(identityBoundary ? { drafts: {}, selected: null, detail: null, lastReplyResult: null }
-        : selectedStillVisible ? {} : { selected: null, detail: null, lastReplyResult: null }),
+        : selectionInvalidated ? { selected: null, detail: null, lastReplyResult: null } : {}),
     })
+    if (reconcileSelectedDetail) {
+      const latestSelection = get().selected
+      if (latestSelection) void readDetail(latestSelection, false)
+    }
   },
 
   refresh: async (mode = 'manual') => {
@@ -109,18 +178,14 @@ export const useJiraMentionsStore = create<JiraMentionsStoreState>((set, get) =>
   },
 
   select: async (issueId, incomingCommentId) => {
-    set({ selected: { issueId, incomingCommentId }, detail: null, detailLoading: true, lastReplyResult: null })
-    try {
-      const detail = await window.ipc.invoke('jira-mentions:get-issue-detail', issueId)
-      if (get().selected?.issueId === issueId && get().selected?.incomingCommentId === incomingCommentId) {
-        set({ detail, detailLoading: false })
-      }
-    } catch {
-      set({ detail: null, detailLoading: false })
-    }
+    await readDetail({ issueId, incomingCommentId }, true)
   },
 
-  clearSelection: () => set({ selected: null, detail: null, lastReplyResult: null }),
+  clearSelection: () => {
+    detailRequestGeneration++
+    pendingRefreshAttempt = null
+    set({ selected: null, detail: null, detailLoading: false, lastReplyResult: null })
+  },
 
   saveDraft: (key, draft) => set((state) => {
     if (!key || key.length > 300) return state
@@ -168,4 +233,5 @@ export const useJiraMentionsStore = create<JiraMentionsStoreState>((set, get) =>
 
   setFilter: (filter) => set({ filter }),
   setSearch: (search) => set({ search }),
-}))
+  })
+})
