@@ -498,7 +498,10 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       end: (element as HTMLTextAreaElement).selectionEnd,
     }))).toEqual({ start: 0, end: 5 })
     expect(await replyInput.inputValue()).toBe('Draft text')
-    await replyInput.press('End')
+    await replyInput.evaluate((element) => {
+      const textarea = element as HTMLTextAreaElement
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    })
     await replyInput.pressSequentially('!')
     await expect(replyInput).toHaveValue('Draft text!')
 
