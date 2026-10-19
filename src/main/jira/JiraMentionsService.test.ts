@@ -310,6 +310,34 @@ describe('JiraMentionsService', () => {
     await service.close()
   })
 
+  it('rejects a duplicate reply while the same mention is already being sent', async () => {
+    const settings = settingsStore()
+    let releasePost!: () => void
+    const client = {
+      postComment: vi.fn(async (_settings: unknown, _issueId: string, body: unknown) => {
+        await new Promise<void>((resolve) => { releasePost = resolve })
+        return {
+          commentId: 'reply-1', authorAccountId: 'self-id', createdAt: 3_000, updatedAt: 3_000,
+          body, excerpt: 'A test reply.', visibility: null, availability: 'visible' as const,
+        }
+      }),
+    }
+    const service = new JiraMentionsService(null, settings, client as never, vi.fn())
+    const input = {
+      issueId: '100', sourceCommentId: 'incoming-1',
+      tokens: [{ kind: 'text' as const, id: 'text-1', text: 'A test reply.' }],
+    }
+
+    const firstSend = service.postReply(input)
+    await expect(service.postReply({ ...input, tokens: [{ ...input.tokens[0], text: 'A duplicate reply.' }] }))
+      .resolves.toEqual({ ok: false, outcome: 'rejected', errorCode: 'send_in_progress' })
+    expect(client.postComment).toHaveBeenCalledOnce()
+
+    releasePost()
+    await expect(firstSend).resolves.toEqual({ ok: true, commentId: 'reply-1' })
+    await service.close()
+  })
+
   it('opens only attachment URLs from the current cached Jira issue on the configured site', async () => {
     const settings = settingsStore()
     const context = {

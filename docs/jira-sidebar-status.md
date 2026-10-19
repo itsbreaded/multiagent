@@ -93,7 +93,10 @@ for standard Jira comments and Service Desk issues.
 Reply-attempt bookkeeping is best-effort and cannot block the Jira write. A
 successful API response is reported as posted; a timeout may leave delivery
 uncertain, and the user can retry manually. Replies do not advance the discovery
-checkpoint. See Atlassian's [Issue comments API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
+checkpoint. While a send is pending, the service rejects another send for the
+same Jira context, issue, and source comment with `send_in_progress`; another
+mention remains independent. This prevents a duplicate submission without
+gating on mention state or audience metadata. See Atlassian's [Issue comments API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
 and [Jira Service Management request comments API](https://developer.atlassian.com/cloud/jira/service-desk/rest/api-group-request/).
 
 ## External links and diagnostics

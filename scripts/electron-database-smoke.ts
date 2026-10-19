@@ -3,7 +3,7 @@ import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { ApplicationDatabase, ApplicationDatabaseError } from '../src/main/database/ApplicationDatabase'
+import { APPLICATION_DATABASE_VERSION, ApplicationDatabase, ApplicationDatabaseError } from '../src/main/database/ApplicationDatabase'
 import { SessionIndex } from '../src/main/sessions/SessionIndex'
 import { JIRA_MENTION_RULE_VERSION, JiraMentionsRepository } from '../src/main/jira/JiraMentionsRepository'
 import type { JiraIssueSnapshot } from '../src/shared/jiraMentions'
@@ -61,7 +61,7 @@ function prepareE2eDatabaseFromArgs(): boolean {
       assert.deepEqual(database.prepare(`SELECT sessionId FROM sessions`).all(), [{ sessionId: 'preserve-on-failure' }])
       assert.equal(database.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='jira_cache_contexts'`).get(), undefined)
     } else if (mode === '--verify-jira-v1') {
-      assert.equal(database.pragma('user_version', { simple: true }), 3)
+      assert.equal(database.pragma('user_version', { simple: true }), APPLICATION_DATABASE_VERSION)
       assert.deepEqual(database.prepare(`SELECT issue_key FROM jira_cached_issues WHERE context_id='legacy-context'`).all(), [{ issue_key: 'OLD-1' }])
       assert.deepEqual(database.prepare(`SELECT state FROM jira_mention_state WHERE context_id='legacy-context'`).all(), [{ state: 'unanswered' }])
       assert.deepEqual(database.prepare(`SELECT checkpoint,generation,last_success_started_at FROM jira_sync_state WHERE context_id='legacy-context'`).get(), {
@@ -107,7 +107,7 @@ function verifyFreshAndScopedRebuild(): void {
   createParent(dbPath)
   const owner = ApplicationDatabase.open(dbPath)
   try {
-    assert.equal(owner.database.pragma('user_version', { simple: true }), 3)
+    assert.equal(owner.database.pragma('user_version', { simple: true }), APPLICATION_DATABASE_VERSION)
     assert.equal(owner.database.prepare(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'jira_%'`).get()?.count, 11)
     owner.database.prepare(`INSERT INTO sessions(agentKind, sessionId, cwd, projectName, firstMessage, filePath, mtimeMs) VALUES('claude','s1','C:/work','work','search needle','C:/s1.jsonl',1)`).run()
     owner.database.prepare(`INSERT INTO session_cwd_overrides(agentKind, sessionId, cwd, projectName, updatedAt) VALUES('claude','s1','C:/fixed','fixed',2)`).run()
@@ -157,7 +157,7 @@ function verifyVersionOneUpgrade(): void {
 
   const owner = ApplicationDatabase.open(dbPath)
   try {
-    assert.equal(owner.database.pragma('user_version', { simple: true }), 3)
+    assert.equal(owner.database.pragma('user_version', { simple: true }), APPLICATION_DATABASE_VERSION)
     assert.deepEqual(owner.database.prepare(`SELECT sessionId,cwd,projectName FROM sessions`).get(), {
       sessionId: 'kept', cwd: 'C:/work', projectName: 'work',
     })
@@ -188,7 +188,7 @@ function verifyLegacySingleKeyMigration(): void {
 
   const owner = ApplicationDatabase.open(dbPath)
   try {
-    assert.equal(owner.database.pragma('user_version', { simple: true }), 3)
+    assert.equal(owner.database.pragma('user_version', { simple: true }), APPLICATION_DATABASE_VERSION)
     assert.deepEqual(owner.database.prepare(`SELECT agentKind,sessionId,displayName,firstMessage FROM sessions`).get(), {
       agentKind: 'claude', sessionId: 'legacy-1', displayName: null, firstMessage: 'legacy searchable',
     })

@@ -661,6 +661,9 @@ describe('JiraMentions composer', () => {
     ['permission', 'Jira denied permission to add a comment to this ticket.'],
     ['invalid_recipient', 'Jira could not find one or more selected people. Remove those mentions and try again.'],
     ['rate_limited', 'Jira is limiting replies. Wait before trying again.'],
+    ['delivery_rechecked', 'Jira did not show the reply after you refreshed. You can send it again.'],
+    ['already_answered', 'This request was answered while you had it open. You can still reply.'],
+    ['send_in_progress', 'A reply to this request is already being sent. Wait for it to finish before trying again.'],
     ['network', 'Could not reach Jira. Check the connection and try again.'],
   ] as const)('keeps the draft and gives actionable feedback after a %s reply failure', async (errorCode, message) => {
     prepareStore()

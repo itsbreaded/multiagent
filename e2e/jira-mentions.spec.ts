@@ -449,7 +449,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(page.getByText('Could you also check this?', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: /Alex.*Can you take a look/ }).click()
     await expect(page.getByRole('heading', { name: 'Synthetic issue' })).toBeVisible()
-    await expect(page.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
+    await expect(page.getByRole('textbox', { name: /Reply to ticket/ })).toBeVisible()
     const mentionsSearch = page.getByRole('textbox', { name: 'Search Jira mentions' })
     const mentionsFilter = page.getByRole('combobox', { name: 'Jira mentions filter' })
     await expect(mentionsSearch).toHaveCSS('color-scheme', 'dark')
@@ -462,7 +462,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     const earlierComments = page.getByRole('region', { name: 'Earlier comments' })
     const commentHistory = page.getByRole('region', { name: 'Comment history' })
     const replyComposer = page.getByRole('region', { name: 'Reply composer' })
-    const replyInput = replyComposer.getByRole('textbox', { name: /Reply to selected mention/ })
+    const replyInput = replyComposer.getByRole('textbox', { name: /Reply to ticket/ })
     await expect(replyInput).toHaveCSS('color-scheme', 'dark')
     await app.evaluate((_electron, clipboardText) => {
       const diagnostics = (globalThis as typeof globalThis & {
@@ -530,7 +530,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       }).__multiagentE2EDiagnostics
       if (diagnostics) diagnostics.syntheticClipboardText = ''
     })
-    await expect(replyComposer.getByText('Reply')).toBeVisible()
+    await expect(replyComposer.getByRole('button', { name: 'Reply' })).toBeVisible()
     await expect(replyComposer.locator('.jira-mentions-reply-issue')).toHaveCount(0)
     await expect(replyComposer.getByText('Reply in the issue comment thread', { exact: true })).toHaveCount(0)
     await expect(replyComposer.locator('.jira-mentions-reply-feedback')).toHaveCount(0)
@@ -804,7 +804,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }), { timeout: 30_000 }).toEqual({ status: 'ready', activeCount: 3 })
 
     await page.getByRole('button', { name: /Alex.*Could you check this/ }).click()
-    const uncertainEditor = page.getByRole('textbox', { name: /Reply to selected mention/ })
+    const uncertainEditor = page.getByRole('textbox', { name: /Reply to ticket/ })
     await uncertainEditor.fill('I will check @')
     const bobCandidates = page.getByRole('option', { name: /Alex.*comment author/i })
     await expect(bobCandidates).toHaveCount(2)
@@ -815,11 +815,10 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(uncertainEditor).toHaveValue('I will check @Alex today.')
     loseNextReplyResponse = true
     await page.getByRole('button', { name: 'Reply' }).click()
-    await expect(page.locator('span[role="status"]')).toHaveText('Delivery is uncertain. Refresh Jira mentions before trying again.')
+    await expect(page.locator('span[role="status"]')).toHaveText('A previous reply may have gone through. You can send another reply.')
     await expect(uncertainEditor).toHaveValue('I will check @Alex today.')
-    const disabledReplyButton = page.getByRole('button', { name: 'Reply' })
-    await expect(disabledReplyButton).toBeDisabled()
-    await expect(disabledReplyButton).toHaveCSS('opacity', '0.55')
+    const retryReplyButton = page.getByRole('button', { name: 'Reply' })
+    await expect(retryReplyButton).toBeEnabled()
     expect(receivedReplies).toHaveLength(1)
     expect(receivedReplies[0].body).toMatchObject({
       content: [{ content: [
@@ -828,9 +827,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
         { text: ' today.' },
       ] }],
     })
-    expect(receivedReplies[0].visibility).toEqual({
-      type: 'group', value: 'jira-developers', identifier: 'group-123',
-    })
+    expect(receivedReplies[0].visibility).toBeUndefined()
     await page.waitForTimeout(1_000)
     expect(receivedReplies).toHaveLength(1)
 
@@ -839,8 +836,8 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       const state = await window.ipc.invoke('jira-mentions:get-state')
       return { status: state.status, activeCount: state.activeCount, errorCode: state.errorCode }
     })).toMatchObject({ status: 'ready', activeCount: 2 })
-    await expect(page.locator('span[role="status"]')).toHaveText('This request was answered after you opened it. Refresh the inbox.')
-    await expect(page.getByRole('button', { name: 'Reply' })).toBeDisabled()
+    await expect(page.locator('span[role="status"]')).toHaveText('This request was answered while you had it open. You can still reply.')
+    await expect(page.getByRole('button', { name: 'Reply' })).toBeEnabled()
     await expect(page.getByRole('button', { name: /Jira mentions, 2 unanswered/ })).toBeVisible()
     await expect(uncertainEditor).toHaveValue('I will check @Alex today.')
     expect(receivedReplies).toHaveLength(1)
@@ -873,7 +870,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }))
     expect(descriptionLimit.scrollHeight).toBeGreaterThan(descriptionLimit.maxHeight)
     expect(descriptionLimit.height).toBeLessThanOrEqual(descriptionLimit.maxHeight + 1)
-    await expect(page.getByRole('textbox', { name: /Reply to selected mention/ })).toBeInViewport()
+    await expect(page.getByRole('textbox', { name: /Reply to ticket/ })).toBeInViewport()
     await screenshotUi(page, join(evidenceDir, 'jira-mentions-long-description.png'))
 
     const resizeHandle = page.getByRole('separator', { name: 'Resize description' })
@@ -998,7 +995,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
         `http://127.0.0.1:${address.port}/browse/APP-1`,
         `http://127.0.0.1:${address.port}/rest/api/3/attachment/content/attachment-1`,
       ])
-    const editor = page.getByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = page.getByRole('textbox', { name: /Reply to ticket/ })
     const compactEditorHeight = await editor.evaluate((element) => element.getBoundingClientRect().height)
     await editor.fill(Array.from({ length: 8 }, (_, index) => `Line ${index + 1}`).join('\n'))
     await expect.poll(() => editor.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(compactEditorHeight)
@@ -1179,7 +1176,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(restartedPage.getByRole('button', { name: /Casey.*Could you also check this/ })).toBeVisible()
     await restartedPage.getByRole('button', { name: /Casey.*Could you also check this/ }).click()
     await expect(restartedPage.getByRole('heading', { name: 'Synthetic issue' })).toBeVisible()
-    const cachedEditor = restartedPage.getByRole('textbox', { name: /Reply to selected mention/ })
+    const cachedEditor = restartedPage.getByRole('textbox', { name: /Reply to ticket/ })
     await expect(cachedEditor).toBeVisible()
     await expect(restartedPage.getByText('I will check @Alex today.', { exact: false }).first()).toBeVisible()
     await expect(restartedPage.getByText('Context after the request')).toBeVisible()
@@ -1219,7 +1216,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
 
     await detachedPage.getByTitle(/Open Jira mentions/).click()
     await detachedPage.getByRole('button', { name: /Drew.*One more request/ }).click()
-    const detachedEditor = detachedPage.getByRole('textbox', { name: /Reply to selected mention/ })
+    const detachedEditor = detachedPage.getByRole('textbox', { name: /Reply to ticket/ })
     await detachedEditor.fill('I will handle @')
     await detachedPage.getByRole('option', { name: /Drew.*comment author/i }).click()
     await detachedPage.getByRole('button', { name: 'Reply' }).click()

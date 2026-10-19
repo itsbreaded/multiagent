@@ -201,6 +201,7 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   + broadcasts `layout:cwd-repaired`.
 - `ApplicationDatabase` is the sole `session-index.db` owner; subsystem migrations and rebuilds
   must preserve the other subsystem's tables and must never recreate the whole file on a schema error.
+  Successful migration assertions use `APPLICATION_DATABASE_VERSION`; hard-coded versions describe fixture inputs.
 - Claude id is known at launch (`claude --session-id <uuid>`); Codex id comes only from the
   managed `SessionStart` hook. **No file-poll scanner**, no scanner fallback, no
   `--dangerously-bypass-hook-trust`. Don't reintroduce Claude filesystem matching for panes we
@@ -257,15 +258,17 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   replies on mention state or audience metadata, or require a pre-send refresh.
   Preserve the shared `session-index.db` on Jira/session migration failures and
   scope cache clearing to Jira tables.
+- Reject concurrent replies for the same Jira context, issue, and source comment;
+  keep other mentions independent.
 - Keep Restore/Unsnooze/Make active beside every inactive mention; activation is a local override.
 - Keep Jira Mentions text menus main-owned; send action flags and coordinates only, never field,
-  selected-text, or clipboard contents. → [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md)
+  selected-text, or clipboard contents.
 - Cross-platform E2E may use per-run AES-GCM Jira credential storage only for an unpackaged app
   whose active user-data path matches the isolated E2E profile; production always uses Electron `safeStorage`.
 - Constrain mention discovery JQL by the authenticated account ID comment term and update lower bound;
   never enumerate every recently updated issue. Verify candidates against structured ADF.
 - Post replies to the selected issue using Jira's default comment audience; don't gate
-  on or preserve the source comment's audience metadata.
+  on or preserve the source comment's audience metadata. → [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md)
 
 ## Docs index
 

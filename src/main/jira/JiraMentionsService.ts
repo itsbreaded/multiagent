@@ -90,6 +90,7 @@ export class JiraMentionsService {
   private snoozeTimer: ReturnType<typeof setTimeout> | null = null
   private closed = false
   private readonly attachmentPreviewRequests = new Map<string, Promise<JiraAttachmentPreviewResult>>()
+  private readonly pendingReplyKeys = new Set<string>()
   private pendingSendCount = 0
   private pendingSendsDrained: (() => void) | null = null
 
@@ -303,11 +304,18 @@ export class JiraMentionsService {
     if (!input || typeof input.issueId !== 'string' || !input.issueId || !validTokens(input.tokens)) {
       return { ok: false, outcome: 'rejected', errorCode: 'invalid_request' }
     }
+    const sourceCommentId = typeof input.sourceCommentId === 'string' ? input.sourceCommentId : ''
+    const replyKey = JSON.stringify([this.contextId ?? '', input.issueId, sourceCommentId])
+    if (this.pendingReplyKeys.has(replyKey)) {
+      return { ok: false, outcome: 'rejected', errorCode: 'send_in_progress' }
+    }
+    this.pendingReplyKeys.add(replyKey)
     this.pendingSendCount++
     let released = false
     const releaseLocked = () => {
       if (released) return
       released = true
+      this.pendingReplyKeys.delete(replyKey)
       this.pendingSendCount--
       if (this.pendingSendCount === 0) {
         this.pendingSendsDrained?.()
