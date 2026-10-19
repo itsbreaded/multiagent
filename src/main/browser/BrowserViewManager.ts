@@ -288,11 +288,23 @@ export class BrowserViewManager extends EventEmitter {
         { x: number; y: number } | { error: string } | null,
       selector
     )
-    this.win!.focus()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    if (isE2ERun && wc.getType() === 'offscreen') {
+      // E2E windows cannot be focused; DOM activation keeps browser MCP tests
+      // deterministic without sending OS input to a hidden window.
+      const clicked = await wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return false;
+        el.click();
+        return true;
+      })()`, true) as boolean
+      if (!clicked) throw new Error(`Selector not found: ${selector}`)
+    } else {
+      this.win!.focus()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wc.sendInputEvent({ type: 'mouseDown', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wc.sendInputEvent({ type: 'mouseUp', x: pos.x, y: pos.y, button: 'left', clickCount: 1 } as any)
+    }
     return this._waitForNavigationIfStarted(urlBefore)
   }
 

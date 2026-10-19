@@ -114,6 +114,9 @@ Jira Mentions' native text menu, and blocks non-loopback requests from Electron 
 main-process `fetch`. Main-process session clients and browser fixtures can still use `localhost`,
 `127.0.0.0/8`, and `::1`. Each existing Electron E2E suite checks that its windows are offscreen,
 invisible, and unfocused through teardown with `e2e/helpers/assertDesktopIsolation.ts`.
+Browser MCP clicks in this mode use DOM activation after the normal actionability probe, because
+offscreen test windows cannot receive focus. Keep production browser clicks on Electron's mouse
+input path; tests must not reveal a window to exercise it.
 
 `test:db` runs its Electron-ABI migration fixture without creating a `BrowserWindow` and launches
 Electron with `windowsHide: true`. The wrapped-link E2E verifies routing with the reserved

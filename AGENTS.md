@@ -191,6 +191,7 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 - Run tests only through guarded npm scripts; every test must stay in the background with no
   displayed/foregrounded app or browser windows, native dialogs/menus/popups, or external-app
   launches. Block non-loopback network access and use isolated loopback fixtures.
+- Browser MCP E2E uses the offscreen DOM click path; don't focus windows to deliver synthetic input.
 
 ### Sessions & MCP → [`docs/sessions.md`](docs/sessions.md), [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md)
 
