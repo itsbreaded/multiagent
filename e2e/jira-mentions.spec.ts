@@ -6,10 +6,25 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { screenshotUi } from './helpers/screenshotUi'
+import { installTestTheme } from './helpers/themeTokens'
+import { assertDesktopIsolation } from './helpers/assertDesktopIsolation'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
 const jiraSecureStorageKey = randomBytes(32).toString('hex')
+
+type JiraMentionsTextMenuCapture = {
+  target: 'editable' | 'selection'
+  x: number
+  y: number
+  items: Array<{ role?: string; type?: string; enabled: boolean }>
+}
+
+type JiraMentionsE2EDiagnostics = {
+  syntheticClipboardText: string
+  jiraMentionsTextMenus: JiraMentionsTextMenuCapture[]
+}
 
 function jiraTestLaunchEnv(userDataDir: string, homeDir: string): Record<string, string> {
   return {
@@ -105,13 +120,26 @@ async function closeApp(app: ElectronApplication): Promise<void> {
     if (proc.exitCode !== null || proc.signalCode !== null) return resolveExit()
     proc.once('exit', () => resolveExit())
   })
+  let killTimer: ReturnType<typeof setTimeout> | null = null
   await Promise.race([
     app.close().catch(() => {}).then(() => exited),
-    new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 8000)),
+    new Promise<void>((resolveDelay) => {
+      killTimer = setTimeout(resolveDelay, 8000)
+      killTimer.unref?.()
+    }),
   ])
+  if (killTimer) clearTimeout(killTimer)
   if (proc.exitCode === null && proc.signalCode === null && proc.pid) {
-    if (process.platform === 'win32') spawnSync(`taskkill /pid ${proc.pid} /T /F`, { shell: true, stdio: 'ignore' })
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    }
     else process.kill(-proc.pid, 'SIGKILL')
+  }
+  if (proc.exitCode === null && proc.signalCode === null) {
+    await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 2_000))])
+  }
+  if (proc.exitCode === null && proc.signalCode === null) {
+    throw new Error(`E2E Electron process ${proc.pid} did not exit after teardown`)
   }
 }
 
@@ -294,7 +322,9 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
   const userDataDir = await mkdtemp(join(tmpdir(), 'multiagent-jira-mentions-e2e-'))
   const homeDir = join(userDataDir, 'home')
   const evidenceDir = join(repoRoot, 'docs', 'prototypes', 'jira-mentions', 'evidence')
+  const uiEvidenceDir = join(repoRoot, 'specs', 'evidence', '082-renderer-ui-style-alignment')
   await mkdir(evidenceDir, { recursive: true })
+  await mkdir(uiEvidenceDir, { recursive: true })
   let app: ElectronApplication | null = null
 
   try {
@@ -310,20 +340,14 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       env: jiraTestLaunchEnv(userDataDir, homeDir),
     })
     const page: Page = await app.firstWindow()
+    await assertDesktopIsolation(app)
     await page.setViewportSize({ width: 1280, height: 800 })
-    await app.evaluate(({ shell }) => {
-      const state = globalThis as typeof globalThis & { __jiraOpenedUrls?: string[] }
-      state.__jiraOpenedUrls = []
-      Object.defineProperty(shell, 'openExternal', {
-        configurable: true,
-        value: async (url: string) => { state.__jiraOpenedUrls?.push(url) },
-      })
-    })
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByText('Alpha', { exact: true }).first()).toBeVisible()
 
     // Exercise a populated project workspace before switching into the feature view.
     await page.getByTitle(/Command palette/).click()
+    await screenshotUi(page, join(uiEvidenceDir, 'command-palette-main-windows-1280x800.png'))
     await page.getByPlaceholder('Search commands…').fill('New Shell Pane')
     await page.keyboard.press('Enter')
     const layoutPath = join(userDataDir, 'layout.json')
@@ -338,6 +362,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }).not.toBe('')
     const projectTerminal = page.locator(`[data-pane-id="${alphaPaneId}"] .xterm`)
     await expect(projectTerminal).toHaveCount(1, { timeout: 30_000 })
+    await screenshotUi(page, join(uiEvidenceDir, 'app-chrome-sidebar-pane-main-windows-1280x800.png'))
 
     await page.getByTitle(/Command palette/).click()
     await page.getByPlaceholder('Search commands…').fill('Split Pane Vertical')
@@ -351,12 +376,58 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     const paneSashes = page.locator('[class*="sash-module_sash"]')
     await expect(paneSashes.first()).toBeVisible()
 
+    await page.keyboard.press('Control+Shift+O')
+    await expect(page.getByRole('dialog', { name: 'Session Browser' })).toBeVisible()
+    await screenshotUi(page, join(uiEvidenceDir, 'session-browser-main-windows-1280x800.png'))
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog', { name: 'Session Browser' })).toBeHidden()
+
+    await page.getByTitle(/Command palette/).click()
+    await page.getByPlaceholder('Search commands…').fill('Change Project Directory')
+    await page.keyboard.press('Enter')
+    const directoryPickerTitle = page.getByText('Change project directory', { exact: true })
+    await expect(directoryPickerTitle).toBeVisible()
+    const directoryPickerInput = page.getByPlaceholder(/e\.g\. C:\\Users\\you/)
+    await expect(directoryPickerInput).toBeFocused()
+    await expect(directoryPickerInput).toHaveCSS('color-scheme', 'dark')
+    await expect(directoryPickerInput).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await screenshotUi(page, join(uiEvidenceDir, 'directory-picker-main-windows-1280x800.png'))
+    await page.keyboard.press('Escape')
+    await expect(directoryPickerTitle).toBeHidden()
+
     await page.getByTitle('Settings').click()
+    await page.getByText('Providers', { exact: true }).first().click()
+    const firstProviderCheckbox = page.locator('input.ui-control-checkbox').first()
+    await expect(firstProviderCheckbox).toBeVisible()
+    await expect(firstProviderCheckbox).toHaveCSS('accent-color', 'rgb(74, 222, 128)')
+    await screenshotUi(page, join(uiEvidenceDir, 'provider-settings-controls-main-windows-1280x800.png'))
     await page.getByText('Jira', { exact: true }).first().click()
     await page.getByRole('textbox', { name: 'Jira base URL' }).fill(`http://127.0.0.1:${address.port}`)
     await page.getByRole('textbox', { name: 'Atlassian account email' }).fill('synthetic@example.test')
     await page.getByLabel('Jira API token').fill('synthetic-token')
     await page.getByRole('checkbox', { name: 'Track unanswered Jira mentions' }).check()
+    await page.getByRole('checkbox', { name: 'Background refresh' }).check()
+    const pollingInterval = page.getByRole('spinbutton', { name: 'Refresh interval in minutes' })
+    await expect(pollingInterval).toHaveCSS('color-scheme', 'dark')
+    await pollingInterval.fill('3')
+    await expect(pollingInterval).toHaveAttribute('aria-invalid', 'true')
+    await expect(pollingInterval).toHaveCSS('border-color', 'rgb(248, 113, 113)')
+    await pollingInterval.fill('15')
+    await expect(pollingInterval).toHaveAttribute('aria-invalid', 'false')
+    await pollingInterval.focus()
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Shift+Tab')
+    await expect(pollingInterval).toBeFocused()
+    await expect(pollingInterval).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await expect(page.getByRole('checkbox', { name: 'Background refresh' })).toHaveCSS('accent-color', 'rgb(74, 222, 128)')
+    const jiraUrl = page.getByRole('textbox', { name: 'Jira base URL' })
+    await jiraUrl.focus()
+    await page.keyboard.press('Tab')
+    const jiraEmail = page.getByRole('textbox', { name: 'Atlassian account email' })
+    await expect(jiraEmail).toBeFocused()
+    await expect(jiraEmail).toHaveCSS('outline-style', 'solid')
+    await expect(jiraEmail).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await screenshotUi(page, join(uiEvidenceDir, 'jira-settings-controls-main-windows-1280x800.png'))
     await page.keyboard.press('Escape')
 
     await expect.poll(async () => page.evaluate(async () => {
@@ -379,11 +450,87 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await page.getByRole('button', { name: /Alex.*Can you take a look/ }).click()
     await expect(page.getByRole('heading', { name: 'Synthetic issue' })).toBeVisible()
     await expect(page.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
+    const mentionsSearch = page.getByRole('textbox', { name: 'Search Jira mentions' })
+    const mentionsFilter = page.getByRole('combobox', { name: 'Jira mentions filter' })
+    await expect(mentionsSearch).toHaveCSS('color-scheme', 'dark')
+    await mentionsSearch.focus()
+    await page.keyboard.press('Tab')
+    await expect(mentionsFilter).toBeFocused()
+    await expect(mentionsFilter).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await expect(mentionsFilter).toHaveCSS('color-scheme', 'dark')
     const newerComments = page.getByRole('region', { name: 'Newer comments' })
     const earlierComments = page.getByRole('region', { name: 'Earlier comments' })
     const commentHistory = page.getByRole('region', { name: 'Comment history' })
     const replyComposer = page.getByRole('region', { name: 'Reply composer' })
-    await expect(replyComposer.getByText('Reply to mention')).toBeVisible()
+    const replyInput = replyComposer.getByRole('textbox', { name: /Reply to selected mention/ })
+    await expect(replyInput).toHaveCSS('color-scheme', 'dark')
+    await app.evaluate((_electron, clipboardText) => {
+      const diagnostics = (globalThis as typeof globalThis & {
+        __multiagentE2EDiagnostics?: JiraMentionsE2EDiagnostics
+      }).__multiagentE2EDiagnostics
+      if (!diagnostics) throw new Error('E2E diagnostics were not initialized')
+      diagnostics.syntheticClipboardText = clipboardText
+      diagnostics.jiraMentionsTextMenus.length = 0
+    }, 'Synthetic clipboard text')
+    await replyInput.fill('Draft text')
+    await replyInput.evaluate((element) => (element as HTMLTextAreaElement).setSelectionRange(0, 5))
+    const editableContextMenuPrevented = await replyInput.evaluate((element) => {
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, view: window, clientX: 31, clientY: 47,
+      })
+      element.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    expect(editableContextMenuPrevented).toBe(true)
+    const readTextMenus = () => app!.evaluate(() => (
+      (globalThis as typeof globalThis & { __multiagentE2EDiagnostics?: JiraMentionsE2EDiagnostics })
+        .__multiagentE2EDiagnostics?.jiraMentionsTextMenus ?? []
+    ))
+    await expect.poll(async () => (await readTextMenus()).length).toBe(1)
+    const editableTextMenu = (await readTextMenus())[0]
+    expect(editableTextMenu).toMatchObject({ target: 'editable', x: 31, y: 47 })
+    expect(editableTextMenu.items.map((item) => item.role?.toLowerCase() ?? item.type)).toEqual([
+      'cut', 'copy', 'paste', 'separator', 'selectall',
+    ])
+    expect(editableTextMenu.items.filter((item) => item.role).every((item) => item.enabled)).toBe(true)
+    await expect.poll(async () => replyInput.evaluate((element) => ({
+      start: (element as HTMLTextAreaElement).selectionStart,
+      end: (element as HTMLTextAreaElement).selectionEnd,
+    }))).toEqual({ start: 0, end: 5 })
+    expect(await replyInput.inputValue()).toBe('Draft text')
+    await replyInput.press('End')
+    await replyInput.pressSequentially('!')
+    await expect(replyInput).toHaveValue('Draft text!')
+
+    const readOnlyComment = page.getByText('Context before the request', { exact: true })
+    await readOnlyComment.evaluate((element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    })
+    const selectedContextMenuPrevented = await readOnlyComment.evaluate((element) => {
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, view: window, clientX: 55, clientY: 72,
+      })
+      element.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    expect(selectedContextMenuPrevented).toBe(true)
+    await expect.poll(async () => (await readTextMenus()).length).toBe(2)
+    const readOnlyTextMenu = (await readTextMenus())[1]
+    expect(readOnlyTextMenu).toMatchObject({ target: 'selection', x: 55, y: 72 })
+    expect(readOnlyTextMenu.items.map((item) => item.role ?? item.type)).toEqual(['copy'])
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toContain('Context before the request')
+    await replyInput.fill('')
+    await app.evaluate((_electron) => {
+      const diagnostics = (globalThis as typeof globalThis & {
+        __multiagentE2EDiagnostics?: JiraMentionsE2EDiagnostics
+      }).__multiagentE2EDiagnostics
+      if (diagnostics) diagnostics.syntheticClipboardText = ''
+    })
+    await expect(replyComposer.getByText('Reply')).toBeVisible()
     await expect(replyComposer.locator('.jira-mentions-reply-issue')).toHaveCount(0)
     await expect(replyComposer.getByText('Reply in the issue comment thread', { exact: true })).toHaveCount(0)
     await expect(replyComposer.locator('.jira-mentions-reply-feedback')).toHaveCount(0)
@@ -485,20 +632,56 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     })).toBe(true)
     await expect(replyComposer).toBeVisible()
     expect((await page.locator('.jira-mentions-inbox').boundingBox())?.width).toBe(280)
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-layout-desktop-1280x800.png') })
+    const desktopDescriptionWidth = (await page.locator('.jira-mentions-description-copy').boundingBox())?.width
+    const desktopReplyWidth = (await replyComposer.boundingBox())?.width
+    expect(desktopDescriptionWidth).toBeGreaterThan(0)
+    expect(desktopDescriptionWidth).toBeCloseTo(desktopReplyWidth ?? -100, 0)
+    await screenshotUi(page, join(uiEvidenceDir, 'mentions-controls-desktop-1280x800.png'))
+
+    const alternateRootColors = await page.evaluate(() => {
+      const app = document.querySelector('#root > div') as HTMLElement | null
+      const newProjectButton = document.querySelector('button[title="New Project Folder"]') as HTMLElement | null
+      const sidebar = newProjectButton?.parentElement?.parentElement
+      const mentions = document.querySelector('.jira-mentions-root') as HTMLElement | null
+      const terminal = document.querySelector('.xterm') as HTMLElement | null
+      if (!app || !sidebar || !mentions || !terminal) throw new Error('Expected themed UI surfaces were not mounted')
+      return {
+        app: getComputedStyle(app).backgroundColor,
+        sidebar: getComputedStyle(sidebar).backgroundColor,
+        mentions: getComputedStyle(mentions).backgroundColor,
+        terminal: getComputedStyle(terminal).backgroundColor,
+      }
+    })
+    await installTestTheme(page, { color: { appBg: '#112233', panel: '#223344', accent: '#ff00aa' } })
+    await expect.poll(() => page.evaluate(() => {
+      const app = document.querySelector('#root > div') as HTMLElement | null
+      const newProjectButton = document.querySelector('button[title="New Project Folder"]') as HTMLElement | null
+      const sidebar = newProjectButton?.parentElement?.parentElement
+      const mentions = document.querySelector('.jira-mentions-root') as HTMLElement | null
+      const terminal = document.querySelector('.xterm') as HTMLElement | null
+      return {
+        app: app && getComputedStyle(app).backgroundColor,
+        sidebar: sidebar && getComputedStyle(sidebar).backgroundColor,
+        mentions: mentions && getComputedStyle(mentions).backgroundColor,
+        terminal: terminal && getComputedStyle(terminal).backgroundColor,
+      }
+    })).toEqual({ app: 'rgb(17, 34, 51)', sidebar: 'rgb(34, 51, 68)', mentions: 'rgb(17, 34, 51)', terminal: 'rgb(17, 34, 51)' })
+    expect(alternateRootColors).toEqual({ app: 'rgb(14, 16, 17)', sidebar: 'rgb(26, 27, 30)', mentions: 'rgb(14, 16, 17)', terminal: 'rgb(14, 16, 17)' })
+    await installTestTheme(page)
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-layout-desktop-1280x800.png'))
     const desktopFeatureBox = await page.locator('.jira-mentions-root').boundingBox()
     expect(desktopFeatureBox).not.toBeNull()
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-feature-desktop-1060x757.png'), clip: desktopFeatureBox! })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-feature-desktop-1060x757.png'), desktopFeatureBox!)
     await page.getByRole('region', { name: 'Selected mention' }).scrollIntoViewIfNeeded()
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-comments-desktop-1280x800.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-comments-desktop-1280x800.png'))
     await page.locator('.jira-mentions-detail').evaluate((element) => element.scrollTo(0, 0))
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-populated.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-populated.png'))
     const attachmentSummary = page.getByLabel('Attachments').locator('summary')
     await attachmentSummary.click()
     expect(await page.locator('.jira-mentions-attachment-metadata').first().evaluate((element) => getComputedStyle(element).fontSize)).toBe('10px')
     expect(await page.locator('.jira-mentions-attachment-date').first().evaluate((element) => getComputedStyle(element).fontSize)).toBe('10px')
     await attachmentSummary.scrollIntoViewIfNeeded()
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-attachments-desktop-1280x800.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-attachments-desktop-1280x800.png'))
     await attachmentSummary.click()
 
     await page.setViewportSize({ width: 700, height: 900 })
@@ -515,10 +698,15 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       return node.scrollWidth > node.clientWidth + 1
     }))
     expect(narrowReadingOverflow).toBe(false)
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-layout-narrow-700x900.png') })
+    const narrowDescriptionWidth = (await page.locator('.jira-mentions-description-copy').boundingBox())?.width
+    const narrowReplyWidth = (await replyComposer.boundingBox())?.width
+    expect(narrowDescriptionWidth).toBeGreaterThan(0)
+    expect(narrowDescriptionWidth).toBeCloseTo(narrowReplyWidth ?? -100, 0)
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-layout-narrow-700x900.png'))
+    await screenshotUi(page, join(uiEvidenceDir, 'mentions-controls-narrow-700x900.png'))
     const narrowFeatureBox = await page.locator('.jira-mentions-root').boundingBox()
     expect(narrowFeatureBox).not.toBeNull()
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-feature-narrow-480x857.png'), clip: narrowFeatureBox! })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-feature-narrow-480x857.png'), narrowFeatureBox!)
     await attachmentSummary.scrollIntoViewIfNeeded()
     await attachmentSummary.click()
     const narrowAttachmentCards = page.getByRole('group', { name: 'Attachment previews' }).locator('.jira-mentions-attachment-card')
@@ -539,7 +727,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     expect(narrowAttachmentLayout.scrollWidth).toBeGreaterThan(narrowAttachmentLayout.clientWidth)
     expect(narrowAttachmentLayout.lastTileReachable).toBe(true)
     await narrowAttachmentCards.last().scrollIntoViewIfNeeded()
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-attachments-narrow-700x900.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-attachments-narrow-700x900.png'))
     await attachmentSummary.click()
     await page.setViewportSize({ width: 480, height: 857 })
     await page.locator('.jira-mentions-detail').evaluate((element) => element.scrollTo(0, 0))
@@ -569,7 +757,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     expect(longContentOriginals.rootScrollWidth).toBeLessThanOrEqual(longContentOriginals.rootWidth + 1)
     expect(longContentOriginals.actionBounds.length).toBe(2)
     expect(longContentOriginals.actionBounds.every((bounds) => bounds.left >= 0 && bounds.right <= 480)).toBe(true)
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-long-content-narrow-480x857.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-long-content-narrow-480x857.png'))
     await page.evaluate((originals) => {
       document.querySelector('.jira-mentions-property-row dd [data-property="person"]')!.textContent = originals.property
       document.querySelector('[aria-label="Selected mention"] .jira-mentions-comment-body p')!.textContent = originals.comment
@@ -605,7 +793,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     const revoked = await page.evaluate(() => window.ipc.invoke('jira-mentions:refresh', 'manual'))
     expect(revoked).toMatchObject({ status: 'error', errorCode: 'permission', activeCount: 0 })
     await expect(page.getByRole('status')).toContainText('Jira denied access to some issues.')
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-access-error.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-access-error.png'))
     expect(await page.evaluate(() => window.ipc.invoke('jira-mentions:get-issue-detail', '100'))).toBeNull()
     issuePermissionDenied = false
     currentIssueUpdated = new Date().toISOString()
@@ -626,10 +814,12 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await page.keyboard.type(' today.')
     await expect(uncertainEditor).toHaveValue('I will check @Alex today.')
     loseNextReplyResponse = true
-    await page.getByRole('button', { name: 'Post reply' }).click()
+    await page.getByRole('button', { name: 'Reply' }).click()
     await expect(page.locator('span[role="status"]')).toHaveText('Delivery is uncertain. Refresh Jira mentions before trying again.')
     await expect(uncertainEditor).toHaveValue('I will check @Alex today.')
-    await expect(page.getByRole('button', { name: 'Post reply' })).toBeDisabled()
+    const disabledReplyButton = page.getByRole('button', { name: 'Reply' })
+    await expect(disabledReplyButton).toBeDisabled()
+    await expect(disabledReplyButton).toHaveCSS('opacity', '0.55')
     expect(receivedReplies).toHaveLength(1)
     expect(receivedReplies[0].body).toMatchObject({
       content: [{ content: [
@@ -650,7 +840,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       return { status: state.status, activeCount: state.activeCount, errorCode: state.errorCode }
     })).toMatchObject({ status: 'ready', activeCount: 2 })
     await expect(page.locator('span[role="status"]')).toHaveText('This request was answered after you opened it. Refresh the inbox.')
-    await expect(page.getByRole('button', { name: 'Post reply' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Reply' })).toBeDisabled()
     await expect(page.getByRole('button', { name: /Jira mentions, 2 unanswered/ })).toBeVisible()
     await expect(uncertainEditor).toHaveValue('I will check @Alex today.')
     expect(receivedReplies).toHaveLength(1)
@@ -684,7 +874,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     expect(descriptionLimit.scrollHeight).toBeGreaterThan(descriptionLimit.maxHeight)
     expect(descriptionLimit.height).toBeLessThanOrEqual(descriptionLimit.maxHeight + 1)
     await expect(page.getByRole('textbox', { name: /Reply to selected mention/ })).toBeInViewport()
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-long-description.png') })
+    await screenshotUi(page, join(evidenceDir, 'jira-mentions-long-description.png'))
 
     const resizeHandle = page.getByRole('separator', { name: 'Resize description' })
     const resizeBox = await resizeHandle.boundingBox()
@@ -800,7 +990,9 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await page.getByRole('button', { name: 'Open APP-1 in Jira' }).click()
     await page.getByRole('button', { name: 'Open issue APP-1 in Jira' }).click()
     await page.getByRole('button', { name: 'Open attachment context.txt in Jira' }).click()
-    await expect.poll(() => app!.evaluate(() => (globalThis as typeof globalThis & { __jiraOpenedUrls?: string[] }).__jiraOpenedUrls ?? []))
+    await expect.poll(() => app!.evaluate(() => (globalThis as typeof globalThis & {
+      __multiagentE2EDiagnostics?: { externalOpenAttempts: string[] }
+    }).__multiagentE2EDiagnostics?.externalOpenAttempts ?? []))
       .toEqual([
         `http://127.0.0.1:${address.port}/browse/APP-1`,
         `http://127.0.0.1:${address.port}/browse/APP-1`,
@@ -818,7 +1010,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await alexCandidates.nth(0).click()
     await page.keyboard.type(' today.')
     holdReplyResponse = true
-    await page.getByRole('button', { name: 'Post reply' }).click()
+    await page.getByRole('button', { name: 'Reply' }).click()
 
     await expect.poll(() => receivedReplies.length).toBe(2)
     expect(receivedReplies[1].visibility).toBeUndefined()
@@ -913,6 +1105,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       return saved.activeDestination
     }).toEqual({ kind: 'feature', featureId: 'jira-mentions' })
 
+    await page.setViewportSize({ width: 1280, height: 800 })
     await page.getByRole('button', { name: /Casey.*Could you also check this/ }).click()
     const snoozeButton = page.getByRole('button', { name: 'Snooze', exact: true })
     await snoozeButton.click()
@@ -921,12 +1114,23 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     const snoozeDuration = snoozeMenu.getByRole('spinbutton', { name: 'Snooze duration' })
     await expect(snoozeDuration).toHaveValue('1')
     await expect(snoozeDuration).toHaveCSS('color-scheme', 'dark')
-    await expect(snoozeMenu.getByRole('combobox', { name: 'Snooze unit' })).toHaveValue('hours')
+    const snoozeUnit = snoozeMenu.getByRole('combobox', { name: 'Snooze unit' })
+    await expect(snoozeUnit).toHaveValue('hours')
+    await expect(snoozeUnit).toHaveCSS('color-scheme', 'dark')
+    await snoozeDuration.focus()
+    await page.keyboard.press('Tab')
+    await expect(snoozeUnit).toBeFocused()
+    await expect(snoozeUnit).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await page.keyboard.press('Shift+Tab')
+    await expect(snoozeDuration).toBeFocused()
+    await expect(snoozeDuration).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
     await expect(snoozeMenu.getByText(/2 hours|1 day|Next Monday/)).toHaveCount(0)
     const snoozeBounds = await snoozeButton.boundingBox()
     const menuBounds = await snoozeMenu.boundingBox()
     expect(snoozeBounds && menuBounds && menuBounds.y).toBeGreaterThan(snoozeBounds?.y ?? 0)
-    await page.screenshot({ path: join(evidenceDir, 'jira-mentions-snooze-form.png') })
+    await snoozeUnit.focus()
+    await snoozeDuration.hover()
+    await screenshotUi(page, join(uiEvidenceDir, 'mentions-number-controls-main-windows-1280x800.png'))
     await page.getByRole('heading', { name: 'Synthetic issue' }).click()
     await expect(snoozeMenu).toBeHidden()
     await snoozeButton.click()
@@ -949,6 +1153,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       env: jiraTestLaunchEnv(userDataDir, homeDir),
     })
     const restartedPage = await app.firstWindow()
+    await assertDesktopIsolation(app)
     await restartedPage.waitForLoadState('domcontentloaded')
     await expect.poll(async () => restartedPage.evaluate(async () => {
       const state = await window.ipc.invoke('jira-mentions:get-state')
@@ -1017,7 +1222,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     const detachedEditor = detachedPage.getByRole('textbox', { name: /Reply to selected mention/ })
     await detachedEditor.fill('I will handle @')
     await detachedPage.getByRole('option', { name: /Drew.*comment author/i }).click()
-    await detachedPage.getByRole('button', { name: 'Post reply' }).click()
+    await detachedPage.getByRole('button', { name: 'Reply' }).click()
     await expect.poll(() => receivedReplies.length).toBe(3)
     expect(receivedReplies[2].body).toEqual({
       type: 'doc', version: 1,
@@ -1051,6 +1256,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
       env: jiraTestLaunchEnv(userDataDir, homeDir),
     })
     const identityChangedPage = await app.firstWindow()
+    await assertDesktopIsolation(app)
     await identityChangedPage.waitForLoadState('domcontentloaded')
     await expect.poll(async () => identityChangedPage.evaluate(async () => {
       const state = await window.ipc.invoke('jira-mentions:get-state')
@@ -1073,9 +1279,9 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(mockupReply.locator('.reply-issue')).toHaveCount(0)
     await expect(mockupReply.getByText('Reply in the issue comment thread')).toHaveCount(0)
     expect(await mockupReply.innerText()).not.toContain('WEB-2081')
-    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-context-rail-1280x800.png') })
+    await screenshotUi(identityChangedPage, join(evidenceDir, 'mockup-04-context-rail-1280x800.png'))
     await identityChangedPage.locator('.source-comment').scrollIntoViewIfNeeded()
-    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-context-rail-comments-1280x800.png') })
+    await screenshotUi(identityChangedPage, join(evidenceDir, 'mockup-04-context-rail-comments-1280x800.png'))
     await identityChangedPage.setViewportSize({ width: 1060, height: 757 })
     await identityChangedPage.reload()
     await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
@@ -1085,7 +1291,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(identityChangedPage.locator('.reply-section .reply-issue')).toHaveCount(0)
     await expect(identityChangedPage.locator('.reply-section').getByText('Reply in the issue comment thread')).toHaveCount(0)
     expect(await identityChangedPage.locator('.reply-section').innerText()).not.toContain('WEB-2081')
-    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-feature-desktop-1060x757.png') })
+    await screenshotUi(identityChangedPage, join(evidenceDir, 'mockup-04-feature-desktop-1060x757.png'))
     await identityChangedPage.setViewportSize({ width: 480, height: 857 })
     await identityChangedPage.reload()
     await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
@@ -1095,7 +1301,7 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     await expect(identityChangedPage.locator('.reply-section .reply-issue')).toHaveCount(0)
     await expect(identityChangedPage.locator('.reply-section').getByText('Reply in the issue comment thread')).toHaveCount(0)
     expect(await identityChangedPage.locator('.reply-section').innerText()).not.toContain('WEB-2081')
-    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-feature-narrow-480x857.png') })
+    await screenshotUi(identityChangedPage, join(evidenceDir, 'mockup-04-feature-narrow-480x857.png'))
     await identityChangedPage.setViewportSize({ width: 700, height: 900 })
     await identityChangedPage.reload()
     await expect(identityChangedPage.locator('.feature-page')).toBeVisible()
@@ -1107,9 +1313,12 @@ test('finds a synthetic unanswered mention and posts one explicit structured rep
     }))
     expect(mockupStackedLayout.ticketTop).toBeGreaterThanOrEqual(mockupStackedLayout.inboxBottom - 1)
     expect(mockupStackedLayout.ticketTop).toBeLessThan(900)
-    await identityChangedPage.screenshot({ path: join(evidenceDir, 'mockup-04-context-rail-700x900.png') })
+    await screenshotUi(identityChangedPage, join(evidenceDir, 'mockup-04-context-rail-700x900.png'))
   } finally {
-    if (app) await closeApp(app)
+    if (app) {
+      await assertDesktopIsolation(app)
+      await closeApp(app)
+    }
     await new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()))
     await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   }

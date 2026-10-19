@@ -365,14 +365,14 @@ export function TerminalBindingsSection(): JSX.Element {
 
       {showAddForm && (
         <div style={addFormStyle}>
-          <input
+          <input className="ui-control"
             type="text"
             placeholder="Label (required)"
             value={newLabel}
             onChange={(e) => { setNewLabel(e.target.value); setAddFormError(null) }}
             style={formInputStyle}
           />
-          <textarea
+          <textarea className="ui-control"
             placeholder="Text to send"
             value={newText}
             onChange={(e) => setNewText(e.target.value)}
@@ -400,14 +400,14 @@ export function TerminalBindingsSection(): JSX.Element {
         if (editingId === b.id) {
           return (
             <div key={b.id} style={addFormStyle}>
-              <input
+              <input className="ui-control"
                 type="text"
                 aria-label="Macro label"
                 value={editLabel}
                 onChange={(e) => { setEditLabel(e.target.value); setEditFormError(null) }}
                 style={formInputStyle}
               />
-              <textarea
+              <textarea className="ui-control"
                 aria-label="Macro text"
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
@@ -466,9 +466,9 @@ function BindingRow({ children }: { children: React.ReactNode }): JSX.Element {
         justifyContent: 'space-between',
         padding: '7px 12px',
         marginBottom: 2,
-        border: '1px solid #222326',
+        border: `1px solid ${ui.color.borderSubtle}`,
         borderRadius: 5,
-        backgroundColor: '#141517',
+        backgroundColor: ui.color.input,
         gap: 12,
       }}
     >
@@ -479,7 +479,7 @@ function BindingRow({ children }: { children: React.ReactNode }): JSX.Element {
 
 function RowLabel({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <span style={{ color: '#c9cdd1', fontSize: 12, flex: 1, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+    <span style={{ color: ui.color.text, fontSize: 12, flex: 1, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
       {children}
     </span>
   )
@@ -498,10 +498,10 @@ function SequenceChip({ children, title }: { children: React.ReactNode; title?: 
     <span
       style={{
         display: 'inline-block',
-        background: '#1e1f22',
-        border: '1px solid #222326',
+        background: ui.color.surfaceInset,
+        border: `1px solid ${ui.color.borderSubtle}`,
         borderRadius: 4,
-        color: '#4a4b4e',
+        color: ui.color.textDim,
         fontSize: 10,
         fontFamily: 'monospace',
         padding: '1px 6px',
@@ -522,10 +522,10 @@ function KeyBadge({ children, active }: { children: React.ReactNode; active?: bo
     <span
       style={{
         display: 'inline-block',
-        background: active ? '#1a3a1a' : '#1e1f22',
-        border: `1px solid ${active ? '#4ade80' : '#3a3b3e'}`,
+        background: active ? ui.color.accentBg : ui.color.surfaceInset,
+        border: `1px solid ${active ? ui.color.accent : ui.color.textFaint}`,
         borderRadius: 4,
-        color: active ? '#4ade80' : '#a0a4a8',
+        color: active ? ui.color.accent : ui.color.textSecondary,
         fontSize: 11,
         fontFamily: 'monospace',
         padding: '2px 7px',
@@ -539,8 +539,8 @@ function KeyBadge({ children, active }: { children: React.ReactNode; active?: bo
 
 function ClashBadge({ children, tone }: { children: React.ReactNode; tone: 'error' | 'warn' }): JSX.Element {
   const palette = tone === 'error'
-    ? { bg: '#2a1a1a', border: '#5a2020', color: '#f87171' }
-    : { bg: '#2a2410', border: '#5a4810', color: '#fbbf24' }
+    ? { bg: ui.color.dangerSurface, border: ui.color.dangerBorder, color: ui.color.danger }
+    : { bg: ui.color.warningSurface, border: ui.color.warningBorder, color: ui.color.statusWaiting }
   return (
     <span style={{
       display: 'inline-block',
@@ -565,7 +565,7 @@ function ResetBtn({ onClick }: { onClick: () => void }): JSX.Element {
     <button
       onClick={onClick}
       title="Reset to default"
-      style={{ background: 'none', border: 'none', color: '#4a4b4e', fontSize: 13, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
+      style={{ background: 'none', border: 'none', color: ui.color.textDim, fontSize: 13, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
     >
       ×
     </button>
@@ -598,23 +598,23 @@ function EditBtn({ onClick }: { onClick: () => void }): JSX.Element {
 
 function SubLabel({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ padding: '4px 14px 2px', fontSize: 10, fontWeight: 600, color: '#5a5f66', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+    <div style={{ padding: '4px 14px 2px', fontSize: 10, fontWeight: 600, color: ui.color.borderStrong, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
       {children}
     </div>
   )
 }
 
 const resetAllBtnStyle: React.CSSProperties = {
-  background: 'none', border: '1px solid #3a3b3e', borderRadius: 4,
-  color: '#6b7280', fontSize: 11, cursor: 'pointer', padding: '2px 8px', marginRight: 12, marginBottom: 3,
+  background: 'none', border: `1px solid ${ui.color.textFaint}`, borderRadius: 4,
+  color: ui.color.textMuted, fontSize: 11, cursor: 'pointer', padding: '2px 8px', marginRight: 12, marginBottom: 3,
 }
 const errorBannerStyle: React.CSSProperties = {
-  background: '#2a1a1a', border: '1px solid #5a2020', borderRadius: 5,
-  color: '#f87171', fontSize: 12, padding: '6px 10px', marginBottom: 8,
+  background: ui.color.dangerSurface, border: `1px solid ${ui.color.dangerBorder}`, borderRadius: 5,
+  color: ui.color.danger, fontSize: 12, padding: '6px 10px', marginBottom: 8,
 }
 const recordingBannerStyle: React.CSSProperties = {
-  background: '#1a2a1a', border: '1px solid #205a20', borderRadius: 5,
-  color: '#4ade80', fontSize: 12, padding: '6px 10px', marginBottom: 8,
+  background: ui.color.successSurface, border: `1px solid ${ui.color.successBorder}`, borderRadius: 5,
+  color: ui.color.accent, fontSize: 12, padding: '6px 10px', marginBottom: 8,
 }
 const addMacroBtnStyle: React.CSSProperties = {
   background: 'none', border: `1px solid ${ui.color.textFaint}`, borderRadius: 4,

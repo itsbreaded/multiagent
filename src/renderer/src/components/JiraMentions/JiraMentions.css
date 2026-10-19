@@ -140,7 +140,6 @@
   min-width: 0;
   padding: 0;
   border: 0;
-  outline: 0;
   background: transparent;
   color: var(--jira-mentions-text);
   font-size: 11px;
@@ -271,6 +270,33 @@
 
 .jira-mentions-mention-row:hover {
   background: var(--jira-mentions-control);
+}
+
+.jira-mentions-mention-entry {
+  position: relative;
+}
+
+.jira-mentions-mention-row[data-has-activation='true'] {
+  padding-right: 76px;
+}
+
+.jira-mentions-mention-activate {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  min-height: 22px;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--jira-mentions-accent) 38%, var(--jira-mentions-border));
+  border-radius: 3px;
+  background: var(--jira-mentions-control);
+  color: var(--jira-mentions-accent);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.jira-mentions-mention-activate:hover {
+  border-color: var(--jira-mentions-accent);
+  background: var(--jira-mentions-control-hover);
 }
 
 .jira-mentions-mention-row[data-selected="true"] {
@@ -568,7 +594,8 @@
 }
 
 .jira-mentions-description-copy {
-  max-width: 920px;
+  width: 100%;
+  min-width: 0;
   margin-top: 8px;
   padding-right: 12px;
   color: var(--jira-mentions-text);
@@ -761,18 +788,12 @@
   resize: vertical;
   border: 1px solid var(--jira-mentions-border);
   border-radius: 4px;
-  outline: none;
   background: var(--jira-mentions-input);
   color: var(--jira-mentions-text-strong);
   font: inherit;
   font-size: var(--jira-mentions-reading-base);
   line-height: 1.6;
   caret-color: var(--jira-mentions-accent);
-}
-
-.jira-mentions-reply-input-wrap textarea:focus {
-  border-color: var(--jira-mentions-accent);
-  box-shadow: 0 0 0 1px var(--jira-mentions-accent-bg);
 }
 
 .jira-mentions-reply-input-wrap textarea::placeholder {
@@ -1021,21 +1042,9 @@
   border-radius: 4px;
   background: var(--jira-mentions-input);
   color: var(--jira-mentions-text);
-  color-scheme: dark;
+  color-scheme: var(--ui-native-color-scheme, dark);
   font: inherit;
   font-size: var(--jira-mentions-reading-base);
-}
-
-.jira-mentions-snooze-fields input:focus-visible,
-.jira-mentions-snooze-fields select:focus-visible {
-  border-color: var(--jira-mentions-accent);
-  outline: 1px solid var(--jira-mentions-accent);
-}
-
-.jira-mentions-snooze-fields input[type='number']::-webkit-inner-spin-button,
-.jira-mentions-snooze-fields input[type='number']::-webkit-outer-spin-button {
-  opacity: .75;
-  filter: brightness(.65);
 }
 
 .jira-mentions-snooze-submit {
@@ -1054,7 +1063,11 @@
 .jira-mentions-snooze-submit:focus-visible {
   border-color: var(--jira-mentions-waiting);
   background: color-mix(in srgb, var(--jira-mentions-waiting) 20%, var(--jira-mentions-control));
-  outline: none;
+}
+
+.jira-mentions-snooze-submit:focus-visible {
+  outline: 2px solid var(--jira-mentions-accent);
+  outline-offset: 1px;
 }
 
 .jira-mentions-comment-body {

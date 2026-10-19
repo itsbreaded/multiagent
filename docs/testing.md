@@ -1,7 +1,7 @@
 # Testing (mechanism)
 
-The why/how behind the Vitest harness and the regression guards. The one-line guardrails live
-in `AGENTS.md`.
+The why/how behind the Vitest harness and the regression guards. This expands the
+`AGENTS.md` **Test execution safety** guardrail; the one-line rule lives there.
 
 The app has a Vitest 4 test harness (added in spec 030). Tests are the regression net for the
 invariants documented in `AGENTS.md` — a future change that reintroduces a PATH rewrite, drops
@@ -85,6 +85,55 @@ nonzero scoped ratchets in `vitest.config.ts` as their measured baselines improv
 
 ## Electron E2E
 
+### Desktop and network safety
+
+Every test command must be safe to run while the developer uses the same computer. Run tests only
+through the guarded npm entry points (`test`, `test:watch`, `test:coverage`, `test:e2e`, and
+`test:db`); calling Vitest, Playwright, Electron, or a test helper directly bypasses preflight and
+is unsupported. Every npm test entry point runs `scripts/check-test-desktop-safety.mjs` first. The
+preflight scans source tests, shared test setup
+and helpers, E2E fixtures, and the Electron database smoke test. It rejects direct browser-native
+dialog calls, native dialog/menu activation, direct OS-facing opens, the native select popup
+shortcut, non-loopback E2E fetch/navigation targets, and any test-created `BrowserWindow` without
+explicit hidden/offscreen options. Each E2E suite that launches Electron must retain the isolated
+user-data profile, multi-instance setting, and runtime desktop-isolation assertions.
+Tests must stay in the background: they must not display or focus app or browser windows, invoke
+browser-native JavaScript dialogs (`window.alert`,
+`window.confirm`, or `window.prompt`), open native folder dialogs or menus, launch external
+applications, or contact non-loopback hosts. Use synthetic data and loopback fixtures for network
+behavior. URL strings used as data in parser and formatting tests are inert; tests must not load
+them in a browser or pass them to an OS open API. Hidden windows alone are not a cross-platform
+guarantee that JavaScript dialogs stay hidden, so tests must not call those APIs or activate a
+native select popup.
+
+The compiled app loads `src/main/e2eIsolation.ts` before creating any windows when
+`MULTIAGENT_E2E_USER_DATA_DIR` is set. Main, detached, and app-browser renderer windows use
+Electron offscreen rendering and cannot show, focus, restore, or move to the top. That mode also
+records external-open attempts without passing them to the OS, disables native folder dialogs and
+Jira Mentions' native text menu, and blocks non-loopback requests from Electron sessions and
+main-process `fetch`. Main-process session clients and browser fixtures can still use `localhost`,
+`127.0.0.0/8`, and `::1`. Each existing Electron E2E suite checks that its windows are offscreen,
+invisible, and unfocused through teardown with `e2e/helpers/assertDesktopIsolation.ts`.
+
+`test:db` runs its Electron-ABI migration fixture without creating a `BrowserWindow` and launches
+Electron with `windowsHide: true`. The wrapped-link E2E verifies routing with the reserved
+`external.test` hostname and confirms the attempted external open is recorded without launching a
+browser or contacting that host.
+
+E2E teardown must cancel its force-kill timer as soon as Electron exits. If forced termination is
+needed, check that the launched process is still alive and invoke `taskkill` with `windowsHide` and
+without a shell; a stale delayed `taskkill` can surface a command window or target a reused PID.
+Test-created Electron windows must also use `show: false` and `webPreferences.offscreen: true`.
+Renderer evidence should use the CDP capture in `e2e/helpers/screenshotUi.ts`, which captures
+hidden windows without making them visible.
+
+Any new Electron `webRequest.onBeforeRequest` listener must apply `shouldBlockE2EUrl` from
+`src/main/e2eIsolation.ts`; Electron uses a single active listener per session event, so a later
+observer can otherwise replace the E2E network guard. Route every OS-facing open through
+`src/main/external.ts`, and guard any new dialog, native menu, or window API that can interrupt the
+desktop. Tests should assert recorded intent or pure menu templates instead of activating native
+UI or touching the user's clipboard.
+
 `e2e/startup.spec.ts` launches the compiled app with a temporary user-data/home profile. It
 covers cold layout restore, the real SQLite FTS index, shell `pty:ready` plus direct seq=0
 output, sidebar tab reorder and drag-out, primary/detached and detached/detached
@@ -92,9 +141,8 @@ output, sidebar tab reorder and drag-out, primary/detached and detached/detached
 ownership changes, detached-window cleanup, pane drag/drop isolation, and Claude deferred
 spawning through an isolated fake agent command. The drag helpers dispatch the same typed
 sidebar MIME payloads as the renderer and leave the existing pane MIME path separate. E2E-launched
-primary and detached windows use the same ordinary show, restore, and focus lifecycle as production.
-Their renderers keep `backgroundThrottling: false` so covered windows continue to paint while
-cross-window terminal and overlay behavior is exercised.
+primary, detached, and browser windows stay hidden and unfocused while Playwright controls their
+renderers; `backgroundThrottling: false` keeps covered or hidden renderers painting for assertions.
 
 `e2e/jira-mentions.spec.ts` starts an isolated loopback Jira REST fixture and launches the
 compiled app with temporary user-data/home paths. It configures synthetic credentials through

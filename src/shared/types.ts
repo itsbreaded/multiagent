@@ -638,6 +638,7 @@ export interface IPCChannels {
   'jira-mentions:set-action': (input: JiraMentionsActionInput) => JiraMentionsProjection
   'jira-mentions:clear-cache': () => JiraMentionsProjection
   'jira-mentions:post-reply': (input: JiraMentionsReplyInput) => Promise<JiraMentionsReplyResult>
+  'jira-mentions:show-text-context-menu': (request: JiraMentionsTextMenuRequest) => void
   'jira-mentions:state-changed': (projection: JiraMentionsProjection) => void
 
   // --- Git ---
@@ -833,6 +834,15 @@ export interface IPCChannels {
 // (used in preload.ts to type window.ipc correctly)
 type ChannelSubset<K extends keyof IPCChannels> = K
 
+export interface JiraMentionsTextMenuRequest {
+  target: 'editable' | 'selection'
+  x: number
+  y: number
+  canCut: boolean
+  canCopy: boolean
+  canSelectAll: boolean
+}
+
 export type InvokeChannels = ChannelSubset<
   | 'database:get-status'
   | 'sessions:search'
@@ -867,6 +877,7 @@ export type InvokeChannels = ChannelSubset<
   | 'jira-mentions:set-action'
   | 'jira-mentions:clear-cache'
   | 'jira-mentions:post-reply'
+  | 'jira-mentions:show-text-context-menu'
   | 'git:branch'
   | 'git:unwatch-branch'
   | 'layout:save'

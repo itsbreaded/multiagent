@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, shell, clipboard, app, dialog, safeStorage } from 'electron'
+import { ipcMain, BrowserWindow, Menu, clipboard, app, dialog, safeStorage } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
@@ -18,13 +18,14 @@ import { forwardAgentEvent } from '../integration/agentEventForwarder'
 import { CodexAppServerManager } from '../integration/codexAppServer'
 import { ManagedHookController } from '../integration/managedHookController'
 import { installOpencodePlugin } from '../integration/opencodePluginInstall'
-import { openExternalUrl } from '../external'
+import { openExternalPath, openExternalProtocol, openExternalUrl } from '../external'
+import { getE2ESyntheticClipboardText, isE2ERun, recordE2EJiraMentionsTextMenu } from '../e2eIsolation'
 import { getRecentDirs, addRecentDir } from '../recentDirs'
 import { validateDirectoryInput } from '../directoryValidation'
 import { mcpManager } from '../mcp/McpManager'
 import { probeStdioServer } from '../mcp/probeStdio'
 import { windowManager } from '../window/WindowManager'
-import type { AgentKind, AgentProviderSettings, CwdRepairMapping, DatabaseStatus, IdleAgentSuspensionSettings, McpSettings, OverlayRequest, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
+import type { AgentKind, AgentProviderSettings, CwdRepairMapping, DatabaseStatus, IdleAgentSuspensionSettings, JiraMentionsTextMenuRequest, McpSettings, OverlayRequest, ProviderAvailability, SessionSearchRequest, TerminalHostStatus } from '../../shared/types'
 import type { ScannedSession } from '../sessions/TranscriptScanner'
 import { GitBranchWatcher } from '../git/GitBranchWatcher'
 import { writeJsonAtomic } from '../atomicJson'
@@ -44,6 +45,7 @@ import { JiraMentionsClient } from '../jira/JiraMentionsClient'
 import { JiraMentionsRepository } from '../jira/JiraMentionsRepository'
 import { JiraMentionsService } from '../jira/JiraMentionsService'
 import { ApplicationDatabase, ApplicationDatabaseError } from '../database/ApplicationDatabase'
+import { buildJiraMentionsTextMenu, popupJiraMentionsTextMenu } from './jiraMentionsTextMenu'
 
 // PTY output is relayed straight to xterm (seq=0 direct write) for both shell and
 // agent panes — no coalescing, no ack, no backpressure. node-pty + xterm handle
@@ -571,7 +573,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
     }, ptyId, e.sender.id)
   })
 
-  registrar.handle('shell:open-folder', (_e, folderPath: string) => shell.openPath(folderPath))
+  registrar.handle('shell:open-folder', (_e, folderPath: string) => openExternalPath(folderPath))
 
   registrar.handle('shell:open-external', (_e, url: string) => {
     openExternalUrl(url)
@@ -639,12 +641,41 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   registrar.handle('jira-mentions:post-reply', (event, input) => jiraMentionsSenderIsLive(event)
     ? jiraMentionsService.postReply(input)
     : { ok: false, outcome: 'rejected', errorCode: 'invalid_window' })
+  registrar.handle('jira-mentions:show-text-context-menu', (event, request: JiraMentionsTextMenuRequest) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender)
+    if (!senderWindow || senderWindow.isDestroyed()
+      || windowManager.getWindowById(senderWindow.id) !== senderWindow
+      || windowManager.isWindowClosing(senderWindow.id)) return
+    if (!request || (request.target !== 'editable' && request.target !== 'selection')
+      || !Number.isFinite(request.x) || !Number.isFinite(request.y)
+      || typeof request.canCut !== 'boolean' || typeof request.canCopy !== 'boolean'
+      || typeof request.canSelectAll !== 'boolean') return
+
+    const bounds = senderWindow.getContentBounds()
+    const x = Math.max(0, Math.min(bounds.width, Math.round(request.x)))
+    const y = Math.max(0, Math.min(bounds.height, Math.round(request.y)))
+    const clipboardText = isE2ERun ? getE2ESyntheticClipboardText() : clipboard.readText()
+    const canPaste = request.target === 'editable' && clipboardText.length > 0
+    const template = buildJiraMentionsTextMenu({ ...request, canPaste })
+    if (template.length === 0) return
+    const menu = Menu.buildFromTemplate(template as Electron.MenuItemConstructorOptions[])
+    if (isE2ERun) {
+      recordE2EJiraMentionsTextMenu({
+        target: request.target,
+        x,
+        y,
+        items: menu.items.map((item) => ({ role: item.role, type: item.type, enabled: item.enabled })),
+      })
+      return
+    }
+    popupJiraMentionsTextMenu(menu, senderWindow, { x, y })
+  })
 
   registrar.handle('git:branch', (_e, cwd: string) => gitBranchWatcher.watchCwd(cwd))
   registrar.handle('git:unwatch-branch', (_e, cwd: string) => gitBranchWatcher.unwatchCwd(cwd))
 
   registrar.handle('shell:open-vscode', (_e, cwd: string) => {
-    shell.openExternal(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
+    openExternalProtocol(encodeURI(`vscode://file/${cwd.replace(/\\/g, '/')}`))
   })
 
   registrar.handle('dirs:recent-get', () => getRecentDirs())
@@ -652,6 +683,7 @@ export async function registerIpcHandlers(mainWindow: BrowserWindow): Promise<{
   registrar.handle('dirs:validate', (_e, dir: string) => validateDirectoryInput(dir))
 
   registrar.handle('dialog:pick-directory', async (e, title?: string, defaultPath?: string) => {
+    if (isE2ERun) return null
     const senderWin = BrowserWindow.fromWebContents(e.sender) ?? mainWindow
     const result = await dialog.showOpenDialog(senderWin, {
       title: title ?? 'Select Directory',

@@ -247,27 +247,27 @@ function EnvVarEditor({
             style={{
               display: 'flex', alignItems: 'center', gap: 5,
               padding: '5px 8px', marginBottom: 2,
-              background: isEditing ? '#141e14' : '#0e0f11',
-              border: `1px solid ${isEditing ? '#2a4a2a' : '#2a2b2e'}`,
+              background: isEditing ? ui.color.providerCardSurface : ui.color.surfaceDeep,
+              border: `1px solid ${isEditing ? ui.color.providerCardBorder : ui.color.border}`,
               borderRadius: 4,
             }}
           >
-            <input
+            <input className="ui-control ui-control-checkbox"
               type="checkbox"
               checked={entry.enabled}
               onChange={() => onChange(entries.map((e) => e.id === entry.id ? { ...e, enabled: !e.enabled } : e))}
-              style={{ flexShrink: 0, cursor: 'pointer', accentColor: '#4ade80' }}
+              style={{ flexShrink: 0, cursor: 'pointer' }}
             />
             {isEditing ? (
               <>
-                <input
+                <input className="ui-control"
                   autoFocus value={editKey} onChange={(e) => setEditKey(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit() } if (e.key === 'Escape') cancelEdit(); e.stopPropagation() }}
                   placeholder="KEY"
                   style={{ ...monoInput, width: 140, flexShrink: 0 }}
                 />
-                <span style={{ color: '#4a4b4e', fontSize: 11, flexShrink: 0 }}>=</span>
-                <input
+                <span style={{ color: ui.color.textDim, fontSize: 11, flexShrink: 0 }}>=</span>
+                <input className="ui-control"
                   value={editValue} onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit() } if (e.key === 'Escape') cancelEdit(); e.stopPropagation() }}
                   placeholder="value"
@@ -278,12 +278,12 @@ function EnvVarEditor({
               </>
             ) : (
               <>
-                <span style={{ fontFamily: 'monospace', fontSize: 11, color: entry.enabled ? '#a0c4e8' : '#4a4b4e', width: 140, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {entry.key || <span style={{ color: '#4a4b4e', fontStyle: 'italic' }}>unnamed</span>}
+                <span style={{ fontFamily: 'monospace', fontSize: 11, color: entry.enabled ? ui.color.providerAccent : ui.color.textDim, width: 140, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {entry.key || <span style={{ color: ui.color.textDim, fontStyle: 'italic' }}>unnamed</span>}
                 </span>
-                <span style={{ color: '#4a4b4e', fontSize: 11, flexShrink: 0 }}>=</span>
-                <span style={{ fontFamily: 'monospace', fontSize: 11, color: entry.enabled ? '#c9cdd1' : '#4a4b4e', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {looksSecret && !revealed ? '•'.repeat(Math.min(entry.value.length, 16)) : (entry.value || <span style={{ color: '#4a4b4e', fontStyle: 'italic' }}>empty</span>)}
+                <span style={{ color: ui.color.textDim, fontSize: 11, flexShrink: 0 }}>=</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 11, color: entry.enabled ? ui.color.text : ui.color.textDim, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {looksSecret && !revealed ? '•'.repeat(Math.min(entry.value.length, 16)) : (entry.value || <span style={{ color: ui.color.textDim, fontStyle: 'italic' }}>empty</span>)}
                 </span>
                 {looksSecret && (
                   <button onClick={() => setShowValues((prev) => { const next = new Set(prev); if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id); return next })} style={iconBtn}>
@@ -291,7 +291,7 @@ function EnvVarEditor({
                   </button>
                 )}
                 <button onClick={() => { setEditingId(entry.id); setEditKey(entry.key); setEditValue(entry.value) }} style={iconBtn}>✎</button>
-                <button onClick={() => { if (editingId === entry.id) setEditingId(null); onChange(entries.filter((e) => e.id !== entry.id)) }} style={{ ...iconBtn, color: '#6b3030' }}>✕</button>
+                <button onClick={() => { if (editingId === entry.id) setEditingId(null); onChange(entries.filter((e) => e.id !== entry.id)) }} style={{ ...iconBtn, color: ui.color.dangerBorderStrong }}>✕</button>
               </>
             )}
           </div>
@@ -320,7 +320,7 @@ function CollapsibleSection({
         style={{
           display: 'flex', alignItems: 'center', gap: 4,
           background: 'none', border: 'none', cursor: 'pointer',
-          color: '#6b7280', fontSize: 11, padding: '0 0 4px',
+          color: ui.color.textMuted, fontSize: 11, padding: '0 0 4px',
         }}
       >
         <span style={{ fontSize: 9, transform: expanded ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 0.15s' }}>▶</span>
@@ -346,18 +346,18 @@ function ProviderCard({
 }): JSX.Element {
   return (
     <div style={{
-      border: '1px solid #2a2b2e', borderRadius: 6, marginBottom: 12,
-      background: '#141517', overflow: 'hidden',
+      border: `1px solid ${ui.color.border}`, borderRadius: 6, marginBottom: 12,
+      background: ui.color.input, overflow: 'hidden',
     }}>
       <div style={{
-        padding: '8px 12px', borderBottom: '1px solid #2a2b2e',
-        background: '#1a1b1e',
-        color: disabled ? '#4a4b4e' : '#d4d4d4', fontSize: 12, fontWeight: 600,
+        padding: '8px 12px', borderBottom: `1px solid ${ui.color.border}`,
+        background: ui.color.panel,
+        color: disabled ? ui.color.textDim : ui.color.textSubtle, fontSize: 12, fontWeight: 600,
         display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
       }}>
         <span>{title}</span>
         {warning && (
-          <span style={{ color: '#ef4444', fontWeight: 400, fontSize: 11 }} title={warning}>
+          <span style={{ color: ui.color.dangerStrong, fontWeight: 400, fontSize: 11 }} title={warning}>
             {warning}
           </span>
         )}
@@ -372,7 +372,7 @@ function ProviderCard({
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6, gap: 8 }}>
-      <span style={{ fontSize: 11, color: '#6b7280', width: 110, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 11, color: ui.color.textMuted, width: 110, flexShrink: 0 }}>{label}</span>
       <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
     </div>
   )
@@ -382,7 +382,7 @@ function TextInput({ value, onChange, onBlur, placeholder, masked }: { value: st
   const [revealed, setRevealed] = useState(false)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <input
+      <input className="ui-control"
         type={masked && !revealed ? 'password' : 'text'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -423,9 +423,9 @@ function PresetButtons<T extends string>({
             onClick={() => onChange(p)}
             style={{
               padding: '3px 9px', fontSize: 11, cursor: disabled ? 'default' : 'pointer',
-              background: active ? '#1a3a1a' : 'none',
-              border: `1px solid ${active ? '#4ade80' : '#3a3b3e'}`,
-              borderRadius: 4, color: active ? '#4ade80' : '#6b7280',
+              background: active ? ui.color.accentBg : 'none',
+              border: `1px solid ${active ? ui.color.accent : ui.color.textFaint}`,
+              borderRadius: 4, color: active ? ui.color.accent : ui.color.textMuted,
               fontWeight: active ? 500 : 400,
             }}
           >
@@ -437,7 +437,7 @@ function PresetButtons<T extends string>({
   )
 }
 
-// Shared overlay modal (the #1a1b1e overlay pattern from theme.ts, not a native confirm()).
+// Shared overlay modal (the panel and framing pattern from theme.ts, not a native confirm()).
 function ConfirmOverlay({
   title,
   message,
@@ -462,7 +462,7 @@ function ConfirmOverlay({
           <button onClick={onCancel} style={secondaryBtn}>Cancel</button>
           <button
             onClick={onConfirm}
-            style={{ ...primaryBtn, background: '#3a1a1a', borderColor: ui.color.danger, color: ui.color.danger }}
+            style={{ ...primaryBtn, background: ui.color.dangerSurfaceStrong, borderColor: ui.color.danger, color: ui.color.danger }}
           >
             {confirmLabel}
           </button>
@@ -541,9 +541,9 @@ function ProviderPicker<B extends string>({
               onClick={() => onSelectBuiltin(p)}
               style={{
                 padding: '3px 9px', fontSize: 11, cursor: disabled ? 'default' : 'pointer',
-                background: active ? '#1a3a1a' : 'none',
-                border: `1px solid ${active ? '#4ade80' : '#3a3b3e'}`,
-                borderRadius: 4, color: active ? '#4ade80' : '#6b7280',
+                background: active ? ui.color.accentBg : 'none',
+                border: `1px solid ${active ? ui.color.accent : ui.color.textFaint}`,
+                borderRadius: 4, color: active ? ui.color.accent : ui.color.textMuted,
                 fontWeight: active ? 500 : 400,
               }}
             >
@@ -552,7 +552,7 @@ function ProviderPicker<B extends string>({
           )
         })}
 
-        {customs.length > 0 && <span style={{ width: 1, alignSelf: 'stretch', background: '#2a2b2e', margin: '2px 2px' }} />}
+        {customs.length > 0 && <span style={{ width: 1, alignSelf: 'stretch', background: ui.color.border, margin: '2px 2px' }} />}
         {customs.map((c) => {
           const active = c.id === activeId
           const renaming = renamingId === c.id
@@ -562,13 +562,13 @@ function ProviderPicker<B extends string>({
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 1,
                 padding: '1px 3px 1px 8px',
-                background: active ? '#1a3a1a' : 'none',
-                border: `1px solid ${active ? '#4ade80' : '#3a3b3e'}`,
+                background: active ? ui.color.accentBg : 'none',
+                border: `1px solid ${active ? ui.color.accent : ui.color.textFaint}`,
                 borderRadius: 4,
               }}
             >
               {renaming ? (
-                <input
+                <input className="ui-control"
                   autoFocus value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={(e) => {
@@ -584,13 +584,13 @@ function ProviderPicker<B extends string>({
                   onClick={() => onSelectCustom(c.id)}
                   disabled={disabled}
                   title={c.name}
-                  style={{ background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer', color: active ? '#4ade80' : '#9aa0a6', fontSize: 11, padding: '2px 0', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  style={{ background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer', color: active ? ui.color.accent : ui.color.textMutedSoft, fontSize: 11, padding: '2px 0', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
                   {c.name}
                 </button>
               )}
               <button onClick={() => startRename(c)} disabled={disabled || renaming} title="Rename" style={iconBtn}>✎</button>
-              <button onClick={() => setPendingDelete(c)} disabled={disabled} title="Delete" style={{ ...iconBtn, color: '#6b3030' }}>✕</button>
+              <button onClick={() => setPendingDelete(c)} disabled={disabled} title="Delete" style={{ ...iconBtn, color: ui.color.dangerBorderStrong }}>✕</button>
             </span>
           )
         })}
@@ -599,7 +599,7 @@ function ProviderPicker<B extends string>({
       <div style={{ marginTop: 5 }}>
         {adding ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <input
+            <input className="ui-control"
               autoFocus value={addName}
               onChange={(e) => setAddName(e.target.value)}
               onKeyDown={(e) => {
@@ -921,7 +921,7 @@ export function AgentProvidersSection(): JSX.Element {
 
   return (
     <div>
-      <div style={{ padding: '6px 14px 10px', fontSize: 10, fontWeight: 600, color: '#4a4b4e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+      <div style={{ padding: '6px 14px 10px', fontSize: 10, fontWeight: 600, color: ui.color.textDim, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         Agent Providers
       </div>
       <div style={{ padding: '0 2px' }}>
@@ -929,8 +929,8 @@ export function AgentProvidersSection(): JSX.Element {
         {/* Claude Code card */}
         <ProviderCard title="Claude Code" disabled={claudeDisabled} warning={claudeAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
-              <input
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: ui.color.text, fontSize: 11, cursor: 'pointer' }}>
+              <input className="ui-control ui-control-checkbox"
                 type="checkbox"
                 checked={claudeDraft.enabled}
                 onChange={(e) => {
@@ -938,7 +938,6 @@ export function AgentProvidersSection(): JSX.Element {
                   setClaudeDraft(next)
                   flushClaude(next)
                 }}
-                style={{ accentColor: '#4ade80' }}
               />
               Enabled
             </label>
@@ -1039,8 +1038,8 @@ export function AgentProvidersSection(): JSX.Element {
         {/* Codex card */}
         <ProviderCard title="Codex" disabled={codexDisabled} warning={codexAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
-              <input
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: ui.color.text, fontSize: 11, cursor: 'pointer' }}>
+              <input className="ui-control ui-control-checkbox"
                 type="checkbox"
                 checked={codexDraft.enabled}
                 onChange={(e) => {
@@ -1048,7 +1047,6 @@ export function AgentProvidersSection(): JSX.Element {
                   setCodexDraft(next)
                   flushCodex(next)
                 }}
-                style={{ accentColor: '#4ade80' }}
               />
               Enabled
             </label>
@@ -1167,8 +1165,8 @@ export function AgentProvidersSection(): JSX.Element {
         {/* OpenCode card (spec 052) */}
         <ProviderCard title="OpenCode" disabled={opencodeDisabled} warning={opencodeAvailable ? undefined : AVAILABILITY_WARNING}>
           <FieldRow label="">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9cdd1', fontSize: 11, cursor: 'pointer' }}>
-              <input
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: ui.color.text, fontSize: 11, cursor: 'pointer' }}>
+              <input className="ui-control ui-control-checkbox"
                 type="checkbox"
                 checked={opencodeDraft.enabled}
                 onChange={(e) => {
@@ -1176,7 +1174,6 @@ export function AgentProvidersSection(): JSX.Element {
                   setOpencodeDraft(next)
                   flushOpencode(next)
                 }}
-                style={{ accentColor: '#4ade80' }}
               />
               Enabled
             </label>
@@ -1273,7 +1270,7 @@ export function AgentProvidersSection(): JSX.Element {
         </ProviderCard>
 
       </div>
-      <div style={{ padding: '0 14px 6px', fontSize: 10, color: '#4a4b4e', lineHeight: 1.4 }}>
+      <div style={{ padding: '0 14px 6px', fontSize: 10, color: ui.color.textDim, lineHeight: 1.4 }}>
         Provider settings take effect in new agent panes. Existing running panes are not affected.
       </div>
     </div>
@@ -1411,23 +1408,22 @@ function commitOpencodeActive(settings: AgentProviderSettings, incoming: Opencod
 
 // Shared style constants
 const monoInput: React.CSSProperties = {
-  background: '#0e0f11',
-  border: '1px solid #3a3b3e',
+  background: ui.color.surfaceDeep,
+  border: `1px solid ${ui.color.textFaint}`,
   borderRadius: 4,
-  color: '#d4d4d4',
+  color: ui.color.textSubtle,
   fontSize: 12,
   fontFamily: 'monospace',
   padding: '4px 6px',
-  outline: 'none',
   width: '100%',
   boxSizing: 'border-box',
 }
 
 const secondaryBtn: React.CSSProperties = {
   background: 'none',
-  border: '1px solid #3a3b3e',
+  border: `1px solid ${ui.color.textFaint}`,
   borderRadius: 4,
-  color: '#6b7280',
+  color: ui.color.textMuted,
   fontSize: 11,
   cursor: 'pointer',
   padding: '3px 8px',
@@ -1435,10 +1431,10 @@ const secondaryBtn: React.CSSProperties = {
 }
 
 const primaryBtn: React.CSSProperties = {
-  background: '#1a3a1a',
-  border: '1px solid #4ade80',
+  background: ui.color.accentBg,
+  border: `1px solid ${ui.color.accent}`,
   borderRadius: 4,
-  color: '#4ade80',
+  color: ui.color.accent,
   fontSize: 11,
   cursor: 'pointer',
   padding: '3px 8px',
@@ -1448,7 +1444,7 @@ const primaryBtn: React.CSSProperties = {
 const iconBtn: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#4a4b4e',
+  color: ui.color.textDim,
   fontSize: 13,
   cursor: 'pointer',
   padding: '0 3px',

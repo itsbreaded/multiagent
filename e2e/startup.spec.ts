@@ -4,6 +4,7 @@ import { spawnSync } from 'child_process'
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
+import { assertDesktopIsolation } from './helpers/assertDesktopIsolation'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
@@ -106,18 +107,22 @@ async function closeApp(target: ElectronApplication): Promise<void> {
     }
     proc?.once('exit', () => resolve())
   })
+  let hardKillTimer: ReturnType<typeof setTimeout> | null = null
   const hardKill = new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
+    hardKillTimer = setTimeout(() => {
+      hardKillTimer = null
       try {
-        if (process.platform === 'win32') {
-          spawnSync(`taskkill /pid ${proc!.pid} /T /F`, { shell: true, stdio: 'ignore' })
-        } else if (proc!.pid) {
-          process.kill(-proc!.pid, 'SIGKILL')
+        if (proc?.exitCode === null && proc.signalCode === null && proc.pid) {
+          if (process.platform === 'win32') {
+            spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+          } else {
+            process.kill(-proc.pid, 'SIGKILL')
+          }
         }
       } catch { /* already exited */ }
       resolve()
     }, 5_000)
-    timer.unref?.()
+    hardKillTimer.unref?.()
   })
   // ElectronApplication.close() can release Playwright's connection before the
   // child process has exited. Do not launch another app against the same profile
@@ -127,6 +132,13 @@ async function closeApp(target: ElectronApplication): Promise<void> {
     target.close().catch(() => {}).then(() => processExit),
     hardKill,
   ])
+  if (hardKillTimer) clearTimeout(hardKillTimer)
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    await Promise.race([processExit, new Promise<void>((resolve) => setTimeout(resolve, 2_000))])
+  }
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    throw new Error(`E2E Electron process ${proc.pid} did not exit after teardown`)
+  }
 }
 
 async function tearOffTab(app: ElectronApplication, page: Page, tabName: string): Promise<Page> {
@@ -185,6 +197,7 @@ test.describe('cold-start layout restore', () => {
     })
     page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
+    await assertDesktopIsolation(app)
     // App layout restoration is asynchronous. Do not let a test create a pane
     // before the saved layout applies, otherwise that late hydration can replace
     // the newly-created pane and conceal the behavior being tested.
@@ -245,6 +258,7 @@ test.describe('cold-start layout restore', () => {
   })
 
   test.afterEach(async () => {
+    await assertDesktopIsolation(app)
     await closeApp(app)
     await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })
@@ -622,15 +636,41 @@ test.describe('cold-start layout restore', () => {
     const detached = await tearOffTab(app, page, 'Alpha')
     await detached.waitForLoadState('domcontentloaded')
 
-    await detached.keyboard.press('Control+Shift+P')
+    // Offscreen renderers must not acquire native keyboard focus. Dispatch the
+    // same shortcut event to this renderer's window listener instead.
+    await detached.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+    })))
     await expect(detached.getByRole('textbox')).toBeVisible()
-    await detached.keyboard.press('Escape')
+    await detached.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+    })))
     await expect(detached.getByRole('textbox')).toHaveCount(0)
   })
 
   test('renders and uses the shared local controls in a detached window', async () => {
+    test.setTimeout(60_000)
+    await spawnShell(page, userDataDir)
     const detached = await tearOffTab(app, page, 'Alpha')
     await detached.waitForLoadState('domcontentloaded')
+
+    await page.getByTitle('Settings', { exact: true }).focus()
+    await page.keyboard.press('Enter')
+    const primarySettingsSearch = page.getByPlaceholder('Search settings')
+    await expect(primarySettingsSearch).toBeFocused()
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Shift+Tab')
+    const primaryControlStyle = await primarySettingsSearch.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        color: style.color,
+        colorScheme: style.colorScheme,
+        outlineColor: style.outlineColor,
+        outlineStyle: style.outlineStyle,
+      }
+    })
+    await page.keyboard.press('Escape')
 
     await expect(detached.getByTitle(/Collapse sidebar/)).toBeVisible()
     await expect(detached.getByTitle(/Session browser/)).toBeVisible()
@@ -648,18 +688,72 @@ test.describe('cold-start layout restore', () => {
     await detached.keyboard.press('Control+B')
     await expect(detached.getByTitle('Alpha', { exact: true })).toBeVisible()
 
-    await detached.getByTitle('Settings', { exact: true }).click()
+    const paneTitle = detached.getByTitle('Double-click to add a label')
+    await expect(paneTitle).toBeVisible()
+    await paneTitle.dblclick()
+    const paneRename = detached.getByPlaceholder('Label (optional)')
+    await expect(paneRename).toBeFocused()
+    await paneRename.press('ArrowLeft')
+    await expect(paneRename).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await paneRename.press('Escape')
+
+    const sidebarPaneRow = detached.locator('[data-pane-id][title]')
+    await expect(sidebarPaneRow).toHaveCount(1)
+    const sidebarPaneId = await sidebarPaneRow.getAttribute('data-pane-id')
+    expect(sidebarPaneId).toBeTruthy()
+    await sidebarPaneRow.dblclick()
+    const sidebarPaneRename = detached.locator(`[data-pane-id="${sidebarPaneId}"]`).getByPlaceholder('Label (optional)')
+    await expect(sidebarPaneRename).toBeFocused()
+    await sidebarPaneRename.press('ArrowLeft')
+    await expect(sidebarPaneRename).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await sidebarPaneRename.press('Escape')
+
+    await detached.getByTitle('Settings', { exact: true }).focus()
+    await detached.keyboard.press('Enter')
     await expect(detached.getByRole('dialog', { name: 'Settings' })).toBeVisible()
-    await expect(detached.getByPlaceholder('Search settings')).toBeFocused()
+    const settingsSearch = detached.getByPlaceholder('Search settings')
+    await expect(settingsSearch).toBeFocused()
+    await expect(settingsSearch).toHaveClass(/ui-control/)
+    await expect(settingsSearch).toHaveCSS('color-scheme', 'dark')
+    await expect(settingsSearch).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await detached.keyboard.press('Tab')
+    await detached.keyboard.press('Shift+Tab')
+    const detachedControlStyle = await settingsSearch.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        backgroundColor: style.backgroundColor,
+        color: style.color,
+        colorScheme: style.colorScheme,
+        outlineColor: style.outlineColor,
+        outlineStyle: style.outlineStyle,
+      }
+    })
+    expect(detachedControlStyle).toEqual(primaryControlStyle)
+
+    await settingsSearch.fill('')
+    await detached.getByText('Jira', { exact: true }).first().click()
+    await detached.getByRole('checkbox', { name: 'Track unanswered Jira mentions' }).check()
+    await detached.getByRole('checkbox', { name: 'Background refresh' }).check()
+    const detachedJiraRefreshInterval = detached.getByRole('spinbutton', { name: 'Refresh interval in minutes' })
+    await expect(detachedJiraRefreshInterval).toBeVisible()
+    await detachedJiraRefreshInterval.focus()
+    await detachedJiraRefreshInterval.press('ArrowLeft')
+    await expect(detachedJiraRefreshInterval).toHaveCSS('color-scheme', 'dark')
+    await expect(detachedJiraRefreshInterval).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
     await detached.keyboard.press('Escape')
     await expect(detached.getByRole('dialog', { name: 'Settings' })).toHaveCount(0)
     await detached.getByTitle('Settings', { exact: true }).click()
     await expect(detached.getByRole('dialog', { name: 'Settings' })).toBeVisible()
     await detached.keyboard.press('Escape')
 
-    await detached.getByTitle(/Session browser/).click()
-    await expect(detached.getByPlaceholder('Search sessions...')).toBeVisible()
-    await detached.getByPlaceholder('Search sessions...').press('Escape')
+    await detached.getByTitle(/Session browser/).focus()
+    await detached.keyboard.press('Enter')
+    const sessionSearch = detached.getByPlaceholder('Search sessions...')
+    await expect(sessionSearch).toBeVisible()
+    await expect(sessionSearch).toHaveClass(/ui-control/)
+    await expect(sessionSearch).toHaveCSS('color-scheme', 'dark')
+    await expect(sessionSearch).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
+    await sessionSearch.press('Escape')
     await expect(detached.getByPlaceholder('Search sessions...')).toHaveCount(0)
     await detached.keyboard.press('Control+Shift+O')
     await expect(detached.getByPlaceholder('Search sessions...')).toBeVisible()
@@ -669,8 +763,10 @@ test.describe('cold-start layout restore', () => {
     await detached.keyboard.press('Escape')
 
     await detached.keyboard.press('Control+Shift+P')
-    const commandSearch = detached.getByRole('textbox')
+    const commandSearch = detached.getByPlaceholder(/Search commands/)
     await expect(commandSearch).toBeVisible()
+    await expect(commandSearch).toHaveCSS('color-scheme', 'dark')
+    await expect(commandSearch).toHaveCSS('outline-color', 'rgb(74, 222, 128)')
     await commandSearch.fill('Open Settings')
     await detached.keyboard.press('Enter')
     await expect(detached.getByRole('dialog', { name: 'Settings' })).toBeVisible()
@@ -1120,8 +1216,8 @@ test.describe('cold-start layout restore', () => {
     expect(typeof ready?.pid).toBe('number')
   })
 
-  test('opens a complete wrapped URL only on a left click', async () => {
-    const url = 'https://example.com/api/v2/resources/a1b2c3d4e5f6/items?filter=status%3Aactive&sort=created_at&order=desc&page=1&per_page=50&fields=id,name,description,tags,metadata'
+  test('routes a complete wrapped URL only on a left click without opening an external app', async () => {
+    const url = 'https://external.test/api/v2/resources/a1b2c3d4e5f6/items?filter=status%3Aactive&sort=created_at&order=desc&page=1&per_page=50&fields=id,name,description,tags,metadata'
     await page.evaluate(() => {
       localStorage.setItem('multiagent:settings', JSON.stringify({
         terminalGpuAcceleration: 'off',
@@ -1134,7 +1230,7 @@ test.describe('cold-start layout restore', () => {
     await page.evaluate(({ id, value }) => {
       window.ipc.send('pty:write', id, `Write-Output '${value}'\r`)
     }, { id: ptyId, value: url })
-    await expect(page.locator('.xterm').first()).toContainText('https://example.com')
+    await expect(page.locator('.xterm').first()).toContainText('https://external.test')
 
     const point = await page.locator('.xterm').first().evaluate((root, target) => {
       const needle = target.slice(0, 12)
@@ -1173,6 +1269,11 @@ test.describe('cold-start layout restore', () => {
     }).toBe(1)
     const leftClickTrace = await page.evaluate(() => window.e2ePtyTrace?.snapshot())
     expect(leftClickTrace?.invokes.find((entry) => entry.channel === 'shell:open-external')?.args[0]).toBe(url)
+    const isolationDiagnostics = await app.evaluate(() => (globalThis as typeof globalThis & {
+      __multiagentE2EDiagnostics?: { externalOpenAttempts: string[]; blockedNetworkRequests: string[] }
+    }).__multiagentE2EDiagnostics)
+    expect(isolationDiagnostics?.externalOpenAttempts).toEqual([url])
+    expect(isolationDiagnostics?.blockedNetworkRequests).toEqual([])
   })
 
   test('suspends and automatically resumes an idle Claude session in a returned tab', async () => {

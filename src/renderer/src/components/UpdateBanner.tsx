@@ -1,3 +1,4 @@
+import { ui } from '../styles/theme'
 import { useEffect } from 'react'
 import { useUpdaterStore } from '../store/updater'
 import { useSettingsStore } from '../store/settings'
@@ -41,9 +42,9 @@ export function UpdateBanner(): JSX.Element | null {
         gap: '12px',
         height: '28px',
         flexShrink: 0,
-        backgroundColor: '#1a1b1e',
+        backgroundColor: ui.color.panel,
         fontSize: '12px',
-        color: '#888',
+        color: ui.color.textChromeSecondary,
       }}
     >
       <span>{message}</span>
@@ -78,9 +79,9 @@ export function UpdateBanner(): JSX.Element | null {
 const actionButtonStyle: React.CSSProperties = {
   padding: '1px 10px',
   backgroundColor: 'transparent',
-  border: '1px solid #4ade80',
+  border: `1px solid ${ui.color.accent}`,
   borderRadius: '4px',
-  color: '#4ade80',
+  color: ui.color.accent,
   fontSize: '11px',
   cursor: 'pointer',
 }
@@ -88,9 +89,9 @@ const actionButtonStyle: React.CSSProperties = {
 const dismissButtonStyle: React.CSSProperties = {
   padding: '1px 8px',
   backgroundColor: 'transparent',
-  border: '1px solid #3a3b3e',
+  border: `1px solid ${ui.color.textFaint}`,
   borderRadius: '4px',
-  color: '#555',
+  color: ui.color.borderDisabled,
   fontSize: '11px',
   cursor: 'pointer',
 }

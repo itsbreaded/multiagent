@@ -217,7 +217,7 @@ export function SettingsPanel(): JSX.Element {
         <aside
           style={{
             width: 200,
-            borderRight: '1px solid #2a2b2e',
+            borderRight: `1px solid ${ui.color.border}`,
             display: 'flex',
             flexDirection: 'column',
             flexShrink: 0,
@@ -239,13 +239,13 @@ export function SettingsPanel(): JSX.Element {
                 style={{
                   width: '100%',
                   padding: '7px 12px',
-                  background: active ? '#242528' : 'none',
+                  background: active ? ui.color.control : 'none',
                   border: 'none',
-                  borderLeft: active ? '2px solid #4ade80' : '2px solid transparent',
+                  borderLeft: active ? `2px solid ${ui.color.accent}` : '2px solid transparent',
                   textAlign: 'left',
                   cursor: 'pointer',
                   fontSize: 12,
-                  color: active ? '#d4d4d4' : '#6b7280',
+                  color: active ? ui.color.textSubtle : ui.color.textMuted,
                 }}
               >
                 {section.label}
@@ -262,12 +262,12 @@ export function SettingsPanel(): JSX.Element {
               alignItems: 'center',
               justifyContent: 'space-between',
               padding: '12px 16px',
-              borderBottom: '1px solid #2a2b2e',
+              borderBottom: `1px solid ${ui.color.border}`,
               flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: 14, fontWeight: 600, color: '#d4d4d4' }}>Settings</span>
-            <span style={{ fontSize: 11, color: '#4a4b4e' }}>ESC to close</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: ui.color.textSubtle }}>Settings</span>
+            <span style={{ fontSize: 11, color: ui.color.textDim }}>ESC to close</span>
           </div>
 
           <div
@@ -275,12 +275,12 @@ export function SettingsPanel(): JSX.Element {
               display: 'flex',
               alignItems: 'center',
               padding: '10px 14px',
-              borderBottom: '1px solid #2a2b2e',
+              borderBottom: `1px solid ${ui.color.border}`,
               flexShrink: 0,
             }}
           >
-            <span style={{ color: '#6b7280', fontSize: 14, marginRight: 8 }}>{'>'}</span>
-              <input
+            <span style={{ color: ui.color.textMuted, fontSize: 14, marginRight: 8 }}>{'>'}</span>
+              <input className="ui-control"
                 ref={searchInputRef}
                 value={query}
               onChange={(e) => { setRecording(null); setQuery(e.target.value) }}
@@ -290,10 +290,9 @@ export function SettingsPanel(): JSX.Element {
                 flex: 1,
                 background: 'none',
                 border: 'none',
-                outline: 'none',
-                color: '#d4d4d4',
+                  color: ui.color.textSubtle,
                 fontSize: 14,
-                caretColor: '#4ade80',
+                caretColor: ui.color.accent,
               }}
             />
           </div>
@@ -322,9 +321,9 @@ export function SettingsPanel(): JSX.Element {
                           onClick={resetAllHotkeyOverrides}
                           style={{
                             background: 'none',
-                            border: '1px solid #3a3b3e',
+                            border: `1px solid ${ui.color.textFaint}`,
                             borderRadius: 4,
-                            color: '#6b7280',
+                            color: ui.color.textMuted,
                             fontSize: 11,
                             cursor: 'pointer',
                             padding: '2px 8px',
@@ -339,10 +338,10 @@ export function SettingsPanel(): JSX.Element {
 
                     {conflictLabel && (
                       <div style={{
-                        background: '#2a1a1a',
-                        border: '1px solid #5a2020',
+                        background: ui.color.dangerSurface,
+                        border: `1px solid ${ui.color.dangerBorder}`,
                         borderRadius: 5,
-                        color: '#f87171',
+                        color: ui.color.danger,
                         fontSize: 12,
                         padding: '6px 10px',
                         marginBottom: 8,
@@ -353,10 +352,10 @@ export function SettingsPanel(): JSX.Element {
 
                     {hotkeyTerminalWarning && (
                       <div style={{
-                        background: '#2a2410',
-                        border: '1px solid #5a4810',
+                        background: ui.color.warningSurface,
+                        border: `1px solid ${ui.color.warningBorder}`,
                         borderRadius: 5,
-                        color: '#fbbf24',
+                        color: ui.color.statusWaiting,
                         fontSize: 12,
                         padding: '6px 10px',
                         marginBottom: 8,
@@ -367,10 +366,10 @@ export function SettingsPanel(): JSX.Element {
 
                     {recording && (
                       <div style={{
-                        background: '#1a2a1a',
-                        border: '1px solid #205a20',
+                        background: ui.color.successSurface,
+                        border: `1px solid ${ui.color.successBorder}`,
                         borderRadius: 5,
-                        color: '#4ade80',
+                        color: ui.color.accent,
                         fontSize: 12,
                         padding: '6px 10px',
                         marginBottom: 8,
@@ -402,7 +401,7 @@ export function SettingsPanel(): JSX.Element {
                     )}
 
                     {!normalizedQuery && (
-                      <div style={{ margin: '16px 0 4px', borderTop: '1px solid #2a2b2e', paddingTop: 12 }}>
+                      <div style={{ margin: '16px 0 4px', borderTop: `1px solid ${ui.color.border}`, paddingTop: 12 }}>
                         <TerminalBindingsSection />
                       </div>
                     )}
@@ -420,21 +419,21 @@ export function SettingsPanel(): JSX.Element {
                       <div style={{
                         margin: '4px 0 8px',
                         padding: '8px 12px',
-                        background: '#0e0f11',
-                        border: '1px solid #222326',
+                        background: ui.color.surfaceDeep,
+                        border: `1px solid ${ui.color.borderSubtle}`,
                         borderRadius: 5,
                         fontSize: 11,
-                        color: '#6b7280',
+                        color: ui.color.textMuted,
                         lineHeight: 1.6,
                       }}>
-                        <div><span style={{ color: '#4a4b4e', marginRight: 8 }}>GPU renderer</span>{caps.gpuRenderer ?? '(unavailable)'}</div>
+                        <div><span style={{ color: ui.color.textDim, marginRight: 8 }}>GPU renderer</span>{caps.gpuRenderer ?? '(unavailable)'}</div>
                         <div>
-                          <span style={{ color: '#4a4b4e', marginRight: 8 }}>Software rendering</span>
-                          <span style={{ color: caps.softwareRendering ? '#fbbf24' : '#4ade80' }}>
+                          <span style={{ color: ui.color.textDim, marginRight: 8 }}>Software rendering</span>
+                          <span style={{ color: caps.softwareRendering ? ui.color.statusWaiting : ui.color.accent }}>
                             {caps.softwareRendering ? 'yes — auto resolves to DOM' : 'no'}
                           </span>
                         </div>
-                        <div><span style={{ color: '#4a4b4e', marginRight: 8 }}>WebGL2</span>{caps.webgl ? 'available' : 'unavailable'}</div>
+                        <div><span style={{ color: ui.color.textDim, marginRight: 8 }}>WebGL2</span>{caps.webgl ? 'available' : 'unavailable'}</div>
                       </div>
                     )}
 

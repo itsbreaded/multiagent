@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import { useEffect, useState, useRef } from 'react'
 
 interface SnapZone {
@@ -53,22 +54,22 @@ export function SnapOverlay(): JSX.Element | null {
               top: localY,
               width: zone.width,
               height: zone.height,
-              backgroundColor: 'rgba(74, 222, 128, 0.25)',
-              border: '2px solid #4ade80',
+              backgroundColor: ui.color.dropSurface,
+              border: `2px solid ${ui.color.accent}`,
               borderRadius: 4,
               cursor: 'pointer',
               zIndex: 9999,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#4ade80',
+              color: ui.color.accent,
               fontSize: 18,
               fontWeight: 700,
               userSelect: 'none',
               transition: 'background-color 0.1s',
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'rgba(74, 222, 128, 0.45)' }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'rgba(74, 222, 128, 0.25)' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = ui.color.dropSurfaceStrong }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = ui.color.dropSurface }}
           >
             {label}
           </div>

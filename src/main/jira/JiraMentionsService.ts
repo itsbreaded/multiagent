@@ -63,34 +63,12 @@ function errorRetryAt(error: unknown, now: number, priorFailureCount: number): n
   return now + delay
 }
 
-function visibilityMatches(
-  actual: JiraIssueSnapshot['comments'][number]['visibility'],
-  expected: JiraIssueSnapshot['comments'][number]['visibility'],
-): boolean {
-  if (expected === null) return actual === null
-  if (expected.type === 'unsupported') return false
-  if (!actual || actual.type === 'unsupported' || actual.type !== expected.type) return false
-  if (expected.type === 'service_desk') {
-    if (actual.type !== 'service_desk') return false
-    if (actual.value !== expected.value) return false
-    const expectedRestriction = expected.restriction
-    const actualRestriction = actual.restriction
-    if (!expectedRestriction) return !actualRestriction
-    return Boolean(actualRestriction && actualRestriction.type === expectedRestriction.type
-      && actualRestriction.value === expectedRestriction.value
-      && (!expectedRestriction.identifier || actualRestriction.identifier === expectedRestriction.identifier))
-  }
-  if (actual.type !== 'group' && actual.type !== 'role') return false
-  if (expected.identifier) return actual.identifier === expected.identifier
-  return actual.value === expected.value
-}
-
 function validTokens(value: unknown): value is JiraReplyDraftToken[] {
-  if (!Array.isArray(value) || value.length > 200) return false
+  if (!Array.isArray(value)) return false
   return value.every((token) => token && typeof token === 'object'
-    && ((token.kind === 'text' && typeof token.text === 'string' && token.text.length <= 10_000)
+    && ((token.kind === 'text' && typeof token.text === 'string')
       || (token.kind === 'mention' && typeof token.accountId === 'string' && token.accountId.length > 0
-        && typeof token.displayName === 'string' && token.displayName.length <= 200)))
+        && typeof token.displayName === 'string')))
 }
 
 export class JiraMentionsService {
@@ -111,7 +89,6 @@ export class JiraMentionsService {
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private snoozeTimer: ReturnType<typeof setTimeout> | null = null
   private closed = false
-  private readonly sendingIssues = new Set<string>()
   private readonly attachmentPreviewRequests = new Map<string, Promise<JiraAttachmentPreviewResult>>()
   private pendingSendCount = 0
   private pendingSendsDrained: (() => void) | null = null
@@ -292,7 +269,7 @@ export class JiraMentionsService {
     const contextId = this.contextId
     if (!contextId || !this.repository || !this.identityVerified) return this.publish('invalid_config')
     if (!input || typeof input.issueId !== 'string' || typeof input.incomingCommentId !== 'string'
-      || !['dismissed', 'snoozed', 'restored'].includes(input.action)) return this.projection()
+      || !['activated', 'dismissed', 'snoozed', 'restored'].includes(input.action)) return this.projection()
     const now = this.now()
     const snoozeUntil = input.action === 'snoozed' ? input.snoozeUntil : null
     if (input.action === 'snoozed' && (!Number.isFinite(snoozeUntil) || (snoozeUntil as number) <= now
@@ -322,110 +299,67 @@ export class JiraMentionsService {
   }
 
   async postReply(input: JiraMentionsReplyInput): Promise<JiraMentionsReplyResult> {
-    const contextId = this.contextId
     const settings = this.settingsStore.getStoredSettings()
-    const key = this.settingsStore.getCredentialRecordKey()
-    if (!contextId || !this.repository || !this.identityVerified || !settings.mentionsEnabled || !settings.token || !key) {
-      return { ok: false, outcome: 'rejected', errorCode: 'invalid_config' }
-    }
-    if (!input || typeof input.issueId !== 'string' || typeof input.sourceCommentId !== 'string' || !validTokens(input.tokens)) {
+    if (!input || typeof input.issueId !== 'string' || !input.issueId || !validTokens(input.tokens)) {
       return { ok: false, outcome: 'rejected', errorCode: 'invalid_request' }
     }
-    if (!input.tokens.some((token) => token.kind === 'text' && token.text.trim().length > 0)) {
-      return { ok: false, outcome: 'rejected', errorCode: 'invalid_request' }
-    }
-    let projection = this.repository.getProjection(contextId, true, true, this.now())
-    let source = projection.items.find((item) => item.issue.issueId === input.issueId
-      && item.comment.commentId === input.sourceCommentId)
-    if (!source || source.comment.availability !== 'visible') return { ok: false, outcome: 'rejected', errorCode: 'missing_issue' }
-    if (source.state.state !== 'unanswered') return { ok: false, outcome: 'rejected', errorCode: 'already_answered' }
-    if (source.comment.visibility?.type === 'unsupported') return { ok: false, outcome: 'rejected', errorCode: 'unsupported_audience' }
-    const unreconciledAttempts = this.repository.getUnreconciledUnknownReplyAttempts?.(contextId, input.issueId) ?? []
-    if (unreconciledAttempts.length) {
-      const refreshed = await this.refresh('manual')
-      if (refreshed.status !== 'ready') return { ok: false, outcome: 'unknown', errorCode: refreshed.errorCode ?? 'recheck_failed' }
-      projection = this.repository.getProjection(contextId, true, true, this.now())
-      source = projection.items.find((item) => item.issue.issueId === input.issueId
-        && item.comment.commentId === input.sourceCommentId)
-      if (!source || source.state.state !== 'unanswered') {
-        return { ok: false, outcome: 'rejected', errorCode: 'already_answered' }
-      }
-      if ((this.repository.getUnreconciledUnknownReplyAttempts?.(contextId, input.issueId) ?? []).length) {
-        return { ok: false, outcome: 'unknown', errorCode: 'recheck_failed' }
-      }
-      return { ok: false, outcome: 'rejected', errorCode: 'delivery_rechecked' }
-    }
-    const issueLock = `${contextId}\0${input.issueId}`
-    if (this.sendingIssues.has(issueLock)) return { ok: false, outcome: 'rejected', errorCode: 'send_in_progress' }
-    this.sendingIssues.add(issueLock)
     this.pendingSendCount++
     let released = false
     const releaseLocked = () => {
       if (released) return
       released = true
-      this.sendingIssues.delete(issueLock)
       this.pendingSendCount--
       if (this.pendingSendCount === 0) {
         this.pendingSendsDrained?.()
         this.pendingSendsDrained = null
       }
     }
-    const rejectLocked = (outcome: 'rejected' | 'unknown', errorCode: string): JiraMentionsReplyResult => {
-      releaseLocked()
-      return { ok: false, outcome, errorCode }
-    }
-    try {
-    const refreshed = await this.refresh('manual')
-    if (refreshed.status !== 'ready') return rejectLocked('rejected', refreshed.errorCode ?? 'recheck_failed')
-    projection = this.repository.getProjection(contextId, true, true, this.now())
-    source = projection.items.find((item) => item.issue.issueId === input.issueId
-      && item.comment.commentId === input.sourceCommentId && item.state.state === 'unanswered')
-    if (!source) return rejectLocked('rejected', 'already_answered')
-    if (source.comment.visibility?.type === 'unsupported') return rejectLocked('rejected', 'unsupported_audience')
-    const usersById = new Map(source.authors.map((user) => [user.accountId, user]))
-    const mentionTokens = input.tokens.filter((token): token is Extract<JiraReplyDraftToken, { kind: 'mention' }> => token.kind === 'mention')
-    const mentionIds = mentionTokens.map((token) => token.accountId)
-    if (mentionTokens.some((token) => !usersById.has(token.accountId))) return rejectLocked('rejected', 'invalid_recipient')
-    if (input.tokens.reduce((total, token) => total + (token.kind === 'text' ? token.text.length : 0), 0) > 10_000) {
-      return rejectLocked('rejected', 'invalid_request')
-    }
-    if (key !== this.settingsStore.getCredentialRecordKey() || contextId !== this.contextId) {
-      return rejectLocked('rejected', 'identity_changed')
-    }
-    const safeTokens = input.tokens.map((token) => token.kind === 'mention'
-      ? { ...token, displayName: usersById.get(token.accountId)?.displayName ?? 'Unknown user' }
-      : token)
+    const mentionIds = input.tokens.flatMap((token) => token.kind === 'mention' ? [token.accountId] : [])
     let body: Record<string, unknown>
-    try { body = buildReplyAdf(safeTokens) } catch { return rejectLocked('rejected', 'invalid_request') }
-    let attempt: ReturnType<JiraMentionsRepository['startReplyAttempt']>
-    try { attempt = this.repository.startReplyAttempt(contextId, input.issueId, body, mentionIds, this.now()) }
-    catch { return rejectLocked('rejected', 'cache_unavailable') }
-    const visibility = source.comment.visibility
     try {
-      const result = await this.client.postComment(settings, input.issueId, body, visibility, source.issue.issueKey)
-      if (!result.commentId || result.authorAccountId !== this.identity?.accountId
+      body = buildReplyAdf(input.tokens)
+    } catch {
+      releaseLocked()
+      return { ok: false, outcome: 'rejected', errorCode: 'invalid_request' }
+    }
+    const contextId = this.contextId
+    let attempt: ReturnType<JiraMentionsRepository['startReplyAttempt']> | null = null
+    if (contextId && this.repository) {
+      try { attempt = this.repository.startReplyAttempt(contextId, input.issueId, body, mentionIds, this.now()) } catch { /* replying does not depend on the local cache */ }
+    }
+    try {
+      const result = await this.client.postComment(settings, input.issueId, body, null)
+      if (!result.commentId || (this.identity && result.authorAccountId !== this.identity.accountId)
         || !Number.isFinite(result.createdAt) || JSON.stringify(result.body) !== JSON.stringify(body)
-        || !visibilityMatches(result.visibility, visibility)) {
-        this.repository.finishReplyAttempt(contextId, attempt.attemptId, {
-          outcome: 'unknown', endedAt: this.now(), errorCode: 'invalid_response',
-        })
+        || result.visibility !== null) {
+        if (attempt && contextId && this.repository) {
+          try {
+            this.repository.finishReplyAttempt(contextId, attempt.attemptId, {
+              outcome: 'unknown', endedAt: this.now(), errorCode: 'invalid_response',
+            })
+          } catch { /* preserve the uncertain Jira response */ }
+        }
         this.publish()
         return { ok: false, outcome: 'unknown', errorCode: 'invalid_response' }
       }
-      this.repository.applyConfirmedReply(contextId, input.issueId, result, attempt.attemptId)
-      this.publish()
+      if (attempt && contextId && this.repository) {
+        try {
+          this.repository.applyConfirmedReply(contextId, input.issueId, result, attempt.attemptId)
+          this.publish()
+        } catch {
+          try { this.repository.finishReplyAttempt(contextId, attempt.attemptId, { outcome: 'confirmed', endedAt: this.now(), returnedCommentId: result.commentId }) } catch { /* Jira accepted the reply */ }
+        }
+      }
       return { ok: true, commentId: result.commentId }
     } catch (error) {
-      const rejected = error instanceof JiraApiError && error.status !== null && error.status >= 400 && error.status < 500
+      const rejected = error instanceof JiraApiError && (error.code === 'invalid_config'
+        || (error.status !== null && error.status >= 400 && error.status < 500))
       const outcome = rejected ? 'rejected' : 'unknown'
-      this.repository.finishReplyAttempt(contextId, attempt.attemptId, {
-        outcome,
-        endedAt: this.now(),
-        errorCode: safeErrorCode(error),
-      })
+      if (attempt && contextId && this.repository) {
+        try { this.repository.finishReplyAttempt(contextId, attempt.attemptId, { outcome, endedAt: this.now(), errorCode: safeErrorCode(error) }) } catch { /* keep the Jira response */ }
+      }
       if (outcome === 'unknown') this.publish()
       return { ok: false, outcome, errorCode: safeErrorCode(error) }
-    }
     } finally {
       releaseLocked()
     }

@@ -1,12 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --ui-bg-app: #0e1011;
-  --ui-bg-panel: #1a1b1e;
-  --ui-border: #2a2b2e;
-  --ui-scroll-thumb: #3a3b3e;
-  --ui-scroll-thumb-hover: #5a5c61;
-  --ui-text-strong: #e2e4e6;
+  --ui-bg-app: var(--ui-color-app-bg);
+  --ui-bg-panel: var(--ui-color-panel);
+  --ui-border: var(--ui-color-border);
+  --ui-scroll-thumb: var(--ui-color-scrollbar-thumb);
+  --ui-scroll-thumb-hover: var(--ui-color-scrollbar-thumb-hover);
+  --ui-text-strong: var(--ui-color-text-strong);
+  color-scheme: var(--ui-native-color-scheme, dark);
 }
 
 *, *::before, *::after {
@@ -30,6 +31,41 @@ body {
   background-color: var(--ui-bg-app);
   color: var(--ui-text-strong);
   -webkit-font-smoothing: antialiased;
+}
+
+.ui-control {
+  color-scheme: var(--ui-native-color-scheme, dark);
+  caret-color: var(--ui-color-accent);
+}
+
+.ui-control:focus-visible {
+  outline: 2px solid var(--ui-color-accent);
+  outline-offset: 1px;
+}
+
+.ui-control[type="checkbox"] {
+  accent-color: var(--ui-color-accent);
+}
+
+.ui-control::placeholder {
+  color: var(--ui-color-text-dim);
+}
+
+.ui-control-checkbox {
+  accent-color: var(--ui-color-accent);
+}
+
+.ui-control:disabled {
+  cursor: not-allowed;
+}
+
+.ui-control[aria-invalid="true"] {
+  border-color: var(--ui-color-danger);
+}
+
+.ui-control-group:focus-within {
+  outline: 2px solid var(--ui-color-accent);
+  outline-offset: 1px;
 }
 
 .dark-scrollbar {

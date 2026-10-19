@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import React from 'react'
 import type { PaneLeaf } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -30,7 +31,7 @@ export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Elem
         minHeight: 0,
         minWidth: 0,
         overflow: 'hidden',
-        outline: isFocused ? '1px solid #4ade8033' : 'none',
+        outline: isFocused ? `1px solid ${ui.color.paneFocusOutline}` : 'none',
       }}
     >
       <PaneHeader pane={pane} isFocused={isFocused} />
@@ -41,8 +42,8 @@ export function PaneContainer({ pane, layoutKey }: PaneContainerProps): JSX.Elem
             position: 'absolute',
             inset: 0,
             pointerEvents: 'none',
-            backgroundColor: 'rgba(74, 222, 128, 0.12)',
-            border: '2px solid #4ade80',
+            backgroundColor: ui.color.paneFocusSurface,
+            border: `2px solid ${ui.color.accent}`,
             zIndex: 60,
           }}
         />

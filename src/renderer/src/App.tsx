@@ -17,7 +17,7 @@ import { useSessionsStore } from './store/sessions'
 import { useJiraStore } from './store/jira'
 import { useDatabaseStatusStore } from './store/databaseStatus'
 import { useJiraMentionsStore } from './store/jiraMentions'
-import { border } from './styles/theme'
+import { ui, border } from './styles/theme'
 import { buildHotkeys, hotkeyKey, eventKey } from './utils/hotkeys'
 import { transferDroppedPane, PANE_DRAG_MIME } from './utils/paneDrag'
 import { mergeGpuFeatureStatus } from './terminal/rendering/capabilities'
@@ -301,7 +301,7 @@ export default function App(): JSX.Element {
 
   // Wait only for the runtime availability check; preferences already restored.
   if (!providerAvailabilityHydrated) {
-    return <div style={{ height: '100vh', background: '#0e1011' }} />
+    return <div style={{ height: '100vh', background: ui.color.appBg }} />
   }
 
   return (
@@ -312,8 +312,8 @@ export default function App(): JSX.Element {
         height: '100vh',
         width: '100vw',
         overflow: 'hidden',
-        backgroundColor: '#0e1011',
-        color: '#d4d4d4',
+        backgroundColor: ui.color.appBg,
+        color: ui.color.textSubtle,
       }}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes(PANE_DRAG_MIME)) e.preventDefault()

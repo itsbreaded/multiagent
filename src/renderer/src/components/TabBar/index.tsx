@@ -147,7 +147,7 @@ function WindowControls(): JSX.Element | null {
         title="Close"
         style={buttonStyle}
         onClick={() => { window.ipc.invoke('window:close').catch(console.error) }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = '#c42b1c'; e.currentTarget.style.color = '#ffffff' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = ui.color.chromeCloseHover; e.currentTarget.style.color = ui.color.chromeCloseGlyph }}
         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = ui.color.textMuted }}
       >
         <img src={closeIcon} alt="" style={{ width: 12, height: 12, display: 'block', filter: 'brightness(0) invert(1)' }} />
@@ -189,7 +189,7 @@ function ChromeButtonCluster(): JSX.Element {
     >
       <span style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <img src={jiraMentionsIcon} alt="" style={{ width: 16, height: 16, display: 'block' }} />
-        {mentionsCount > 0 && <span style={{ position: 'absolute', right: -7, top: -6, minWidth: 12, height: 12, padding: '0 2px', borderRadius: 7, background: ui.color.accent, color: '#0e1011', fontSize: 8, lineHeight: '12px', fontWeight: 700 }}>{mentionsCount > 99 ? '99+' : mentionsCount}</span>}
+        {mentionsCount > 0 && <span style={{ position: 'absolute', right: -7, top: -6, minWidth: 12, height: 12, padding: '0 2px', borderRadius: 7, background: ui.color.accent, color: ui.color.appBg, fontSize: 8, lineHeight: '12px', fontWeight: 700 }}>{mentionsCount > 99 ? '99+' : mentionsCount}</span>}
       </span>
     </BarButton>}
     <BarButton onClick={toggleCommandPalette} title={`Command palette (${HOTKEYS.commandPalette.display})`} active={commandPaletteOpen}>

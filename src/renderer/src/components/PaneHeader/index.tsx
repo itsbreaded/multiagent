@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import React, { useState, useRef, useEffect } from 'react'
 import type { PaneLeaf, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -157,8 +158,8 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
     <div
       style={{
         height: 28,
-        backgroundColor: isFocused ? '#1e2022' : '#161819',
-        borderTop: isFocused ? '2px solid #4ade80' : '2px solid transparent',
+        backgroundColor: isFocused ? ui.color.panelRaised : ui.color.surfaceChromeLow,
+        borderTop: isFocused ? `2px solid ${ui.color.accent}` : '2px solid transparent',
         display: 'flex',
         alignItems: 'center',
         paddingLeft: 8,
@@ -186,15 +187,15 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
         title="Left-drag to split · Right-drag to swap"
         style={{
           fontSize: 10,
-          color: '#3a3b3e',
+          color: ui.color.textFaint,
           cursor: 'grab',
           flexShrink: 0,
           lineHeight: 1,
           userSelect: 'none',
           paddingRight: 2,
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#6b7280' }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#3a3b3e' }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = ui.color.textMuted }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = ui.color.textFaint }}
       >
         ⠿
       </span>
@@ -204,7 +205,7 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
         style={{
           fontSize: 10,
           fontWeight: 700,
-          color: '#6b7280',
+          color: ui.color.textMuted,
           flexShrink: 0,
           fontFamily: 'monospace',
           width: 16,
@@ -220,7 +221,7 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
 
       {/* Title — double-click to rename */}
       {renaming ? (
-        <input
+        <input className="ui-control"
           ref={inputRef}
           value={renameValue}
           onChange={(e) => setRenameValue(e.target.value)}
@@ -232,14 +233,13 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
           onClick={(e) => e.stopPropagation()}
           placeholder="Label (optional)"
           style={{
-            background: '#141517',
-            border: '1px solid #4ade80',
+            background: ui.color.input,
+            border: `1px solid ${ui.color.accent}`,
             borderRadius: 3,
-            color: '#c9cdd1',
+            color: ui.color.text,
             fontSize: 12,
             padding: '1px 4px',
-            outline: 'none',
-            width: 120,
+              width: 120,
             flexShrink: 0,
           }}
         />
@@ -249,7 +249,7 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
           title="Double-click to add a label"
           style={{
             fontSize: 12,
-            color: isFocused ? '#d4d4d4' : '#6b7280',
+            color: isFocused ? ui.color.textSubtle : ui.color.textMuted,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -266,7 +266,7 @@ export const PaneHeader = React.memo(function PaneHeader({ pane, isFocused }: Pa
         <span
           style={{
             fontSize: 11,
-            color: '#4a4b4e',
+            color: ui.color.textDim,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -377,14 +377,14 @@ function SessionIdBadge({ sessionId }: { sessionId: string }): JSX.Element {
       style={{
         fontSize: 10,
         fontFamily: 'monospace',
-        color: copied ? '#4ade80' : '#6b7280',
+        color: copied ? ui.color.accent : ui.color.textMuted,
         cursor: 'pointer',
         flexShrink: 0,
         letterSpacing: '0.02em',
         transition: 'color 0.15s',
       }}
-      onMouseEnter={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#9ca3af' }}
-      onMouseLeave={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = '#6b7280' }}
+      onMouseEnter={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = ui.color.textMutedStrong }}
+      onMouseLeave={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.color = ui.color.textMuted }}
     >
       {copied ? '✓' : sessionId.slice(0, 8)}
     </span>
@@ -407,7 +407,7 @@ function HeaderButton({
       style={{
         background: 'none',
         border: 'none',
-        color: '#5a5c61',
+        color: ui.color.scrollbarThumbHover,
         cursor: 'pointer',
         padding: '2px 3px',
         fontSize: 13,
@@ -419,11 +419,11 @@ function HeaderButton({
         justifyContent: 'center',
       }}
       onMouseEnter={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color = '#d4d4d4'
-        ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2a2b2e'
+        ;(e.currentTarget as HTMLButtonElement).style.color = ui.color.textSubtle
+        ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.border
       }}
       onMouseLeave={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color = '#5a5c61'
+        ;(e.currentTarget as HTMLButtonElement).style.color = ui.color.scrollbarThumbHover
         ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'
       }}
     >

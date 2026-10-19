@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { JiraAttachmentMetadata, JiraCommentRecord, JiraIssueMetadata, JiraMentionProjectionItem, JiraReplyDraftToken, JiraUserReference } from '../../../../shared/jiraMentions'
-import { compareCommentsAscending, normalizeJiraInlineImageMimeType, orderMentionItems, type JiraAttachmentPreviewResult } from '../../../../shared/jiraMentions'
+import type { JiraMentionsTextMenuRequest } from '../../../../shared/types'
+import { compareCommentsAscending, isJiraMentionActive, normalizeJiraInlineImageMimeType, orderMentionItems, type JiraAttachmentPreviewResult } from '../../../../shared/jiraMentions'
 import { useJiraMentionsStore, type JiraMentionsFilter } from '../../store/jiraMentions'
 import { usePanesStore } from '../../store/panes'
 import refreshIcon from '../../assets/refresh.png'
@@ -8,10 +9,6 @@ import closeIcon from '../../assets/close.png'
 import { border, ui } from '../../styles/theme'
 import './JiraMentions.css'
 
-const buttonStyle: React.CSSProperties = {
-  border: border.default, borderRadius: 5, background: ui.color.control, color: ui.color.text,
-  fontSize: 11, padding: '5px 9px', cursor: 'pointer',
-}
 const linkButtonStyle: React.CSSProperties = {
   border: 0, background: 'transparent', padding: 0, color: ui.color.accent, font: 'inherit',
   textAlign: 'left', textDecoration: 'underline', textUnderlineOffset: 3, cursor: 'pointer',
@@ -26,11 +23,12 @@ const jiraStatusStyles: Record<'new' | 'in-progress' | 'done', React.CSSProperti
 }
 const jiraIssueTypeStyle: React.CSSProperties = {
   ...issuePropertyChipStyle, color: ui.color.jiraIssueType, background: ui.color.jiraIssueTypeBackground,
-  border: `1px solid ${ui.color.jiraIssueTypeBorder}`,
+  borderWidth: 1, borderStyle: 'solid', borderColor: ui.color.jiraIssueTypeBorder,
 }
 const jiraPriorityStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 5, color: ui.color.jiraPriority,
-  borderLeft: border.default, paddingLeft: 9, marginLeft: 1, fontSize: 'calc(11px + 1pt)', whiteSpace: 'nowrap',
+  borderLeftWidth: 1, borderLeftStyle: 'solid', borderLeftColor: ui.color.border,
+  paddingLeft: 9, marginLeft: 1, fontSize: 'calc(11px + 1pt)', whiteSpace: 'nowrap',
 }
 const jiraAssigneeStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 7, paddingLeft: 8, fontSize: 'calc(11px + 1pt)', whiteSpace: 'nowrap',
@@ -45,6 +43,69 @@ const DESCRIPTION_MAX_VIEWPORT_RATIO = 0.35
 const MIN_REPLY_EDITOR_HEIGHT = 95
 const SNOOZE_UNIT_MILLISECONDS: Record<SnoozeUnit, number> = { minutes: 60_000, hours: 60 * 60_000, days: 24 * 60 * 60_000 }
 const MAX_SNOOZE_MILLISECONDS = 370 * 24 * 60 * 60_000
+
+function textControlSelection(control: HTMLInputElement | HTMLTextAreaElement): { hasSelection: boolean; canSelectAll: boolean } {
+  let start: number | null = null
+  let end: number | null = null
+  const numberValueCanBeSelected = control instanceof HTMLInputElement && control.type === 'number' && control.value.length > 0
+  try {
+    start = control.selectionStart
+    end = control.selectionEnd
+  } catch {
+    // Number inputs do not expose a text selection range in every Chromium version.
+  }
+  return {
+    hasSelection: (start !== null && end !== null && end > start) || numberValueCanBeSelected,
+    canSelectAll: control.value.length > 0,
+  }
+}
+
+function editableTextControl(target: Element): HTMLInputElement | HTMLTextAreaElement | null {
+  const control = target.closest('input, textarea')
+  if (control instanceof HTMLTextAreaElement) return control
+  if (!(control instanceof HTMLInputElement)) return null
+  return ['text', 'search', 'number', 'email', 'url', 'tel', ''].includes(control.type) ? control : null
+}
+
+function selectedTextWithin(root: HTMLElement, selection: Selection | null): boolean {
+  if (!selection || selection.isCollapsed || selection.toString().length === 0 || selection.rangeCount === 0) return false
+  return root.contains(selection.getRangeAt(0).commonAncestorContainer)
+}
+
+function handleMentionsContextMenu(event: React.MouseEvent<HTMLDivElement>): void {
+  const root = event.currentTarget
+  const target = event.target
+  if (!(target instanceof Element)) return
+
+  let request: JiraMentionsTextMenuRequest | null = null
+  const control = editableTextControl(target)
+  if (control && !control.disabled) {
+    const selection = textControlSelection(control)
+    if (control.readOnly) {
+      if (selection.hasSelection) {
+        request = {
+          target: 'selection', x: event.clientX, y: event.clientY,
+          canCut: false, canCopy: true, canSelectAll: false,
+        }
+      }
+    } else {
+      request = {
+        target: 'editable', x: event.clientX, y: event.clientY,
+        canCut: selection.hasSelection, canCopy: selection.hasSelection,
+        canSelectAll: selection.canSelectAll,
+      }
+    }
+  } else if (!target.closest('select, button, [role="button"]') && selectedTextWithin(root, window.getSelection())) {
+    request = {
+      target: 'selection', x: event.clientX, y: event.clientY,
+      canCut: false, canCopy: true, canSelectAll: false,
+    }
+  }
+
+  if (!request) return
+  event.preventDefault()
+  void window.ipc.invoke('jira-mentions:show-text-context-menu', request).catch(() => {})
+}
 
 type JiraStatusGroup = 'new' | 'in-progress' | 'done'
 type SnoozeUnit = 'minutes' | 'hours' | 'days'
@@ -248,7 +309,7 @@ function JiraInlineImage({ issueId, attachment, alt, inline = false, linkMode = 
     <button type="button" aria-label={`Zoom image ${attachment.name}`} title="Click to zoom" onClick={() => setViewerOpen(true)} style={{ display: inline ? 'inline-block' : 'block', verticalAlign: 'middle', width: thumbnailMode ? 132 : undefined, height: thumbnailMode ? 88 : undefined, boxSizing: 'border-box', maxWidth: '100%', border: border.default, borderRadius: 5, background: ui.color.panelSubtle, padding: 3, cursor: 'zoom-in' }}>
       <img src={state.url} alt={imageAlt} style={thumbnailMode ? { display: 'block', width: '100%', height: '100%', objectFit: 'contain' } : { display: 'block', maxWidth: 'min(100%, 640px)', maxHeight: inline ? 180 : 360, objectFit: 'contain' }} />
     </button>
-    {viewerOpen && <div role="dialog" aria-modal="true" aria-label={`Image preview: ${attachment.name}`} onClick={(event) => { if (event.target === event.currentTarget) setViewerOpen(false) }} style={{ position: 'fixed', inset: 0, zIndex: 5000, display: 'grid', placeItems: 'center', padding: 28, background: 'rgba(0, 0, 0, 0.86)' }}>
+    {viewerOpen && <div role="dialog" aria-modal="true" aria-label={`Image preview: ${attachment.name}`} onClick={(event) => { if (event.target === event.currentTarget) setViewerOpen(false) }} style={{ position: 'fixed', inset: 0, zIndex: 5000, display: 'grid', placeItems: 'center', padding: 28, background: ui.color.imageViewerBackdrop }}>
       <button type="button" aria-label="Close image preview" onClick={() => setViewerOpen(false)} style={{ position: 'absolute', top: 16, right: 18, display: 'grid', placeItems: 'center', width: 34, height: 34, padding: 8, border: border.default, borderRadius: 5, background: ui.color.panel, cursor: 'pointer' }}>
         <img src={closeIcon} alt="" style={{ display: 'block', width: 16, height: 16, filter: 'brightness(0) invert(1)' }} />
       </button>
@@ -314,11 +375,14 @@ function issueGroups(items: JiraMentionProjectionItem[]): Array<{ issue: JiraIss
 function filterItems(items: JiraMentionProjectionItem[], filter: string, now: number): JiraMentionProjectionItem[] {
   if (filter === 'all') return [...items].sort((a, b) => b.comment.createdAt - a.comment.createdAt
     || a.issue.issueKey.localeCompare(b.issue.issueKey) || b.comment.commentId.localeCompare(a.comment.commentId))
-  if (filter === 'answered') return items.filter((item) => item.state.state === 'answered')
-  if (filter === 'snoozed') return items.filter((item) => item.state.state === 'unanswered' && item.action?.disposition === 'snoozed' && (item.action.snoozeUntil ?? 0) > now)
-  if (filter === 'dismissed') return items.filter((item) => item.state.state === 'unanswered' && item.action?.disposition === 'dismissed')
+  if (filter === 'answered') return items.filter((item) => item.state.state === 'answered' && !isJiraMentionActive(item, now))
+  if (filter === 'snoozed') return items.filter((item) => item.action?.disposition === 'snoozed' && (item.action.snoozeUntil ?? 0) > now)
+  if (filter === 'dismissed') return items.filter((item) => item.action?.disposition === 'dismissed')
   const ordered = orderMentionItems(items, now)
-  const unknown = items.filter((item) => item.state.state === 'unknown')
+  const unknown = items.filter((item) => item.state.state === 'unknown'
+    && !isJiraMentionActive(item, now)
+    && item.action?.disposition !== 'dismissed'
+    && !(item.action?.disposition === 'snoozed' && (item.action.snoozeUntil ?? 0) > now))
   return [...ordered, ...unknown]
 }
 
@@ -377,23 +441,23 @@ function userContextLabel(user: JiraUserReference, users: JiraUserReference[], c
   return `${label} · candidate ${ordinal}`
 }
 
-function replyErrorMessage(code: string): string {
+function replyErrorMessage(code: string, outcome: 'rejected' | 'unknown'): string {
   switch (code) {
     case 'invalid_config':
     case 'auth': return 'Update the Jira credentials in Settings, then try again.'
-    case 'permission': return 'Jira denied comment access. Open the issue in Jira or ask an administrator for Add comments permission.'
-    case 'validation': return 'Jira rejected the reply. Check its text and selected mentions, then try again.'
-    case 'invalid_recipient': return 'Choose reply recipients from this issue’s mention suggestions.'
-    case 'unsupported_audience': return 'This comment’s audience cannot be preserved here. Open the issue in Jira to reply.'
+    case 'permission': return 'Jira denied permission to add a comment to this ticket.'
+    case 'not_found': return 'Jira could not find this ticket. Refresh the mentions list and try again.'
+    case 'validation': return 'Jira rejected the reply content or format. Edit the reply and try again.'
+    case 'invalid_recipient': return 'Jira could not find one or more selected people. Remove those mentions and try again.'
     case 'rate_limited': return 'Jira is limiting replies. Wait before trying again.'
-    case 'already_answered': return 'This request was answered after you opened it. Refresh the inbox.'
-    case 'delivery_rechecked': return 'Jira checked this issue. Review the draft before trying again.'
-    case 'missing_issue': return 'This issue is no longer available. Refresh the inbox or open it in Jira.'
-    case 'send_in_progress': return 'A reply is already being sent for this issue.'
-    case 'identity_changed': return 'The Jira account changed. Confirm the active account before replying.'
-    case 'cache_unavailable': return 'Local Jira data is unavailable. Restore database access before replying.'
-    case 'invalid_request': return 'Check the reply text and mentions, then try again.'
-    default: return 'The reply could not be sent. Check the connection and refresh before trying again.'
+    case 'network': return outcome === 'unknown'
+      ? 'The connection dropped while sending. Refresh the comments to check whether the reply posted before retrying.'
+      : 'Could not reach Jira. Check the connection and try again.'
+    case 'invalid_response': return outcome === 'unknown'
+      ? 'Jira returned an unexpected response. Refresh the comments to check whether the reply posted before retrying.'
+      : 'Jira returned an unexpected reply response.'
+    case 'invalid_request': return 'The reply request was rejected before Jira could process it. Try again; if it persists, restart MultiAgent.'
+    default: return 'Jira could not send the reply. Check the connection and try again.'
   }
 }
 
@@ -452,6 +516,8 @@ export function JiraMentions(): JSX.Element {
   }, [projection.items, filter, search])
   const groups = useMemo(() => issueGroups(visibleItems), [visibleItems])
   const selectedItem = projection.items.find((item) => item.issue.issueId === selected?.issueId && item.comment.commentId === selected?.incomingCommentId) ?? null
+  const selectedItemActive = selectedItem ? isJiraMentionActive(selectedItem, Date.now()) : false
+  const selectedItemCanRestore = selectedItem?.action?.disposition === 'dismissed' || selectedItem?.action?.disposition === 'snoozed'
   const issueDetails = detail?.issue ?? selectedItem?.issue ?? null
   const devTesters = detail?.users.filter((user) => user.displayName && user.sources.includes('field-name:dev tester')) ?? []
   const mainDevs = detail?.users.filter((user) => user.displayName && user.sources.includes('field-name:main dev')) ?? []
@@ -478,7 +544,6 @@ export function JiraMentions(): JSX.Element {
   const newestFirst = (a: JiraCommentRecord, b: JiraCommentRecord): number => compareCommentsAscending(b, a)
   const earlierComments = sourceCommentIndex > 0 ? detail!.comments.slice(0, sourceCommentIndex).sort(newestFirst) : []
   const laterComments = sourceCommentIndex >= 0 ? detail!.comments.slice(sourceCommentIndex + 1).sort(newestFirst) : []
-  const replyDisabled = !sourceComment || sourceComment.visibility?.type === 'unsupported' || selectedItem?.state.state !== 'unanswered'
   const availableUsers = useMemo(() => {
     const users = detail?.users ?? selectedItem?.authors ?? []
     return [...new Map(users.filter((user) => user.accountId).map((user) => [user.accountId, user])).values()]
@@ -569,30 +634,37 @@ export function JiraMentions(): JSX.Element {
 
   function insertMention(user: { accountId: string; displayName: string | null }): void {
     if (!suggestion) return
-    const label = user.displayName ?? 'Unknown user'
+    const input = textRef.current
+    const text = input?.value ?? draft
+    const caret = Math.max(0, Math.min(input?.selectionStart ?? suggestion.end, text.length))
+    const start = caret > 0 ? text.lastIndexOf('@', caret - 1) : -1
+    const query = start >= 0 ? text.slice(start + 1, caret) : ''
+    if (start < 0 || start !== suggestion.start || /[\s\r\n]/.test(query)) return
+
+    const label = (user.displayName ?? '').trim().replace(/^@+/, '').trim() || 'Unknown user'
     const replacement = `@${label}`
-    const next = `${draft.slice(0, suggestion.start)}${replacement}${draft.slice(suggestion.end)}`
-    const shift = replacement.length - (suggestion.end - suggestion.start)
+    const next = `${text.slice(0, start)}${replacement}${text.slice(caret)}`
+    const shift = replacement.length - (caret - start)
     const updated = draftMentions.flatMap((mention) => {
-      if (mention.start < suggestion.end && mention.end > suggestion.start) return []
-      return mention.start >= suggestion.end ? [{ ...mention, start: mention.start + shift, end: mention.end + shift }] : [mention]
+      if (mention.start < caret && mention.end > start) return []
+      return mention.start >= caret ? [{ ...mention, start: mention.start + shift, end: mention.end + shift }] : [mention]
     })
-    updated.push({ start: suggestion.start, end: suggestion.start + replacement.length, accountId: user.accountId, displayName: label })
-    const position = suggestion.start + replacement.length
+    updated.push({ start, end: start + replacement.length, accountId: user.accountId, displayName: label })
+    const position = start + replacement.length
     pendingCaret.current = position
     if (draftKey) saveDraft(draftKey, { text: next, mentions: updated.sort((a, b) => a.start - b.start) })
     setSuggestion(null)
   }
 
   async function submitReply(): Promise<void> {
-    if (!selected || !draftKey || replyDisabled || !draft.trim() || posting) return
+    if (!selected || !draft.trim() || posting) return
     const submittedText = draft
     const submittedMentions = draftMentions.map((mention) => ({ ...mention }))
     const submittedSignature = JSON.stringify({ text: submittedText, mentions: submittedMentions })
     setPosting(true)
     try {
       const result = await postReply({ issueId: selected.issueId, sourceCommentId: selected.incomingCommentId, tokens: makeDraftTokens(submittedText, submittedMentions) })
-      if (result.ok) {
+      if (result.ok && draftKey) {
         const current = useJiraMentionsStore.getState().drafts[draftKey]
         if (JSON.stringify({ text: current?.text ?? '', mentions: current?.mentions ?? [] }) === submittedSignature) {
           saveDraft(draftKey, { text: '', mentions: [] })
@@ -616,9 +688,9 @@ export function JiraMentions(): JSX.Element {
         setSuggestionIndex((index) => (index + suggestionUsers.length - 1) % suggestionUsers.length)
         return
       }
-      if (event.key === 'Enter' && !event.shiftKey) {
+      if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
         event.preventDefault()
-        const user = suggestionUsers[suggestionIndex]
+        const user = suggestionUsers[suggestionIndex] ?? suggestionUsers[0]
         if (user) insertMention(user)
         return
       }
@@ -701,7 +773,7 @@ export function JiraMentions(): JSX.Element {
   return (
     <AttachmentPreviewCacheProvider scopeKey={attachmentPreviewScopeKey}>
     <div className="jira-mentions-shell">
-    <div className="jira-mentions-root" style={{
+    <div className="jira-mentions-root" onContextMenu={handleMentionsContextMenu} style={{
       background: ui.color.appBg,
       color: ui.color.text,
       '--jira-mentions-border': ui.color.border,
@@ -737,9 +809,9 @@ export function JiraMentions(): JSX.Element {
         <div className="jira-mentions-inbox-controls">
           <label className="jira-mentions-search-field">
             <span className="jira-mentions-search-icon" aria-hidden="true" />
-            <input aria-label="Search Jira mentions" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" style={{ outline: 'none', caretColor: ui.color.accent }} />
+            <input className="ui-control" aria-label="Search Jira mentions" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" />
           </label>
-          <select aria-label="Jira mentions filter" value={filter} onChange={(event) => setFilter(event.target.value as JiraMentionsFilter)}>
+          <select className="ui-control" aria-label="Jira mentions filter" value={filter} onChange={(event) => setFilter(event.target.value as JiraMentionsFilter)}>
             <option value="all">All</option><option value="active">Active</option><option value="snoozed">Snoozed</option><option value="dismissed">Dismissed</option><option value="answered">Answered</option>
           </select>
           <button className="jira-mentions-refresh" title="Refresh Jira mentions" aria-label="Refresh Jira mentions" onClick={() => { void refresh('manual') }}>
@@ -763,19 +835,32 @@ export function JiraMentions(): JSX.Element {
               </div>
               {group.items.map((item) => {
                 const isSelected = selected?.issueId === item.issue.issueId && selected?.incomingCommentId === item.comment.commentId
+                const itemActive = isJiraMentionActive(item, Date.now())
+                const canRestoreDisposition = item.action?.disposition === 'dismissed' || item.action?.disposition === 'snoozed'
+                const showListActivation = !itemActive && !(isSelected && detail?.issue.issueId === item.issue.issueId)
+                const activationLabel = canRestoreDisposition
+                  ? (item.action?.disposition === 'snoozed' ? 'Unsnooze' : 'Restore')
+                  : 'Make active'
                 return (
-                  <button className="jira-mentions-mention-row" data-selected={isSelected} aria-pressed={isSelected} key={item.comment.commentId} onClick={() => { void select(item.issue.issueId, item.comment.commentId) }}>
-                    <span className="jira-mentions-mention-mark" aria-hidden="true">@</span>
-                    <span className="jira-mentions-mention-copy">
-                      <span className="jira-mentions-mention-row-head">
-                        <strong>{item.comment.authorDisplayName ?? 'Unknown user'}</strong>
-                        <time>{displayTime(item.comment.createdAt)}</time>
+                  <div className="jira-mentions-mention-entry" key={item.comment.commentId}>
+                    <button className="jira-mentions-mention-row" data-selected={isSelected} data-has-activation={showListActivation} aria-pressed={isSelected} onClick={() => { void select(item.issue.issueId, item.comment.commentId) }}>
+                      <span className="jira-mentions-mention-mark" aria-hidden="true">@</span>
+                      <span className="jira-mentions-mention-copy">
+                        <span className="jira-mentions-mention-row-head">
+                          <strong>{item.comment.authorDisplayName ?? 'Unknown user'}</strong>
+                          <time>{displayTime(item.comment.createdAt)}</time>
+                        </span>
+                        <span className="jira-mentions-mention-title">{item.issue.summary}</span>
+                        <span className="jira-mentions-mention-excerpt">{item.comment.excerpt || 'Mentioned you in a comment'}</span>
+                        {item.state.state === 'unknown' && <span className="jira-mentions-unverified" title="Jira did not provide enough comment details to verify whether this mention was answered. You can still reply.">Could not verify</span>}
                       </span>
-                      <span className="jira-mentions-mention-title">{item.issue.summary}</span>
-                      <span className="jira-mentions-mention-excerpt">{item.comment.excerpt || 'Mentioned you in a comment'}</span>
-                      {item.state.state === 'unknown' && <span className="jira-mentions-unverified">Could not verify</span>}
-                    </span>
-                  </button>
+                    </button>
+                    {showListActivation && <button className="jira-mentions-mention-activate" type="button" onClick={() => { void setAction({
+                      issueId: item.issue.issueId,
+                      incomingCommentId: item.comment.commentId,
+                      action: canRestoreDisposition ? 'restored' : 'activated',
+                    }) }}>{activationLabel}</button>}
+                  </div>
                 )
               })}
             </div>
@@ -798,7 +883,6 @@ export function JiraMentions(): JSX.Element {
                 </div>
                 <h1 className="jira-mentions-issue-title">{selectedItem.issue.summary}</h1>
               </div>
-              {selectedItem.action && <button style={buttonStyle} onClick={() => { void setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'restored' }) }}>{selectedItem.action.disposition === 'snoozed' ? 'Unsnooze' : 'Restore'}</button>}
             </header>
 
             {issueProperties.length > 0 && <aside className="jira-mentions-details-rail" aria-label="Issue details">
@@ -870,11 +954,11 @@ export function JiraMentions(): JSX.Element {
                       <span className="jira-mentions-reply-mark" aria-hidden="true">
                         <svg viewBox="0 0 16 16"><path d="M5 4 2 7l3 3M2 7h6a4 4 0 0 1 4 4v1" /></svg>
                       </span>
-                      <label htmlFor="jira-mentions-reply" aria-label={`Reply to selected mention on ${selectedItem.issue.issueKey}`}>Reply to mention</label>
+                      <label htmlFor="jira-mentions-reply" aria-label={`Reply to ticket ${selectedItem.issue.issueKey}`}>Reply</label>
                     </div>
                   </div>
                   <div className="jira-mentions-reply-input-wrap">
-                    <textarea
+                    <textarea className="ui-control"
                       id="jira-mentions-reply"
                       ref={textRef}
                       value={draft}
@@ -883,31 +967,29 @@ export function JiraMentions(): JSX.Element {
                       onKeyDown={handleComposerKeyDown}
                       aria-expanded={Boolean(suggestion && suggestionUsers.length)}
                       aria-activedescendant={suggestion && suggestionUsers.length ? `jira-mention-option-${suggestionIndex}` : undefined}
-                      placeholder={replyDisabled ? 'Open this issue in Jira to reply to this audience.' : 'Write a reply'}
-                      disabled={replyDisabled}
+                      placeholder="Write a reply"
                       rows={4}
-                      style={{ minHeight: MIN_REPLY_EDITOR_HEIGHT, overflowY: 'hidden', resize: 'vertical', outline: 'none', caretColor: ui.color.accent }}
+                      style={{ minHeight: MIN_REPLY_EDITOR_HEIGHT, overflowY: 'hidden', resize: 'vertical' }}
                     />
-                    {suggestion && !replyDisabled && suggestionUsers.length > 0 && (
+                    {suggestion && suggestionUsers.length > 0 && (
                       <div role="listbox" aria-label="Mention suggestions" style={{ position: 'absolute', top: '100%', left: 0, width: 'min(350px, 100%)', maxHeight: 180, overflow: 'auto', background: ui.color.panelRaised, border: border.default, borderRadius: 5, boxShadow: ui.shadow.menu, zIndex: 5 }}>
                         {suggestionUsers.map((user, index) => (
                           <button id={`jira-mention-option-${index}`} key={user.accountId} role="option" aria-selected={index === suggestionIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(user)} style={{ display: 'block', width: '100%', padding: '7px 9px', border: 0, background: index === suggestionIndex ? ui.color.control : 'transparent', color: ui.color.text, textAlign: 'left', cursor: 'pointer', fontSize: 11 }}>
-                            {user.displayName}<span style={{ display: 'block', color: ui.color.textDim, fontSize: 9, marginTop: 2 }}>{userContextLabel(user, availableUsers, detail?.comments ?? (selectedItem ? [selectedItem.comment] : []))}</span>
+                            {user.displayName}<span style={{ display: 'block', color: ui.color.textDim, fontSize: 9, marginTop: 2 }}>{userContextLabel(user, availableUsers, detail?.comments ?? [selectedItem.comment])}</span>
                           </button>
                         ))}
                       </div>
                     )}
                   </div>
                   <div className="jira-mentions-reply-footer">
-                    {(selectedItem?.replyUncertain || lastReplyResult) && <span className="jira-mentions-reply-feedback">
-                      {selectedItem?.replyUncertain && <span role="status" style={{ color: ui.color.statusWaiting }}>Delivery is uncertain. Refresh Jira mentions before trying again.</span>}
-                      {lastReplyResult && !lastReplyResult.ok && !selectedItem?.replyUncertain && <span role="status" style={{ color: lastReplyResult.outcome === 'unknown' ? ui.color.statusWaiting : ui.color.danger }}>{lastReplyResult.outcome === 'unknown' ? 'Delivery is uncertain. Refresh Jira mentions before trying again.' : replyErrorMessage(lastReplyResult.errorCode)}</span>}
+                    {(selectedItem.replyUncertain || lastReplyResult) && <span className="jira-mentions-reply-feedback">
+                      {selectedItem.replyUncertain && <span role="status" style={{ color: ui.color.statusWaiting }}>A previous reply may have gone through. You can send another reply.</span>}
+                      {lastReplyResult && !lastReplyResult.ok && !selectedItem.replyUncertain && <span role="status" style={{ color: lastReplyResult.outcome === 'unknown' ? ui.color.statusWaiting : ui.color.danger }}>{replyErrorMessage(lastReplyResult.errorCode, lastReplyResult.outcome)}</span>}
                       {lastReplyResult?.ok && <span role="status" style={{ color: ui.color.accent }}>Reply posted.</span>}
                     </span>}
-                    <button className="jira-mentions-reply-post" disabled={replyDisabled || selectedItem?.replyUncertain === true || !draft.trim() || posting} onClick={() => { void submitReply() }}>{posting ? 'Posting…' : 'Post reply'}</button>
+                    <button className="jira-mentions-reply-post" disabled={!draft.trim() || posting} onClick={() => { void submitReply() }}>{posting ? 'Posting…' : 'Reply'}</button>
                   </div>
                 </section>
-
                 <section className="jira-mentions-comment-history" aria-label="Comment history">
                   <div className="jira-mentions-comments-heading">
                     <div><h2>Comments</h2><span className="jira-mentions-section-count">{detail.observedCommentCount}</span></div>
@@ -935,33 +1017,41 @@ export function JiraMentions(): JSX.Element {
                         <strong>{sourceComment?.authorDisplayName ?? selectedItem.comment.authorDisplayName ?? 'Unknown user'}</strong>
                         <time>{displayTime(sourceComment?.createdAt ?? selectedItem.comment.createdAt)}</time>
                         <span className="jira-mentions-source-tag">Mention</span>
-                        {selectedItem.state.state === 'unanswered' && <span className="jira-mentions-source-actions">
-                          <div className="jira-mentions-snooze-control" ref={snoozeMenuRef}>
-                            <button className="jira-mentions-action-snooze" type="button" aria-haspopup="dialog" aria-expanded={snoozeMenuOpen} onClick={() => setSnoozeMenuOpen((open) => !open)}>Snooze</button>
-                            {snoozeMenuOpen && <div className="jira-mentions-snooze-menu" role="dialog" aria-label="Snooze duration">
-                              <form className="jira-mentions-snooze-form" onSubmit={(event) => {
-                                event.preventDefault()
-                                const duration = Number(snoozeDuration)
-                                const durationMilliseconds = duration * SNOOZE_UNIT_MILLISECONDS[snoozeUnit]
-                                if (!Number.isInteger(duration) || duration < 1 || durationMilliseconds > MAX_SNOOZE_MILLISECONDS) return
-                                void setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'snoozed', snoozeUntil: Date.now() + durationMilliseconds })
-                                setSnoozeMenuOpen(false)
-                              }}>
-                                <span className="jira-mentions-snooze-label">Snooze for</span>
-                                <div className="jira-mentions-snooze-fields">
-                                  <input aria-label="Snooze duration" type="number" min="1" max={Math.floor(MAX_SNOOZE_MILLISECONDS / SNOOZE_UNIT_MILLISECONDS[snoozeUnit])} step="1" required value={snoozeDuration} onChange={(event) => setSnoozeDuration(event.currentTarget.value)} />
-                                  <select aria-label="Snooze unit" value={snoozeUnit} onChange={(event) => setSnoozeUnit(event.currentTarget.value as SnoozeUnit)}>
-                                    <option value="minutes">minutes</option>
-                                    <option value="hours">hours</option>
-                                    <option value="days">days</option>
-                                  </select>
-                                </div>
-                                <button type="submit" className="jira-mentions-snooze-submit">Apply snooze</button>
-                              </form>
-                            </div>}
-                          </div>
-                          <button className="jira-mentions-action-dismiss" type="button" onClick={() => setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'dismissed' })}>Dismiss</button>
-                        </span>}
+                        <span className="jira-mentions-source-actions">
+                          {!selectedItemActive
+                            ? <button className="jira-mentions-action-restore" type="button" onClick={() => setAction({
+                              issueId: selectedItem.issue.issueId,
+                              incomingCommentId: selectedItem.comment.commentId,
+                              action: selectedItemCanRestore ? 'restored' : 'activated',
+                            })}>{selectedItemCanRestore ? (selectedItem.action?.disposition === 'snoozed' ? 'Unsnooze' : 'Restore') : 'Make active'}</button>
+                            : <>
+                              <div className="jira-mentions-snooze-control" ref={snoozeMenuRef}>
+                                <button className="jira-mentions-action-snooze" type="button" aria-haspopup="dialog" aria-expanded={snoozeMenuOpen} onClick={() => setSnoozeMenuOpen((open) => !open)}>Snooze</button>
+                                {snoozeMenuOpen && <div className="jira-mentions-snooze-menu" role="dialog" aria-label="Snooze duration">
+                                  <form className="jira-mentions-snooze-form" onSubmit={(event) => {
+                                    event.preventDefault()
+                                    const duration = Number(snoozeDuration)
+                                    const durationMilliseconds = duration * SNOOZE_UNIT_MILLISECONDS[snoozeUnit]
+                                    if (!Number.isInteger(duration) || duration < 1 || durationMilliseconds > MAX_SNOOZE_MILLISECONDS) return
+                                    void setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'snoozed', snoozeUntil: Date.now() + durationMilliseconds })
+                                    setSnoozeMenuOpen(false)
+                                  }}>
+                                    <span className="jira-mentions-snooze-label">Snooze for</span>
+                                    <div className="jira-mentions-snooze-fields">
+                                      <input className="ui-control" aria-label="Snooze duration" type="number" min="1" max={Math.floor(MAX_SNOOZE_MILLISECONDS / SNOOZE_UNIT_MILLISECONDS[snoozeUnit])} step="1" required value={snoozeDuration} onChange={(event) => setSnoozeDuration(event.currentTarget.value)} />
+                                      <select className="ui-control" aria-label="Snooze unit" value={snoozeUnit} onChange={(event) => setSnoozeUnit(event.currentTarget.value as SnoozeUnit)}>
+                                        <option value="minutes">minutes</option>
+                                        <option value="hours">hours</option>
+                                        <option value="days">days</option>
+                                      </select>
+                                    </div>
+                                    <button type="submit" className="jira-mentions-snooze-submit">Apply snooze</button>
+                                  </form>
+                                </div>}
+                              </div>
+                              <button className="jira-mentions-action-dismiss" type="button" onClick={() => setAction({ issueId: selectedItem.issue.issueId, incomingCommentId: selectedItem.comment.commentId, action: 'dismissed' })}>Dismiss</button>
+                            </>}
+                        </span>
                       </div>
                       <div className="jira-mentions-comment-context-body">
                         <CommentBody comment={sourceComment ?? selectedItem.comment} issueId={selectedItem.issue.issueId} attachments={commentAttachments} />

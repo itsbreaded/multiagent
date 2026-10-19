@@ -142,14 +142,14 @@ export function JiraSetting(): JSX.Element {
   return (
     <>
       <label style={labelStyle}>Jira base URL</label>
-      <input aria-label="Jira base URL" value={baseUrl} onChange={(e) => { draftDirty.current = true; setBaseUrl(e.target.value) }} style={fieldStyle} />
+      <input className="ui-control" aria-label="Jira base URL" value={baseUrl} onChange={(e) => { draftDirty.current = true; setBaseUrl(e.target.value) }} style={fieldStyle} />
 
       <label style={labelStyle}>Atlassian account email</label>
-      <input aria-label="Atlassian account email" type="email" value={email} onChange={(e) => { draftDirty.current = true; setEmail(e.target.value) }} style={fieldStyle} />
+      <input className="ui-control" aria-label="Atlassian account email" type="email" value={email} onChange={(e) => { draftDirty.current = true; setEmail(e.target.value) }} style={fieldStyle} />
 
       <label style={labelStyle}>API token</label>
       <div style={{ display: 'flex', gap: 6 }}>
-        <input
+        <input className="ui-control"
           aria-label="Jira API token"
           type={showToken ? 'text' : 'password'}
           value={token}
@@ -196,7 +196,7 @@ export function JiraSetting(): JSX.Element {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {patterns.map((pattern, index) => (
           <div key={index} style={{ display: 'flex', gap: 6 }}>
-            <input
+            <input className="ui-control"
               aria-label={`Jira issue-key prefix ${index + 1}`}
               value={pattern}
               onChange={(e) => { draftDirty.current = true; updatePattern(index, e.target.value) }}
@@ -214,7 +214,7 @@ export function JiraSetting(): JSX.Element {
       </button>
 
       <label style={{ ...checkRowStyle, marginTop: 16 }}>
-        <input
+        <input className="ui-control ui-control-checkbox"
           type="checkbox"
           aria-label="Track unanswered Jira mentions"
           checked={mentionsEnabled}
@@ -225,7 +225,7 @@ export function JiraSetting(): JSX.Element {
       {mentionsEnabled && (
         <>
           <label style={checkRowStyle}>
-            <input
+            <input className="ui-control ui-control-checkbox"
               type="checkbox"
               aria-label="Background refresh"
               checked={mentionsPollingEnabled}
@@ -238,7 +238,7 @@ export function JiraSetting(): JSX.Element {
               <label htmlFor="jira-mentions-polling-minutes" style={{ ...labelStyle, margin: 0, flex: 1 }}>
                 Refresh interval (minutes)
               </label>
-              <input
+              <input className="ui-control"
                 id="jira-mentions-polling-minutes"
                 aria-label="Refresh interval in minutes"
                 type="number"
@@ -248,7 +248,7 @@ export function JiraSetting(): JSX.Element {
                 step={1}
                 value={pollingMinutesDraft}
                 onChange={(event) => { draftDirty.current = true; setPollingMinutesDraft(event.target.value) }}
-                style={{ ...fieldStyle, width: 92 }}
+                style={{ ...fieldStyle, width: 92, borderColor: pollingIntervalValid ? ui.color.border : ui.color.danger }}
               />
             </div>
           )}

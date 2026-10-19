@@ -1,4 +1,5 @@
 import { BrowserWindow, app } from 'electron'
+import { shouldBlockE2EUrl } from '../e2eIsolation'
 
 export interface UiWindow { id: number; title: string; url: string; visible: boolean; focused: boolean }
 type ConsoleEntry = { level: number; message: string; sourceUrl: string; line: number; timestamp: number }
@@ -36,6 +37,10 @@ export class AppUiManager {
     const observed = (details: { webContentsId?: number; resourceType: string }) =>
       details.webContentsId !== undefined && this.network.has(details.webContentsId) && OBSERVED_RESOURCE_TYPES.has(details.resourceType)
     session.webRequest.onBeforeRequest((details, callback) => {
+      if (shouldBlockE2EUrl(details.url)) {
+        callback({ cancel: true })
+        return
+      }
       if (observed(details) && details.id !== undefined) this.requestStartedAt.set(details.id, { at: Date.now(), webContentsId: details.webContentsId! })
       callback({})
     })

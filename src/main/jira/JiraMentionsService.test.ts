@@ -210,7 +210,7 @@ describe('JiraMentionsService', () => {
     expect(client.fetchAttachmentPreview).toHaveBeenCalledOnce()
   })
 
-  it('blocks unsupported audiences before POST and treats a broader POST response as uncertain', async () => {
+  it('uses the default comment audience without a pre-send refresh and treats mismatched POST responses as uncertain', async () => {
     const settings = settingsStore()
     const context = {
       contextId: 'ctx', siteUrl: 'https://jira.example.test', selfAccountId: 'self-id',
@@ -259,20 +259,10 @@ describe('JiraMentionsService', () => {
       applyConfirmedReply: vi.fn(),
     }
     let postedVisibility: JiraCommentRecord['visibility'] | undefined = null
-    let searchCount = 0
     const client = {
       getIdentity: vi.fn(async () => ({ accountId: 'self-id', displayName: 'Self', timeZone: 'UTC' })),
       getCustomFieldCatalog: vi.fn(async () => []),
-      searchAll: vi.fn(async () => {
-        searchCount++
-        if (searchCount === 2) {
-          projection = {
-            ...projection,
-            items: [{ ...projection.items[0], comment: { ...comment, visibility: { type: 'unsupported', value: 'service_desk' } } }],
-          }
-        }
-        return []
-      }),
+      searchAll: vi.fn(async () => []),
       fetchIssueSnapshot: vi.fn(),
       postComment: vi.fn(async (_settings: unknown, _issueId: string, body: unknown, visibility: JiraCommentRecord['visibility']) => ({
         commentId: 'reply-1', authorAccountId: 'self-id', createdAt: 3_000, updatedAt: 3_000,
@@ -288,27 +278,27 @@ describe('JiraMentionsService', () => {
       tokens: [{ kind: 'text', id: 'text-1', text: 'I will review this.' }],
     })
 
-    expect(result).toEqual({ ok: false, outcome: 'rejected', errorCode: 'unsupported_audience' })
-    expect(client.searchAll).toHaveBeenCalledTimes(2)
-    expect(repo.startReplyAttempt).not.toHaveBeenCalled()
-    expect(client.postComment).not.toHaveBeenCalled()
+    expect(result).toEqual({ ok: true, commentId: 'reply-1' })
+    expect(client.searchAll).toHaveBeenCalledOnce()
+    expect(repo.startReplyAttempt).toHaveBeenCalledOnce()
+    expect(client.postComment).toHaveBeenCalledWith(settings.getStoredSettings(), issue.issueId, expect.any(Object), null)
 
-    projection = { ...projection, items: [{ ...projection.items[0], comment }] }
+    const unsupportedComment = { ...comment, visibility: { type: 'unsupported', value: 'service_desk' } as const }
+    projection = { ...projection, items: [{ ...projection.items[0], comment: unsupportedComment }] }
+    postedVisibility = { type: 'group', value: 'jira-developers', identifier: 'group-123' }
     const mismatchedResult = await service.postReply({
       issueId: issue.issueId,
       sourceCommentId: comment.commentId,
       tokens: [{ kind: 'text', id: 'text-2', text: 'I will review this.' }],
     })
     expect(mismatchedResult).toEqual({ ok: false, outcome: 'unknown', errorCode: 'invalid_response' })
-    expect(client.postComment).toHaveBeenCalledWith(settings.getStoredSettings(), issue.issueId, expect.any(Object), {
-      type: 'group', value: 'jira-developers', identifier: 'group-123',
-    }, issue.issueKey)
+    expect(client.postComment).toHaveBeenLastCalledWith(settings.getStoredSettings(), issue.issueId, expect.any(Object), null)
     expect(repo.finishReplyAttempt).toHaveBeenCalledWith('ctx', 'attempt-1', expect.objectContaining({
       outcome: 'unknown', errorCode: 'invalid_response',
     }))
 
     const serviceDeskVisibility = { type: 'service_desk', value: 'public' } as const
-    postedVisibility = serviceDeskVisibility
+    postedVisibility = null
     projection = { ...projection, items: [{ ...projection.items[0], comment: { ...comment, visibility: serviceDeskVisibility } }] }
     const serviceDeskResult = await service.postReply({
       issueId: issue.issueId,
@@ -316,7 +306,7 @@ describe('JiraMentionsService', () => {
       tokens: [{ kind: 'text', id: 'text-3', text: 'I will review this.' }],
     })
     expect(serviceDeskResult).toEqual({ ok: true, commentId: 'reply-1' })
-    expect(client.postComment).toHaveBeenLastCalledWith(settings.getStoredSettings(), issue.issueId, expect.any(Object), serviceDeskVisibility, issue.issueKey)
+    expect(client.postComment).toHaveBeenLastCalledWith(settings.getStoredSettings(), issue.issueId, expect.any(Object), null)
     await service.close()
   })
 

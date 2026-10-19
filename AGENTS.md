@@ -171,9 +171,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 
 ### UI & command registry
 
-- Overlay modal language: centered dark overlay, `#1a1b1e` panel, `#2a2b2e` borders, 10px
-  radius, `0 24px 64px rgba(0,0,0,0.6)` shadow, `#4ade80` accents. Start from
-  `src/renderer/src/styles/theme.ts` — don't copy raw hex into components.
+- `defaultTheme` in `src/renderer/src/styles/theme.ts` is the source for renderer appearance;
+  use its semantic `ui` tokens and shared control classes, keep keyboard focus visible, and
+  document intentional visual exceptions. → [`docs/ui-styling.md`](docs/ui-styling.md)
 - Buttons use image icons from `src/renderer/src/assets/`, not text/emoji; ask for a missing
   `.png` before implementing a button. Non-terminal scrollable surfaces use the shared
   `dark-scrollbar` class; expose a `className` hook for internal scroll containers.
@@ -185,6 +185,12 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   new store action → `Command`; new context data → extend `CommandContext`. `shortcut`/`enabled`
   are evaluated per render. Sessions are not in the palette (use Session Browser
   `Ctrl+Shift+O`).
+
+### Test execution safety → [`docs/testing.md`](docs/testing.md)
+
+- Run tests only through guarded npm scripts; every test must stay in the background with no
+  displayed/foregrounded app or browser windows, native dialogs/menus/popups, or external-app
+  launches. Block non-loopback network access and use isolated loopback fixtures.
 
 ### Sessions & MCP → [`docs/sessions.md`](docs/sessions.md), [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md)
 
@@ -241,20 +247,25 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
   a decrypted token only transiently for its standard password Show/Hide control.
   Never persist that value in renderer state; token persistence is encrypted and
   fail-closed. The mentions inbox may poll when enabled and may create a comment
-  only after an explicit user Post reply action.
+  only after an explicit user Reply action.
 - Route Jira issue links through main-owned issue-key construction and cached
   attachment-ID lookup/URL validation; external opens stay allowlisted, and raw
   URLs never cross IPC or traces.
 - Inline Jira comment images must resolve through cached attachment IDs and a
   bounded same-site HTTPS fetch in main; never pass attachment URLs or tokens to the renderer.
-- Keep mention discovery, cache publication, and reply validation main-owned; preserve the
-  shared `session-index.db` on Jira/session migration failures and scope cache clearing to Jira tables.
+- Keep mention discovery, cache publication, and reply writes main-owned; don't gate
+  replies on mention state or audience metadata, or require a pre-send refresh.
+  Preserve the shared `session-index.db` on Jira/session migration failures and
+  scope cache clearing to Jira tables.
+- Keep Restore/Unsnooze/Make active beside every inactive mention; activation is a local override.
+- Keep Jira Mentions text menus main-owned; send action flags and coordinates only, never field,
+  selected-text, or clipboard contents. → [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md)
 - Cross-platform E2E may use per-run AES-GCM Jira credential storage only for an unpackaged app
   whose active user-data path matches the isolated E2E profile; production always uses Electron `safeStorage`.
 - Constrain mention discovery JQL by the authenticated account ID comment term and update lower bound;
   never enumerate every recently updated issue. Verify candidates against structured ADF.
-- Reply to unrestricted comments when Jira omits platform visibility; preserve Service Desk public/internal
-  and any group/role restriction, and block only audiences the app cannot verify.
+- Post replies to the selected issue using Jira's default comment audience; don't gate
+  on or preserve the source comment's audience metadata.
 
 ## Docs index
 
@@ -264,8 +275,9 @@ Terse non-negotiables. The mechanism/why for each group is in the linked doc.
 | [`docs/multi-window-and-layout.md`](docs/multi-window-and-layout.md) | Pane tree model, label computation, startup restore + hydration, feature destinations, multi-window ownership, transfer-ack semantics, shutdown state collection, renderer stores |
 | [`docs/sessions.md`](docs/sessions.md) | Session indexing, shared application database, deep search, cwd repair, session detection states, startup-resume flow, MCP injection + browser panel |
 | [`docs/session-linking-hooks.md`](docs/session-linking-hooks.md) | Hook-based session-id linking: the managed-hook install, Claude vs Codex differences, the report server, failure modes, file map |
-| [`docs/testing.md`](docs/testing.md) | Vitest projects, postinstall/native rebuild, the PATH-rewrite guard, testable extractions, Zustand mock, determinism, E2E, coverage ratchets |
+| [`docs/testing.md`](docs/testing.md) | Vitest projects, postinstall/native rebuild, the PATH-rewrite guard, testable extractions, Zustand mock, determinism, desktop/network-safe E2E, teardown, coverage ratchets |
 | [`docs/packaging-and-release.md`](docs/packaging-and-release.md) | Per-OS `dist` output, signing/notarization deferral, icons, asar/native modules, auto-update, release publish flow, `patch-package` |
 | [`docs/jira-sidebar-status.md`](docs/jira-sidebar-status.md) | Jira status badges and unanswered-mentions inbox ownership, shared cache, encrypted credentials, refresh/reply lifecycle, trace privacy, and external links |
+| [`docs/ui-styling.md`](docs/ui-styling.md) | Default renderer theme, semantic tokens, native form controls, focus states, visual exceptions, and the checklist for new UI |
 | [`docs/writing-specs.md`](docs/writing-specs.md) | Behavioral contracts, acceptance scenarios, definition of done, and spec lifecycle |
 | [`docs/writing-plans.md`](docs/writing-plans.md) | Detailed implementation-plan structure, lifecycle, task quality, and blind pre-execution review |

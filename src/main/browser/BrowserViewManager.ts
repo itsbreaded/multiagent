@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { EventEmitter } from 'events'
+import { isE2ERun, shouldBlockE2EUrl } from '../e2eIsolation'
 
 export type BrowserControlState = 'hidden' | 'agent-controlled' | 'user-controlled'
 
@@ -102,12 +103,15 @@ export class BrowserViewManager extends EventEmitter {
       this.win = new BrowserWindow({
         width: 1280,
         height: 900,
+        show: false,
         title: 'MultiAgent Browser',
         autoHideMenuBar: true,
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
+          offscreen: isE2ERun,
+          ...(isE2ERun ? { backgroundThrottling: false } : {}),
         },
       })
       this._installObservability(this.win)
@@ -132,6 +136,10 @@ export class BrowserViewManager extends EventEmitter {
     this.observabilityInstalled = true
     const webRequest = wc.session.webRequest
     webRequest.onBeforeRequest((details, callback) => {
+      if (shouldBlockE2EUrl(details.url)) {
+        callback({ cancel: true })
+        return
+      }
       if (details.id !== undefined && this._isObservedRequest(details.webContentsId, details.resourceType)) {
         this.requestStartedAt.set(details.id, Date.now())
       }

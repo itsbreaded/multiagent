@@ -118,7 +118,7 @@ export interface JiraMentionStateRecord {
 export interface JiraMentionAction {
   issueId: string
   incomingCommentId: string
-  disposition: 'dismissed' | 'snoozed'
+  disposition: 'active' | 'dismissed' | 'snoozed'
   snoozeUntil: number | null
   updatedAt: number
 }
@@ -151,7 +151,7 @@ export type JiraReplyDraftToken =
   | { kind: 'mention'; id: string; accountId: string; displayName: string }
 
 export type JiraMentionsRefreshMode = 'open-if-stale' | 'manual' | 'full'
-export type JiraMentionsActionKind = 'dismissed' | 'snoozed' | 'restored'
+export type JiraMentionsActionKind = 'activated' | 'dismissed' | 'snoozed' | 'restored'
 
 export interface JiraMentionsActionInput {
   issueId: string
@@ -162,7 +162,7 @@ export interface JiraMentionsActionInput {
 
 export interface JiraMentionsReplyInput {
   issueId: string
-  sourceCommentId: string
+  sourceCommentId?: string
   tokens: JiraReplyDraftToken[]
 }
 
@@ -404,7 +404,7 @@ export function getQuickSnoozeUntil(kind: JiraQuickSnooze, now: number): number 
 }
 
 export function orderMentionItems(items: readonly JiraMentionProjectionItem[], now: number): JiraMentionProjectionItem[] {
-  const active = items.filter((item) => item.state.state === 'unanswered' && isActionActive(item.action, now))
+  const active = items.filter((item) => isJiraMentionActive(item, now))
   const issueNewest = new Map<string, number>()
   for (const item of active) issueNewest.set(item.issue.issueId,
     Math.max(issueNewest.get(item.issue.issueId) ?? Number.NEGATIVE_INFINITY, item.comment.createdAt))
@@ -414,9 +414,16 @@ export function orderMentionItems(items: readonly JiraMentionProjectionItem[], n
     || compareOpaqueIds(a.comment.commentId, b.comment.commentId))
 }
 
-function isActionActive(action: JiraMentionAction | null, now: number): boolean {
-  if (action?.disposition === 'dismissed') return false
-  return !(action?.disposition === 'snoozed' && action.snoozeUntil !== null && action.snoozeUntil > now)
+export function isJiraMentionActive(item: JiraMentionProjectionItem, now: number): boolean {
+  if (item.action?.disposition === 'active') {
+    const answeredAfterActivation = item.state.state === 'answered'
+      && item.state.resolvingCreatedAt !== null
+      && item.state.resolvingCreatedAt > item.action.updatedAt
+    return !answeredAfterActivation
+  }
+  if (item.action?.disposition === 'dismissed') return false
+  if (item.action?.disposition === 'snoozed' && item.action.snoozeUntil !== null && item.action.snoozeUntil > now) return false
+  return item.state.state === 'unanswered'
 }
 
 export function mergeUserReference(

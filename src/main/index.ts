@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, screen, session } from 'electron'
 import './e2eIsolation'
 import { join } from 'path'
 import { readFileSync } from 'fs'
@@ -8,6 +8,7 @@ import { initUpdater } from './updater'
 import { BrowserViewManager } from './browser/BrowserViewManager'
 import { mcpManager } from './mcp/McpManager'
 import { openExternalUrl } from './external'
+import { installE2ENetworkGuard, isE2ERun, shouldBlockE2EUrl } from './e2eIsolation'
 import { windowManager } from './window/WindowManager'
 import { WindowShowCoordinator } from './window/windowShow'
 import { writeJsonAtomic } from './atomicJson'
@@ -83,6 +84,7 @@ async function createWindow(): Promise<void> {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
+      offscreen: isE2ERun,
       // Keep the renderer painting while the window is (partially) occluded. Without this,
       // Chromium throttles a covered window, so resizing another window over it leaves the
       // exposed strip compositing from a stale frame — the detached terminal shows corrupted /
@@ -97,6 +99,7 @@ async function createWindow(): Promise<void> {
   // short delay later, the coordinator shows it. See WindowShowCoordinator.
   const showCoordinator = new WindowShowCoordinator(
     () => {
+      if (isE2ERun) return
       if (state.isMaximized) mainWindow.maximize()
       mainWindow.show()
     },
@@ -198,11 +201,23 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(async () => {
+    installE2ENetworkGuard(session.defaultSession)
     // Set app user model id for windows
     electronApp.setAppUserModelId('com.multiagent.app')
 
     // F12 opens DevTools in both dev and packaged builds
     app.on('browser-window-created', (_, window) => {
+      if (isE2ERun) {
+        window.webContents.setWindowOpenHandler((details) => {
+          openExternalUrl(details.url)
+          return { action: 'deny' }
+        })
+        window.webContents.on('will-navigate', (event, url) => {
+          if (url === window.webContents.getURL() || !shouldBlockE2EUrl(url)) return
+          event.preventDefault()
+          if (/^(?:https?|mailto):/i.test(url)) openExternalUrl(url)
+        })
+      }
       // Do not use @electron-toolkit/utils' watchWindowShortcuts here. In a
       // packaged build it prevents Ctrl+R in before-input-event, which stops
       // terminal PTYs from receiving the control byte used by dotnet watch.

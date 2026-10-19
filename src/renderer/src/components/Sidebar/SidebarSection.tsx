@@ -120,7 +120,7 @@ export function SidebarSection({
         </button>
 
         {renaming ? (
-          <input
+          <input className="ui-control"
             ref={inputRef}
             value={renameValue ?? ''}
             onChange={(e) => onRenameChange?.(e.target.value)}

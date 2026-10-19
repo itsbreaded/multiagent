@@ -54,7 +54,7 @@ export function StatusDot({ status, detail, disconnected = false }: StatusDotPro
         height: 7,
         borderRadius: '50%',
         backgroundColor: disconnected ? 'transparent' : COLOR[status],
-        border: disconnected ? '1px solid #7b8188' : undefined,
+        border: disconnected ? `1px solid ${ui.color.statusDisconnected}` : undefined,
         flexShrink: 0,
         display: 'inline-block',
         // Breathe off the agent/shell icon it sits next to (PaneHeader + Sidebar both).

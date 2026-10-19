@@ -140,9 +140,9 @@ export function SessionBrowser(): JSX.Element {
   }
 
   function statusColor(s: Session): string {
-    if (!s.cwdExists) return '#f87171'
-    if (s.status === 'live-attached') return '#4ade80'
-    return '#6b7280'
+    if (!s.cwdExists) return ui.color.danger
+    if (s.status === 'live-attached') return ui.color.accent
+    return ui.color.textMuted
   }
 
   async function repairProjectDirectory(session: Session, dir: string): Promise<void> {
@@ -192,12 +192,12 @@ export function SessionBrowser(): JSX.Element {
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '12px 16px',
-            borderBottom: '1px solid #2a2b2e',
+            borderBottom: `1px solid ${ui.color.border}`,
             flexShrink: 0,
           }}
         >
-          <span style={{ fontSize: 14, fontWeight: 600, color: '#d4d4d4' }}>Session Browser</span>
-          <span style={{ fontSize: 11, color: '#4a4b4e' }}>ESC to close</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: ui.color.textSubtle }}>Session Browser</span>
+          <span style={{ fontSize: 11, color: ui.color.textDim }}>ESC to close</span>
         </div>
 
         {/* Body */}
@@ -206,14 +206,14 @@ export function SessionBrowser(): JSX.Element {
           <div
             style={{
               width: 200,
-              borderRight: '1px solid #2a2b2e',
+              borderRight: `1px solid ${ui.color.border}`,
               display: 'flex',
               flexDirection: 'column',
               flexShrink: 0,
             }}
           >
             <div style={{ padding: '8px 8px 0' }}>
-              <input
+              <input className="ui-control"
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -221,13 +221,12 @@ export function SessionBrowser(): JSX.Element {
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  backgroundColor: '#141517',
-                  border: '1px solid #2a2b2e',
+                  backgroundColor: ui.color.input,
+                  border: `1px solid ${ui.color.border}`,
                   borderRadius: 5,
-                  color: '#d4d4d4',
+                  color: ui.color.textSubtle,
                   fontSize: 12,
-                  outline: 'none',
-                  boxSizing: 'border-box',
+                      boxSizing: 'border-box',
                 }}
               />
             </div>
@@ -237,7 +236,7 @@ export function SessionBrowser(): JSX.Element {
               <ModeButton active={mode === 'deep'} onClick={() => setMode('deep')}>Deep</ModeButton>
             </div>
             {mode === 'deep' && deepSearching && (
-              <div style={{ padding: '0 8px 4px', fontSize: 10, color: '#4a4b4e' }}>Searching…</div>
+              <div style={{ padding: '0 8px 4px', fontSize: 10, color: ui.color.textDim }}>Searching…</div>
             )}
             <div className="dark-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
               {projects.map((proj) => (
@@ -248,13 +247,13 @@ export function SessionBrowser(): JSX.Element {
                     display: 'block',
                     width: '100%',
                     padding: '7px 12px',
-                    background: activeProject === proj ? '#242528' : 'none',
+                    background: activeProject === proj ? ui.color.control : 'none',
                     border: 'none',
-                    borderLeft: activeProject === proj ? '2px solid #4ade80' : '2px solid transparent',
+                    borderLeft: activeProject === proj ? `2px solid ${ui.color.accent}` : '2px solid transparent',
                     textAlign: 'left',
                     cursor: 'pointer',
                     fontSize: 12,
-                    color: activeProject === proj ? '#d4d4d4' : '#6b7280',
+                    color: activeProject === proj ? ui.color.textSubtle : ui.color.textMuted,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -405,16 +404,16 @@ function DeepPane({
 }: DeepPaneProps): JSX.Element {
   if (!query.trim()) {
     return (
-      <div style={{ color: '#4a4b4e', fontSize: 12, padding: '20px 0' }}>
+      <div style={{ color: ui.color.textDim, fontSize: 12, padding: '20px 0' }}>
         Type to search across all transcript content.
       </div>
     )
   }
   if (searching && grouped.size === 0) {
-    return <div style={{ color: '#4a4b4e', fontSize: 12, padding: '20px 0' }}>Searching transcripts…</div>
+    return <div style={{ color: ui.color.textDim, fontSize: 12, padding: '20px 0' }}>Searching transcripts…</div>
   }
   if (!searching && grouped.size === 0) {
-    return <div style={{ color: '#4a4b4e', fontSize: 12, padding: '20px 0' }}>No matches found.</div>
+    return <div style={{ color: ui.color.textDim, fontSize: 12, padding: '20px 0' }}>No matches found.</div>
   }
 
   return (
@@ -480,11 +479,11 @@ function ProjectHeader({ proj, cwd, hasSevered, statusLabel, statusColor, sessio
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <div style={{ minWidth: 0 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 14, fontWeight: 600, color: '#d4d4d4' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 14, fontWeight: 600, color: ui.color.textSubtle }}>
             {hasSevered && <MissingDirectoryMark />}
             <span>{proj.split('/').pop()}</span>
           </span>
-          <span style={{ fontSize: 11, color: '#4a4b4e', marginLeft: 8 }}>{cwd}</span>
+          <span style={{ fontSize: 11, color: ui.color.textDim, marginLeft: 8 }}>{cwd}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           {onRepair && <ActionButton onClick={onRepair}>Repair directory</ActionButton>}
@@ -493,7 +492,7 @@ function ProjectHeader({ proj, cwd, hasSevered, statusLabel, statusColor, sessio
           </span>
         </div>
       </div>
-      <div style={{ fontSize: 11, color: '#4a4b4e', marginBottom: 8 }}>
+      <div style={{ fontSize: 11, color: ui.color.textDim, marginBottom: 8 }}>
         {sessionCount} session{sessionCount !== 1 ? 's' : ''} - last active {formatRelativeTime(lastActivity)} ago
       </div>
     </>
@@ -518,11 +517,11 @@ function DeepResultRow({ result, query, isExpanded, onToggle, onResumeSplit, onR
   return (
     <div
       style={{
-        border: '1px solid #2a2b2e',
+        border: `1px solid ${ui.color.border}`,
         borderRadius: 6,
         marginBottom: 4,
         overflow: 'hidden',
-        backgroundColor: isExpanded ? '#1e2022' : '#141517',
+        backgroundColor: isExpanded ? ui.color.panelRaised : ui.color.input,
       }}
     >
       <button
@@ -544,8 +543,8 @@ function DeepResultRow({ result, query, isExpanded, onToggle, onResumeSplit, onR
             width: 7,
             height: 7,
             borderRadius: '50%',
-            backgroundColor: session.status === 'live-attached' ? '#4ade80' : 'transparent',
-            border: session.status !== 'live-attached' ? '1.5px solid #6b7280' : 'none',
+            backgroundColor: session.status === 'live-attached' ? ui.color.accent : 'transparent',
+            border: session.status !== 'live-attached' ? `1.5px solid ${ui.color.textMuted}` : 'none',
             flexShrink: 0,
           }}
         />
@@ -553,26 +552,26 @@ function DeepResultRow({ result, query, isExpanded, onToggle, onResumeSplit, onR
         <span style={{ width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <AgentIcon agentKind={session.agentKind} size={14} />
         </span>
-        <span style={{ fontSize: 11, color: '#4a4b4e', flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: ui.color.textDim, flexShrink: 0 }}>
           {formatRelativeTime(session.lastActivity)}
         </span>
-        <span style={{ flex: 1, fontSize: 12, color: '#d4d4d4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ flex: 1, fontSize: 12, color: ui.color.textSubtle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {session.firstMessage ?? session.sessionId}
         </span>
-        <span style={{ fontSize: 10, color: '#4ade80', flexShrink: 0, marginLeft: 4 }}>
+        <span style={{ fontSize: 10, color: ui.color.accent, flexShrink: 0, marginLeft: 4 }}>
           {matchCount} match{matchCount !== 1 ? 'es' : ''}
         </span>
       </button>
 
       {/* Snippets — always shown in deep mode */}
-      <div style={{ borderTop: '1px solid #2a2b2e' }}>
+      <div style={{ borderTop: `1px solid ${ui.color.border}` }}>
         {matches.map((match, i) => (
           <SnippetRow key={i} match={match} query={query} />
         ))}
       </div>
 
       {isExpanded && (
-        <div style={{ padding: '8px 12px 10px', borderTop: '1px solid #2a2b2e' }}>
+        <div style={{ padding: '8px 12px 10px', borderTop: `1px solid ${ui.color.border}` }}>
           <Row label="CWD" value={session.cwd} warning={!session.cwdExists ? 'Directory does not exist' : undefined} />
           <Row label="Agent" value={agentLabel(session.agentKind)} />
           {gitBranch && <Row label="Branch" value={gitBranch} />}
@@ -594,10 +593,10 @@ function DeepResultRow({ result, query, isExpanded, onToggle, onResumeSplit, onR
 }
 
 function roleBadgeColor(role: string): string {
-  if (role === 'user') return '#60a5fa'
-  if (role === 'assistant') return '#4ade80'
-  if (role === 'tool' || role === 'system') return '#a78bfa'
-  return '#4a4b4e'
+  if (role === 'user') return ui.color.statusWorking
+  if (role === 'assistant') return ui.color.accent
+  if (role === 'tool' || role === 'system') return ui.color.sessionOpenCodeAccent
+  return ui.color.textDim
 }
 
 interface SnippetRowProps {
@@ -619,7 +618,7 @@ function SnippetRow({ match, query }: SnippetRowProps): JSX.Element {
     content = (
       <>
         {before}
-        <mark style={{ backgroundColor: 'rgba(250, 204, 21, 0.25)', color: '#facc15', borderRadius: 2 }}>
+        <mark style={{ backgroundColor: ui.color.warningSelectionSurface, color: ui.color.warningStrong, borderRadius: 2 }}>
           {highlight}
         </mark>
         {after}
@@ -635,7 +634,7 @@ function SnippetRow({ match, query }: SnippetRowProps): JSX.Element {
         display: 'flex',
         gap: 8,
         padding: '5px 10px',
-        borderBottom: '1px solid #1e1f22',
+        borderBottom: `1px solid ${ui.color.surfaceInset}`,
         alignItems: 'flex-start',
       }}
     >
@@ -654,11 +653,11 @@ function SnippetRow({ match, query }: SnippetRowProps): JSX.Element {
         {match.role}
       </span>
       {match.timestamp && (
-        <span style={{ fontSize: 10, color: '#3a3b3e', flexShrink: 0, marginTop: 1 }}>
+        <span style={{ fontSize: 10, color: ui.color.textFaint, flexShrink: 0, marginTop: 1 }}>
           {new Date(match.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
       )}
-      <span style={{ fontSize: 11, color: '#8a8b8e', lineHeight: 1.5, wordBreak: 'break-word', flex: 1 }}>
+      <span style={{ fontSize: 11, color: ui.color.textUnavailable, lineHeight: 1.5, wordBreak: 'break-word', flex: 1 }}>
         {content}
       </span>
     </div>
@@ -676,17 +675,17 @@ interface SessionBrowserRowProps {
 }
 
 function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onResumeNewTab }: SessionBrowserRowProps): JSX.Element {
-  const statusDotColor = session.status === 'live-attached' ? '#4ade80' : '#6b7280'
+  const statusDotColor = session.status === 'live-attached' ? ui.color.accent : ui.color.textMuted
   const gitBranch = displayGitBranch(session.gitBranch)
 
   return (
     <div
       style={{
-        border: '1px solid #2a2b2e',
+        border: `1px solid ${ui.color.border}`,
         borderRadius: 6,
         marginBottom: 4,
         overflow: 'hidden',
-        backgroundColor: isExpanded ? '#1e2022' : '#141517',
+        backgroundColor: isExpanded ? ui.color.panelRaised : ui.color.input,
       }}
     >
       <button
@@ -718,14 +717,14 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
         <span style={{ width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <AgentIcon agentKind={session.agentKind} size={14} />
         </span>
-        <span style={{ fontSize: 11, color: '#4a4b4e', flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: ui.color.textDim, flexShrink: 0 }}>
           {formatRelativeTime(session.lastActivity)}
         </span>
         <span
           style={{
             flex: 1,
             fontSize: 12,
-            color: '#d4d4d4',
+            color: ui.color.textSubtle,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -736,7 +735,7 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
       </button>
 
       {isExpanded && (
-        <div style={{ padding: '8px 12px 10px', borderTop: '1px solid #2a2b2e' }}>
+        <div style={{ padding: '8px 12px 10px', borderTop: `1px solid ${ui.color.border}` }}>
           <Row label="CWD" value={session.cwd} warning={!session.cwdExists ? 'Directory does not exist' : undefined} />
           <Row label="Agent" value={agentLabel(session.agentKind)} />
           {gitBranch && <Row label="Branch" value={gitBranch} />}
@@ -762,11 +761,11 @@ function SessionBrowserRow({ session, isExpanded, onToggle, onResumeSplit, onRes
 function Row({ label, value, warning }: { label: string; value: string; warning?: string }): JSX.Element {
   return (
     <div style={{ display: 'flex', gap: 8, marginBottom: 4, fontSize: 11 }}>
-      <span style={{ color: '#4a4b4e', flexShrink: 0, minWidth: 90 }}>{label}</span>
-      <span style={{ color: warning ? '#f87171' : '#a0a0a0', wordBreak: 'break-all' }}>
+      <span style={{ color: ui.color.textDim, flexShrink: 0, minWidth: 90 }}>{label}</span>
+      <span style={{ color: warning ? ui.color.danger : ui.color.textNeutral, wordBreak: 'break-all' }}>
         {warning && <MissingDirectoryMark />}
         <span style={{ marginLeft: warning ? 5 : 0 }}>{value}</span>
-        {warning && <span style={{ marginLeft: 8, color: '#f87171' }}>{warning}</span>}
+        {warning && <span style={{ marginLeft: 8, color: ui.color.danger }}>{warning}</span>}
       </span>
     </div>
   )
@@ -783,8 +782,8 @@ function MissingDirectoryMark(): JSX.Element {
         width: 13,
         height: 13,
         borderRadius: '50%',
-        border: '1px solid #f87171',
-        color: '#f87171',
+        border: `1px solid ${ui.color.danger}`,
+        color: ui.color.danger,
         fontSize: 10,
         fontWeight: 800,
         lineHeight: '13px',
@@ -811,21 +810,21 @@ function ActionButton({
       disabled={disabled}
       style={{
         padding: '4px 10px',
-        backgroundColor: '#242528',
-        border: '1px solid #2a2b2e',
+        backgroundColor: ui.color.control,
+        border: `1px solid ${ui.color.border}`,
         borderRadius: 4,
-        color: disabled ? '#4a4b4e' : '#c9cdd1',
+        color: disabled ? ui.color.textDim : ui.color.text,
         fontSize: 11,
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.65 : 1,
       }}
       onMouseEnter={(e) => {
         if (disabled) return
-        ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#2e2f33'
+        ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.controlHover
       }}
       onMouseLeave={(e) => {
         if (disabled) return
-        ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = '#242528'
+        ;(e.currentTarget as HTMLButtonElement).style.backgroundColor = ui.color.control
       }}
     >
       {children}
@@ -843,11 +842,11 @@ function ModeButton({ active, onClick, children }: { active: boolean; onClick: (
         fontSize: 10,
         fontWeight: 600,
         letterSpacing: '0.04em',
-        background: active ? '#242528' : 'none',
+        background: active ? ui.color.control : 'none',
         border: '1px solid',
-        borderColor: active ? '#4ade80' : '#2a2b2e',
+        borderColor: active ? ui.color.accent : ui.color.border,
         borderRadius: 4,
-        color: active ? '#4ade80' : '#4a4b4e',
+        color: active ? ui.color.accent : ui.color.textDim,
         cursor: 'pointer',
       }}
     >

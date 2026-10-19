@@ -902,7 +902,7 @@ function PaneRow({
           borderRadius: 4,
           cursor: renaming ? 'default' : 'pointer',
           backgroundColor: isFocused ? ui.color.control : hovered ? ui.color.panelRaised : 'transparent',
-          outline: isSwapTarget ? '2px solid #4ade80' : 'none',
+          outline: isSwapTarget ? `2px solid ${ui.color.accent}` : 'none',
           outlineOffset: -1,
           transition: 'background-color 0.1s',
           position: 'relative',
@@ -931,7 +931,7 @@ function PaneRow({
           </span>
         )}
         {renaming ? (
-          <input
+          <input className="ui-control"
             ref={renameInputRef}
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
@@ -950,7 +950,6 @@ function PaneRow({
               color: ui.color.text,
               fontSize: 12,
               padding: '1px 4px',
-              outline: 'none',
               minWidth: 0,
             }}
           />

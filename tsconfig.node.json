@@ -5,6 +5,7 @@
     "playwright.config.ts",
     "vitest.config.ts",
     "e2e/**/*",
+    "src/renderer/src/styles/theme.ts",
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*"

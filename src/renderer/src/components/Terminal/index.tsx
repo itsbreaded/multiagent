@@ -16,14 +16,10 @@ import { mouseEventsRequireAltForPane, scrollOnEraseInDisplayForPane } from '../
 import { applyBackend } from '../../terminal/rendering/backends'
 import { getCapabilities } from '../../terminal/rendering/capabilities'
 import { DirPicker } from '../DirPicker'
-import { ui } from '../../styles/theme'
+import { readThemeColor, ui } from '../../styles/theme'
 import { createShellPty } from './createShellPty'
 
-const XTERM_THEME = {
-  background: '#0e1011',
-  foreground: '#d4d4d4',
-  cursor: '#4ade80',
-  cursorAccent: '#0e1011',
+const XTERM_ANSI_THEME = {
   selectionBackground: '#264f78',
   black: '#1e1e1e',
   red: '#f44747',
@@ -40,7 +36,17 @@ const XTERM_THEME = {
   brightBlue: '#569cd6',
   brightMagenta: '#c586c0',
   brightCyan: '#4ec9b0',
-  brightWhite: '#e2e4e6',
+}
+
+function xtermTheme(): typeof XTERM_ANSI_THEME & Pick<import('@xterm/xterm').ITheme, 'background' | 'foreground' | 'cursor' | 'cursorAccent' | 'brightWhite'> {
+  return {
+    ...XTERM_ANSI_THEME,
+    background: readThemeColor('appBg'),
+    foreground: readThemeColor('textSubtle'),
+    cursor: readThemeColor('accent'),
+    cursorAccent: readThemeColor('appBg'),
+    brightWhite: readThemeColor('textStrong'),
+  }
 }
 
 const recoveryButtonStyle: React.CSSProperties = {
@@ -186,12 +192,13 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
   // The xterm is only truly disposed when the pane is explicitly closed.
   useEffect(() => {
     if (!containerRef.current) return
+    let refreshXtermTheme: (() => void) | undefined
 
     const createXterm = (): { xterm: XTerm; fitAddon: FitAddon; backendHandle: { dispose(): void } } => {
       // Keep the xterm caret visible in agent input areas. xterm composites a
       // transparent cursor against the terminal background, which makes it
       // effectively black on Claude's dark prompt row.
-      const theme = XTERM_THEME
+      const theme = xtermTheme()
 
       const storeState = useSettingsStore.getState()
       const openExternalLink = createPrimaryLinkActivator((_event, uri) => {
@@ -240,13 +247,16 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       const result = createXterm()
       return { xterm: result.xterm, fitAddon: result.fitAddon, backendHandle: result.backendHandle }
     })
+    refreshXtermTheme = (): void => { entry.xterm.options.theme = xtermTheme() }
+    refreshXtermTheme()
+    document.documentElement.addEventListener('ui-theme-change', refreshXtermTheme)
     // Attach the wrapper div (which xterm opened into) to our container.
     xtermRegistry.attach(pane.id, containerRef.current)
 
     const { xterm, fitAddon } = entry
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
-    xterm.options.theme = XTERM_THEME
+    xterm.options.theme = xtermTheme()
     xterm.options.cursorBlink = pane.paneType !== 'agent'
     // The registry can return an instance created before this pane's metadata
     // settled (or a previously promoted shell), so keep the option in sync on
@@ -404,6 +414,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
     return () => {
       if (pendingFit !== null) cancelAnimationFrame(pendingFit)
       if (delayedFit !== null) clearTimeout(delayedFit)
+      if (refreshXtermTheme) document.documentElement.removeEventListener('ui-theme-change', refreshXtermTheme)
       container.removeEventListener('paste', blockPaste, true)
       ro.disconnect()
       xtermRef.current = null
@@ -651,7 +662,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         minHeight: 0,
         minWidth: 0,
         overflow: 'hidden',
-        backgroundColor: '#0e1011',
+        backgroundColor: ui.color.appBg,
         position: 'relative',
       }}
       onContextMenu={onContextMenu}
@@ -662,7 +673,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           style={{
             position: 'absolute', inset: 0, zIndex: 21,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 16, backgroundColor: 'rgba(14, 16, 17, 0.82)',
+            padding: 16, backgroundColor: ui.color.terminalMenuBackdropStrong,
             color: hostRecovery.state === 'failed' ? ui.color.danger : ui.color.textMuted,
             fontSize: 12, textAlign: 'center',
           }}
@@ -692,8 +703,8 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         <div style={{
           position: 'absolute', inset: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          backgroundColor: '#0e1011', zIndex: 1,
-          color: '#4a4b4e', fontSize: 12, pointerEvents: 'none',
+          backgroundColor: ui.color.appBg, zIndex: 1,
+          color: ui.color.textDim, fontSize: 12, pointerEvents: 'none',
         }}>
           {pane.paneType === 'agent' ? `Starting ${agentLabel(pane.agentKind ?? 'claude')} session...` : 'Connecting...'}
         </div>
@@ -701,9 +712,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
       {status === 'error' && errorMsg && !hostRecovery && (
         <div style={{
           position: 'absolute', top: 8, left: 8, right: 8,
-          padding: '6px 8px', backgroundColor: '#1e1010',
-          border: '1px solid #3a1010', borderRadius: 4,
-          fontSize: 11, color: '#f87171', zIndex: 2,
+          padding: '6px 8px', backgroundColor: ui.color.terminalMenuErrorSurface,
+          border: `1px solid ${ui.color.terminalMenuErrorBorder}`, borderRadius: 4,
+          fontSize: 11, color: ui.color.danger, zIndex: 2,
           display: 'flex', alignItems: 'center', gap: 8,
         }}>
           <span style={{ flex: 1 }}>{errorMsg}</span>
@@ -712,9 +723,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
               data-window-drag-exempt="true"
               onClick={() => { void resumeAgentPane(pane.id) }}
               style={{
-                backgroundColor: '#2d6cdf',
-                border: '1px solid #3979ee',
-                color: '#ffffff',
+                backgroundColor: ui.color.terminalMenuAction,
+                border: `1px solid ${ui.color.terminalMenuActionHover}`,
+                color: ui.color.textOnAccent,
                 borderRadius: 4,
                 padding: '4px 8px',
                 fontSize: 11,
@@ -733,9 +744,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
                 setRepairPickerOpen(true)
               }}
               style={{
-                backgroundColor: '#24272a',
-                border: '1px solid #3a3f44',
-                color: '#d4d4d4',
+                backgroundColor: ui.color.terminalMenuSurface,
+                border: `1px solid ${ui.color.terminalMenuSurfaceHover}`,
+                color: ui.color.textSubtle,
                 borderRadius: 4,
                 padding: '4px 8px',
                 fontSize: 11,
@@ -751,9 +762,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
               data-window-drag-exempt="true"
               onClick={() => startNewAgentInPane(pane.id)}
               style={{
-                backgroundColor: '#24272a',
-                border: '1px solid #3a3f44',
-                color: '#d4d4d4',
+                backgroundColor: ui.color.terminalMenuSurface,
+                border: `1px solid ${ui.color.terminalMenuSurfaceHover}`,
+                color: ui.color.textSubtle,
                 borderRadius: 4,
                 padding: '4px 8px',
                 fontSize: 11,
@@ -773,7 +784,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: 'rgba(14, 16, 17, 0.72)',
+          backgroundColor: ui.color.terminalMenuBackdropSoft,
           zIndex: 20,
           padding: 16,
           pointerEvents: 'auto',
@@ -783,17 +794,17 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
         >
           <div style={{
             width: 'min(520px, 100%)',
-            backgroundColor: '#17191b',
-            border: '1px solid #2a2d30',
+            backgroundColor: ui.color.terminalMenuSurfaceDeep,
+            border: `1px solid ${ui.color.terminalMenuBorder}`,
             borderRadius: 6,
-            boxShadow: '0 12px 36px rgba(0,0,0,0.45)',
+            boxShadow: ui.shadow.terminalMenu,
             padding: 16,
-            color: '#d4d4d4',
+            color: ui.color.textSubtle,
           }}>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
               Agent session disconnected
             </div>
-            <div style={{ color: '#9da3aa', fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
+            <div style={{ color: ui.color.mediaPlaceholder, fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
               The {agentLabel(pane.agentKind ?? 'claude')} process has exited. The terminal output is preserved, but this pane is no longer connected to a live agent.
             </div>
             <div style={{
@@ -804,19 +815,19 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
               lineHeight: 1.4,
               marginBottom: 14,
             }}>
-              <span style={{ color: '#6f7780' }}>Agent</span>
+              <span style={{ color: ui.color.terminalMenuMuted }}>Agent</span>
               <span>{agentLabel(pane.agentKind ?? 'claude')}</span>
-              <span style={{ color: '#6f7780' }}>Status</span>
+              <span style={{ color: ui.color.terminalMenuMuted }}>Status</span>
               <span>{exitDescription}</span>
               {disconnectedAt && (
                 <>
-                  <span style={{ color: '#6f7780' }}>Disconnected</span>
+                  <span style={{ color: ui.color.terminalMenuMuted }}>Disconnected</span>
                   <span>{disconnectedAt}</span>
                 </>
               )}
-              <span style={{ color: '#6f7780' }}>Directory</span>
+              <span style={{ color: ui.color.terminalMenuMuted }}>Directory</span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pane.cwd}>{pane.cwd}</span>
-              <span style={{ color: '#6f7780' }}>Session</span>
+              <span style={{ color: ui.color.terminalMenuMuted }}>Session</span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pane.sessionId}>
                 {pane.sessionId ?? 'No session id captured'}
               </span>
@@ -824,9 +835,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
             {!pane.sessionId && (
               <div style={{
                 marginBottom: 12,
-                color: '#fbbf24',
-                backgroundColor: '#211a08',
-                border: '1px solid #49360b',
+                color: ui.color.statusWaiting,
+                backgroundColor: ui.color.terminalMenuWarningSurface,
+                border: `1px solid ${ui.color.terminalMenuWarningBorder}`,
                 borderRadius: 4,
                 padding: '7px 9px',
                 fontSize: 12,
@@ -837,9 +848,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
             {errorMsg && (
               <div style={{
                 marginBottom: 12,
-                color: '#f87171',
-                backgroundColor: '#1e1010',
-                border: '1px solid #3a1010',
+                color: ui.color.danger,
+                backgroundColor: ui.color.terminalMenuErrorSurface,
+                border: `1px solid ${ui.color.terminalMenuErrorBorder}`,
                 borderRadius: 4,
                 padding: '7px 9px',
                 fontSize: 12,
@@ -853,9 +864,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
                   data-window-drag-exempt="true"
                   onClick={() => resumeAgentPane(pane.id)}
                   style={{
-                    backgroundColor: '#2d6cdf',
-                    border: '1px solid #3979ee',
-                    color: '#ffffff',
+                    backgroundColor: ui.color.terminalMenuAction,
+                    border: `1px solid ${ui.color.terminalMenuActionHover}`,
+                    color: ui.color.textOnAccent,
                     borderRadius: 4,
                     padding: '7px 12px',
                     fontSize: 12,
@@ -873,9 +884,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
                     setRepairPickerOpen(true)
                   }}
                   style={{
-                    backgroundColor: '#24272a',
-                    border: '1px solid #3a3f44',
-                    color: '#d4d4d4',
+                    backgroundColor: ui.color.terminalMenuSurface,
+                    border: `1px solid ${ui.color.terminalMenuSurfaceHover}`,
+                    color: ui.color.textSubtle,
                     borderRadius: 4,
                     padding: '7px 12px',
                     fontSize: 12,
@@ -889,9 +900,9 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
                 data-window-drag-exempt="true"
                 onClick={() => startNewAgentInPane(pane.id)}
                 style={{
-                  backgroundColor: '#24272a',
-                  border: '1px solid #3a3f44',
-                  color: '#d4d4d4',
+                  backgroundColor: ui.color.terminalMenuSurface,
+                  border: `1px solid ${ui.color.terminalMenuSurfaceHover}`,
+                  color: ui.color.textSubtle,
                   borderRadius: 4,
                   padding: '7px 12px',
                   fontSize: 12,
@@ -905,8 +916,8 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
                 onClick={() => closePane(pane.id)}
                 style={{
                   backgroundColor: 'transparent',
-                  border: '1px solid #3a3f44',
-                  color: '#b8bec5',
+                  border: `1px solid ${ui.color.terminalMenuSurfaceHover}`,
+                  color: ui.color.terminalMenuText,
                   borderRadius: 4,
                   padding: '7px 12px',
                   fontSize: 12,
@@ -952,13 +963,13 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
             position: 'fixed',
             top: contextMenu.y,
             left: contextMenu.x,
-            backgroundColor: '#1e2022',
-            border: '1px solid #2a2b2e',
+            backgroundColor: ui.color.panelRaised,
+            border: `1px solid ${ui.color.border}`,
             borderRadius: 6,
             padding: '4px 0',
             zIndex: 1000,
             minWidth: 140,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            boxShadow: ui.shadow.terminalMenu,
             fontSize: 13,
           }}
           onClick={(e) => e.stopPropagation()}
@@ -969,7 +980,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
             style={{
               display: 'block', width: '100%', textAlign: 'left',
               padding: '6px 14px', background: 'none', border: 'none',
-              color: contextMenu.hasSelection ? '#d4d4d4' : '#4a4b4e',
+              color: contextMenu.hasSelection ? ui.color.textSubtle : ui.color.textDim,
               cursor: contextMenu.hasSelection ? 'pointer' : 'default',
               fontSize: 13,
             }}
@@ -982,7 +993,7 @@ export const Terminal = React.memo(function Terminal({ pane, layoutKey }: Termin
             style={{
               display: 'block', width: '100%', textAlign: 'left',
               padding: '6px 14px', background: 'none', border: 'none',
-              color: '#d4d4d4', cursor: 'pointer', fontSize: 13,
+              color: ui.color.textSubtle, cursor: 'pointer', fontSize: 13,
             }}
           >
             Paste

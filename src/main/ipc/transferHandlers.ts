@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { isE2ERun } from '../e2eIsolation'
 import type { PaneSplitTransferPayload, PaneSwapTransferPayload, PaneTransferPayload, SpawnInTabPayload, Tab } from '../../shared/types'
 import type { WindowManager } from '../window/WindowManager'
 import type { IpcRegistrar } from './ipcRegistrar'
@@ -314,7 +315,7 @@ export function registerTransferHandlers(deps: {
         flushDirectOutput(pane.ptyId)
       }
       // Raise and focus the target window (cross-window split follows the pane — spec decision 4)
-      if (sourceWindowId !== targetWindowId && !tgtWin.isDestroyed()) {
+      if (!isE2ERun && sourceWindowId !== targetWindowId && !tgtWin.isDestroyed()) {
         tgtWin.show()
         tgtWin.focus()
       }

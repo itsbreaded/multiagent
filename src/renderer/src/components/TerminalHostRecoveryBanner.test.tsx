@@ -34,6 +34,10 @@ describe('TerminalHostRecoveryBanner', () => {
       },
     })
     render(<TerminalHostRecoveryBanner />)
+    const banner = screen.getByRole('status')
+    expect(banner.style.backgroundColor).toBe('var(--ui-color-panel)')
+    expect(banner.style.borderBottom).toContain('var(--ui-color-danger)')
+    expect(banner.style.color).toBe('var(--ui-color-danger)')
     fireEvent.click(screen.getByRole('button', { name: 'Restart MultiAgent' }))
     expect(ipc.invoke).toHaveBeenCalledWith('app:restart')
   })

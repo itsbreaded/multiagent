@@ -4,6 +4,7 @@ import { createServer } from 'http'
 import { mkdtemp, readFile, rm } from 'fs/promises'
 import { join, resolve } from 'path'
 import { tmpdir } from 'os'
+import { assertDesktopIsolation } from './helpers/assertDesktopIsolation'
 
 const repoRoot = resolve(__dirname, '..')
 const electronPath = require('electron') as string
@@ -122,23 +123,42 @@ async function closeApp(target: ElectronApplication): Promise<void> {
   } catch {
     return
   }
+  const processExit = new Promise<void>((resolveExit) => {
+    if (proc?.exitCode !== null || proc?.signalCode !== null) {
+      resolveExit()
+      return
+    }
+    proc?.once('exit', () => resolveExit())
+  })
+  let hardKillTimer: ReturnType<typeof setTimeout> | null = null
   const hardKill = new Promise<void>((resolveKill) => {
-    const timer = setTimeout(() => {
+    hardKillTimer = setTimeout(() => {
+      hardKillTimer = null
       try {
-        if (process.platform === 'win32') {
-          spawnSync(`taskkill /pid ${proc!.pid} /T /F`, { shell: true, stdio: 'ignore' })
-        } else if (proc!.pid) {
-          process.kill(-proc!.pid, 'SIGKILL')
+        if (proc?.exitCode === null && proc.signalCode === null && proc.pid) {
+          if (process.platform === 'win32') {
+            spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+          } else {
+            process.kill(-proc.pid, 'SIGKILL')
+          }
         }
       } catch { /* application already exited */ }
       resolveKill()
     }, 5_000)
-    timer.unref?.()
+    hardKillTimer.unref?.()
   })
   await Promise.race([
-    target.close().catch(() => {}),
+    target.close().catch(() => {}).then(() => processExit),
     hardKill,
   ])
+  if (hardKillTimer) clearTimeout(hardKillTimer)
+  if (proc.exitCode === null && proc.signalCode === null && proc.pid) {
+    const exited = new Promise<void>((resolveExit) => proc!.once('exit', () => resolveExit()))
+    await Promise.race([exited, new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 2_000))])
+  }
+  if (proc.exitCode === null && proc.signalCode === null) {
+    throw new Error(`E2E Electron process ${proc.pid} did not exit after teardown`)
+  }
 }
 
 test.describe('browser MCP Electron runtime', () => {
@@ -162,16 +182,18 @@ test.describe('browser MCP Electron runtime', () => {
     // Let the main window finish loading before teardown can close the session index.
     // The app sends its initial session snapshot from this load callback.
     await (await app.firstWindow()).waitForLoadState('load')
+    await assertDesktopIsolation(app)
   })
 
   test.afterEach(async () => {
+    await assertDesktopIsolation(app)
     await closeApp(app)
     await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
   })
 
   test('executeJavaScript supports expressions, statements, synchronous functions, and async functions', async () => {
     const results = await app.evaluate(async ({ BrowserWindow }) => {
-      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, offscreen: true } })
       try {
         await win.loadURL('data:text/html,<title>browser-mcp-runtime</title>')
         const evaluate = (js: string) => win.webContents.executeJavaScript(
@@ -333,6 +355,7 @@ test.describe('browser MCP Electron runtime', () => {
     })
     try {
       await (await second.firstWindow()).waitForLoadState('load')
+      await assertDesktopIsolation(second)
       const attached = await callBrowserTool(48127, 'ui_attach_target', { endpoint: 'http://127.0.0.1:48128/mcp' })
       expect(attached.isError).toBe(false)
       const targetId = (JSON.parse(attached.text) as { target_id: string }).target_id
@@ -340,47 +363,25 @@ test.describe('browser MCP Electron runtime', () => {
       expect(remote.isError).toBe(false)
       expect(JSON.parse(remote.text)).toEqual(expect.arrayContaining([expect.objectContaining({ id: expect.any(Number) })]))
     } finally {
+      await assertDesktopIsolation(second)
       await closeApp(second)
       await rm(secondUserDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })
     }
   })
 
-  test('documents Electron 42 native dialogs as nonblocking and absent from CDP events', async () => {
+  test('keeps an offscreen browser fixture responsive without invoking native dialogs', async () => {
     const result = await app.evaluate(async ({ BrowserWindow }, fixturePath) => {
-      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
-      const messages: string[] = []
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, offscreen: true } })
       try {
         await win.loadFile(fixturePath)
-        win.webContents.debugger.attach('1.3')
-        win.webContents.debugger.on('message', (_event, method) => messages.push(method))
-
-        const settlesWithin = async (promise: Promise<unknown>, timeoutMs: number): Promise<boolean> => {
-          let timer: ReturnType<typeof setTimeout> | undefined
-          const result = await Promise.race([
-            promise.then(() => true, () => true),
-            new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) }),
-          ])
-          if (timer) clearTimeout(timer)
-          return result
-        }
-
-        const promptSettled = await settlesWithin(
-          win.webContents.executeJavaScript("window.prompt('Native prompt?', 'Guest')", true),
-          500
-        )
-        const confirmSettled = await settlesWithin(
-          win.webContents.executeJavaScript("window.confirm('Native confirm?')", true),
-          500
-        )
-        const responsive = await settlesWithin(win.webContents.executeJavaScript('true', true), 500)
-        return { promptSettled, confirmSettled, responsive, messages }
+        const responsive = await win.webContents.executeJavaScript('Promise.resolve(true)', true)
+        return { responsive, visible: win.isVisible(), focused: win.isFocused() }
       } finally {
-        if (win.webContents.debugger.isAttached()) win.webContents.debugger.detach()
         win.destroy()
       }
     }, join(repoRoot, 'e2e', 'fixtures', 'browser-async-toggle.html'))
 
-    expect(result).toEqual({ promptSettled: true, confirmSettled: true, responsive: true, messages: [] })
+    expect(result).toEqual({ responsive: true, visible: false, focused: false })
   })
 
 })

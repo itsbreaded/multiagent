@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import React, { useEffect, useState } from 'react'
 import type { PaneLeaf, SplitDirection } from '../../../../shared/types'
 import { usePanesStore } from '../../store/panes'
@@ -161,8 +162,8 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
           style={{
             position: 'absolute',
             pointerEvents: 'none',
-            backgroundColor: 'rgba(239, 68, 68, 0.10)',
-            border: '2px solid #ef4444',
+            backgroundColor: ui.color.dropDangerSurface,
+            border: `2px solid ${ui.color.dangerStrong}`,
             zIndex: 50,
             inset: 0,
           }}
@@ -173,8 +174,8 @@ export function PaneSplitDropTarget({ pane, children, overlayMode, targetWindowI
           style={{
             position: 'absolute',
             pointerEvents: 'none',
-            backgroundColor: 'rgba(74, 222, 128, 0.12)',
-            border: '2px solid #4ade80',
+            backgroundColor: ui.color.paneFocusSurface,
+            border: `2px solid ${ui.color.accent}`,
             zIndex: 50,
             ...zoneStyle(dropZone),
           }}

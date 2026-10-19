@@ -1,3 +1,4 @@
+import { ui } from '../../../styles/theme'
 import { useEffect, useState } from 'react'
 import {
   MAX_IDLE_AGENT_SUSPENSION_TIMEOUT_MINUTES,
@@ -34,14 +35,14 @@ export function IdleAgentSuspensionSetting(): JSX.Element {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <label style={checkStyle}>
-          <input
+          <input className="ui-control ui-control-checkbox"
             type="checkbox"
             checked={policy.enabled}
             onChange={(e) => setPolicy({ ...policy, enabled: e.target.checked })}
           />
           Enabled
         </label>
-        <input
+        <input className="ui-control"
           style={{ ...inputStyle, width: 68 }}
           inputMode="numeric"
           aria-label="Idle session timeout in minutes"
@@ -57,7 +58,7 @@ export function IdleAgentSuspensionSetting(): JSX.Element {
             }
           }}
         />
-        <span style={{ color: '#8b9097', fontSize: 11 }}>minutes</span>
+        <span style={{ color: ui.color.textDisabled, fontSize: 11 }}>minutes</span>
       </div>
     </SettingControlRow>
   )

@@ -28,7 +28,7 @@ export function AgentStatusScrapingSetting(): JSX.Element {
       description="Complementary error detector (on by default). Watches agent terminal output for canonical fatal-output signatures -- today, Codex provider-compat failures (e.g. unexpected status 4xx/5xx with a url, or API failed after N retries) that print to the terminal but emit no hook, so the badge would otherwise stay stuck on working. Feeds the same status reducer as the managed hooks; the two are independent and all on/off combinations are valid. Codex-only at launch; does not install any hooks or modify agent config."
     >
       <label style={checkStyle}>
-        <input type="checkbox" checked={value} onChange={(e) => setValue(e.target.checked)} />
+        <input className="ui-control ui-control-checkbox" type="checkbox" checked={value} onChange={(e) => setValue(e.target.checked)} />
         Enabled
       </label>
     </SettingControlRow>

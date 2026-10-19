@@ -25,7 +25,7 @@ Status badges and unanswered mentions share credentials but have different
 lifecycles. A badge lookup is read-only and runs only for initial appearance or
 an explicit per-folder/bulk refresh. It does not poll or mutate Jira. Mention
 discovery and refresh are also read-only; the only new Jira write is a comment
-created after an explicit **Post reply** action in the inbox. No status-badge
+created after an explicit **Reply** action in the inbox. No status-badge
 path may call that write operation.
 
 ## Status badge lookup
@@ -66,9 +66,9 @@ includes comment identity, author, timestamps,
 structured body, visibility, and the rule result needed to recompute answered
 state after edits or deletions. Issue status never answers a mention.
 
-Mention snapshots, local dismissals/snoozes, retry metadata, and reply-attempt
-outcomes live in additional tables in the existing `session-index.db`. The
-shared `ApplicationDatabase` coordinates schema version 3 with session tables
+Mention snapshots, local dismissals/snoozes/reactivations, retry metadata, and
+reply-attempt outcomes live in additional tables in the existing `session-index.db`.
+The shared `ApplicationDatabase` coordinates schema version 4 with session tables
 in one transaction. Jira cache clearing deletes fetched issue/comment evidence
 and staged scans while retaining the initial history anchor, local actions, and
 unresolved reply-attempt metadata. Removing the Jira credentials removes the
@@ -81,20 +81,18 @@ Background mention polling is optional, defaults off, and uses the saved
 5–240-minute interval. Startup, explicit refresh, and opening a stale inbox can
 also request a read-only scan. A Jira `Retry-After` deadline blocks immediate
 retries, including manual refresh. Snoozes store an absolute wake-up timestamp
-and can restore the local count without a network call.
+and can restore the local count without a network call. Any non-active mention can
+be explicitly made active again; that override is stored in the shared local database.
 
 Reply drafts exist only in renderer memory and are keyed by issue/comment for
-the verified account session. The main process rechecks the source comment and
-audience, validates structured recipients against users fetched from that
-issue, and records the attempt before sending. Supported group/role visibility
-is preserved; a missing Jira platform `visibility` field means the comment is
-unrestricted. Service Desk comments get their `public` flag from the request-
-comment API; replies carry that same public/internal audience and any group or
-role restriction. The created audience is re-read before the reply is confirmed.
-If audience metadata is absent or cannot be verified, the inbox keeps the Jira
-fallback. A confirmed response is fed through the same comment-classification
-rules. A timeout or malformed success response stays unknown and is never
-retried automatically. A successful reply does not advance the discovery
+the verified account session. The main process posts the supplied comment body
+directly to the selected issue. It does not look up the source mention, check
+mention state, inspect audience metadata, validate recipients against cached
+users, or refresh Jira before sending. It uses Jira's default comment audience
+for standard Jira comments and Service Desk issues.
+Reply-attempt bookkeeping is best-effort and cannot block the Jira write. A
+successful API response is reported as posted; a timeout may leave delivery
+uncertain, and the user can retry manually. Replies do not advance the discovery
 checkpoint. See Atlassian's [Issue comments API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
 and [Jira Service Management request comments API](https://developer.atlassian.com/cloud/jira/service-desk/rest/api-group-request/).
 
@@ -153,3 +151,20 @@ token to a read-only Jira account endpoint without saving the draft. A
 successful or failed test is shown inline and never blocks closing or saving the
 settings. Mention tracking and its optional polling controls are independent of
 the existing status-prefix list and badge lookups.
+
+## Mentions text controls and detail layout
+
+The Mentions inbox uses the shared renderer theme and native-control contract documented in
+[`ui-styling.md`](ui-styling.md). Its issue description fills the detail content column at
+the same width as the reply composer; the description keeps its own vertical scroll and
+resize affordance.
+
+Electron does not show a context menu by default. The Mentions root handles right-clicks on
+editable text inputs and textareas and on a selected read-only issue text range. It sends
+only the target kind, pointer coordinates, and action capability flags through
+`jira-mentions:show-text-context-menu`; field contents, the selected text, and clipboard
+contents never cross IPC. Main validates the requesting live window, reads only whether
+text is available for Paste, and opens the native role-based menu at the pointer location
+in that window. Editable controls offer Cut, Copy, Paste, and Select All as applicable;
+selected read-only issue text offers Copy. Other right-click targets keep their existing
+feature behavior. See Electron's [context-menu guide](https://www.electronjs.org/docs/latest/tutorial/context-menu).

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { installMockIpc } from '../../../../../tests/mockIpc'
 import type { JiraIssueSnapshot, JiraMentionsProjection } from '../../../../shared/jiraMentions'
@@ -105,8 +105,8 @@ describe('JiraMentions composer', () => {
     })
     render(<JiraMentions />)
 
-    const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ }) as HTMLTextAreaElement
-    expect(editor).toHaveAccessibleName('Reply to selected mention on APP-1')
+    const editor = screen.getByRole('textbox', { name: /Reply to ticket/ }) as HTMLTextAreaElement
+    expect(editor).toHaveAccessibleName('Reply to ticket APP-1')
     let contentHeight = 0
     Object.defineProperty(editor, 'scrollHeight', { configurable: true, get: () => contentHeight })
     expect(editor.style.height).toBe('95px')
@@ -158,9 +158,69 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     const search = screen.getByRole('textbox', { name: 'Search Jira mentions' })
-    const reply = screen.getByRole('textbox', { name: /Reply to selected mention/ })
-    expect(search).toHaveStyle({ outline: 'none', caretColor: ui.color.accent })
-    expect(reply).toHaveStyle({ outline: 'none', caretColor: ui.color.accent })
+    const reply = screen.getByRole('textbox', { name: /Reply to ticket/ })
+    expect(search).toHaveClass('ui-control')
+    expect(reply).toHaveClass('ui-control')
+  })
+
+  it('requests editable text actions without sending field contents', () => {
+    prepareStore()
+    const ipc = installMockIpc()
+    render(<JiraMentions />)
+
+    const search = screen.getByRole('textbox', { name: 'Search Jira mentions' }) as HTMLInputElement
+    fireEvent.change(search, { target: { value: 'APP-1' } })
+    search.setSelectionRange(0, 3)
+    const contextEvent = createEvent.contextMenu(search, { clientX: 31, clientY: 47 })
+    fireEvent(search, contextEvent)
+
+    expect(contextEvent.defaultPrevented).toBe(true)
+    expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:show-text-context-menu', {
+      target: 'editable', x: 31, y: 47, canCut: true, canCopy: true, canSelectAll: true,
+    })
+  })
+
+  it('offers text actions for the nonempty number control when Chromium hides its selection range', () => {
+    prepareStore()
+    const ipc = installMockIpc()
+    useJiraMentionsStore.setState({
+      selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId },
+      detail,
+    })
+    render(<JiraMentions />)
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze' }))
+
+    const duration = screen.getByRole('spinbutton', { name: 'Snooze duration' }) as HTMLInputElement
+    const contextEvent = createEvent.contextMenu(duration, { clientX: 72, clientY: 88 })
+    fireEvent(duration, contextEvent)
+
+    expect(contextEvent.defaultPrevented).toBe(true)
+    expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:show-text-context-menu', {
+      target: 'editable', x: 72, y: 88, canCut: true, canCopy: true, canSelectAll: true,
+    })
+  })
+
+  it('requests Copy only for selected read-only mention text', () => {
+    prepareStore()
+    const ipc = installMockIpc()
+    useJiraMentionsStore.setState({
+      selected: { issueId: issue.issueId, incomingCommentId: incomingComment.commentId },
+      detail,
+    })
+    render(<JiraMentions />)
+
+    const paragraph = document.querySelector('.jira-mentions-comment-body p')
+    expect(paragraph).not.toBeNull()
+    const range = document.createRange()
+    range.selectNodeContents(paragraph!)
+    window.getSelection()?.addRange(range)
+    const contextEvent = createEvent.contextMenu(paragraph!, { clientX: 55, clientY: 72 })
+    fireEvent(paragraph!, contextEvent)
+
+    expect(contextEvent.defaultPrevented).toBe(true)
+    expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:show-text-context-menu', {
+      target: 'selection', x: 55, y: 72, canCut: false, canCopy: true, canSelectAll: false,
+    })
   })
 
   it('shows every cached mention state in the All filter', async () => {
@@ -340,7 +400,7 @@ describe('JiraMentions composer', () => {
     expect(within(history).getAllByText('Can you take a look?', { exact: true })).toHaveLength(1)
   })
 
-  it('opens the selected issue through the main-owned Jira link and disables replies to unsupported audiences', async () => {
+  it('allows replies to unknown audiences and opens the selected issue through the main-owned Jira link', async () => {
     prepareStore()
     const restrictedDetail: JiraIssueSnapshot = {
       ...detail,
@@ -353,10 +413,14 @@ describe('JiraMentions composer', () => {
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
     expect(await screen.findByRole('heading', { name: 'A test issue' })).toBeInTheDocument()
-    const reply = screen.getByRole('textbox', { name: /Reply to selected mention/ })
-    expect(reply).toBeDisabled()
-    expect(reply).toHaveAttribute('placeholder', 'Open this issue in Jira to reply to this audience.')
-    expect(screen.getByRole('button', { name: 'Post reply' })).toBeDisabled()
+    const reply = screen.getByRole('textbox', { name: /Reply to ticket/ })
+    expect(reply).toBeEnabled()
+    expect(reply).toHaveAttribute('placeholder', 'Write a reply')
+    await userEventInstance.type(reply, 'Please review this.')
+    await userEventInstance.click(screen.getByRole('button', { name: 'Reply' }))
+    await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:post-reply', expect.objectContaining({
+      issueId: issue.issueId, sourceCommentId: incomingComment.commentId,
+    })))
 
     expect(screen.getByRole('button', { name: 'Open APP-1 in Jira' }).style.color).toBe(ui.color.accent)
     expect(screen.getByRole('button', { name: 'Open issue APP-1 in Jira' }).style.color).toBe(ui.color.accent)
@@ -378,12 +442,12 @@ describe('JiraMentions composer', () => {
 
     const reply = screen.getByRole('region', { name: 'Reply composer' })
     const history = screen.getByRole('region', { name: 'Comment history' })
-    expect(within(reply).getByText('Reply to mention')).toBeVisible()
+    expect(within(reply).getByRole('textbox', { name: /Reply to ticket/ })).toBeVisible()
     expect(reply).not.toHaveTextContent(issue.issueKey)
     expect(reply.querySelector('.jira-mentions-reply-issue')).toBeNull()
     expect(within(reply).queryByText('Reply in the issue comment thread')).not.toBeInTheDocument()
     expect(within(reply).queryByRole('status')).not.toBeInTheDocument()
-    expect(within(reply).getByRole('button', { name: 'Post reply' })).toBeVisible()
+    expect(within(reply).getByRole('button', { name: 'Reply' })).toBeVisible()
     expect(screen.getByText('Earlier context')).toBeVisible()
     expect(screen.getByText('Later context')).toBeVisible()
     expect(reply.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -453,7 +517,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ }) as HTMLTextAreaElement
+    const editor = await screen.findByRole('textbox', { name: /Reply to ticket/ }) as HTMLTextAreaElement
     await userEventInstance.type(editor, 'I will check @ tomorrow.')
     const insertionPoint = 'I will check @'.length
     editor.focus()
@@ -462,7 +526,7 @@ describe('JiraMentions composer', () => {
     await userEventInstance.type(editor, 'R', { skipClick: true })
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     expect(editor).toHaveValue('I will check @Requester tomorrow.')
-    await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
+    await userEventInstance.click(screen.getByRole('button', { name: 'Reply' }))
 
     await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:post-reply', expect.objectContaining({
       issueId: issue.issueId,
@@ -489,14 +553,14 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Ping @Req')
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     await userEventInstance.type(editor, ' and @Tay')
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     await userEventInstance.type(editor, ' and @Requester')
     await userEventInstance.keyboard('{Escape}')
-    await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
+    await userEventInstance.click(screen.getByRole('button', { name: 'Reply' }))
 
     await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:post-reply', expect.objectContaining({
       issueId: issue.issueId,
@@ -525,18 +589,18 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    let editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    let editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Ping @Req')
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     expect(editor).toHaveValue('Ping @Requester')
 
     await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
-    await waitFor(() => expect(screen.getByRole('textbox', { name: /Reply to selected mention/ })).toHaveValue(''))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /Reply to ticket/ })).toHaveValue(''))
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await waitFor(() => expect(editor).toHaveValue('Ping @Requester'))
 
-    await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
+    await userEventInstance.click(screen.getByRole('button', { name: 'Reply' }))
     await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:post-reply', expect.objectContaining({
       issueId: issue.issueId,
       sourceCommentId: incomingComment.commentId,
@@ -556,19 +620,19 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    let editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    let editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Draft for first request')
 
     await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
-    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await waitFor(() => expect(editor).toHaveValue(''))
     await userEventInstance.type(editor, 'Draft for second request')
 
     await userEventInstance.click(screen.getByRole('button', { name: /Can you take a look/ }))
-    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await waitFor(() => expect(editor).toHaveValue('Draft for first request'))
     await userEventInstance.click(screen.getByRole('button', { name: /Second request/ }))
-    editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await waitFor(() => expect(editor).toHaveValue('Draft for second request'))
   })
 
@@ -584,20 +648,20 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Please review this change.')
-    await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
+    await userEventInstance.click(screen.getByRole('button', { name: 'Reply' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Jira rejected the reply. Check its text and selected mentions, then try again.')
+    expect(await screen.findByRole('status')).toHaveTextContent('Jira rejected the reply content or format. Edit the reply and try again.')
     expect(editor).toHaveValue('Please review this change.')
   })
 
   it.each([
     ['auth', 'Update the Jira credentials in Settings, then try again.'],
-    ['permission', 'Jira denied comment access. Open the issue in Jira or ask an administrator for Add comments permission.'],
-    ['invalid_recipient', 'Choose reply recipients from this issue’s mention suggestions.'],
+    ['permission', 'Jira denied permission to add a comment to this ticket.'],
+    ['invalid_recipient', 'Jira could not find one or more selected people. Remove those mentions and try again.'],
     ['rate_limited', 'Jira is limiting replies. Wait before trying again.'],
-    ['network', 'The reply could not be sent. Check the connection and refresh before trying again.'],
+    ['network', 'Could not reach Jira. Check the connection and try again.'],
   ] as const)('keeps the draft and gives actionable feedback after a %s reply failure', async (errorCode, message) => {
     prepareStore()
     useJiraMentionsStore.setState({
@@ -608,7 +672,7 @@ describe('JiraMentions composer', () => {
     const userEventInstance = userEvent.setup()
     render(<JiraMentions />)
 
-    const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = screen.getByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Please review this change.')
 
     expect(screen.getByRole('status')).toHaveTextContent(message)
@@ -681,13 +745,13 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Ask @')
     await userEventInstance.keyboard('{ArrowDown}{Enter}')
     expect(editor).toHaveValue('Ask @Requester')
     await userEventInstance.keyboard('{Backspace}')
     expect(editor).toHaveValue('Ask ')
-    await userEventInstance.click(screen.getByRole('button', { name: 'Post reply' }))
+    await userEventInstance.click(screen.getByRole('button', { name: 'Reply' }))
 
     await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith('jira-mentions:post-reply', expect.objectContaining({
       issueId: issue.issueId,
@@ -773,10 +837,10 @@ describe('JiraMentions composer', () => {
     expect(typeChip).toHaveTextContent(/^Bug$/)
     expect(typeChip.style.background).toBe(ui.color.jiraIssueTypeBackground)
     expect(typeChip.style.color).toBe(ui.color.jiraIssueType)
-    expect(typeChip.style.border).toBe(`1px solid ${ui.color.jiraIssueTypeBorder}`)
+    expect(typeChip.style.borderColor).toBe(ui.color.jiraIssueTypeBorder)
     expect(priorityValue).toHaveTextContent(/^High$/)
     expect(priorityValue.style.color).toBe(ui.color.jiraPriority)
-    expect(priorityValue.style.borderLeft).toBe(`1px solid ${ui.color.border}`)
+    expect(priorityValue.style.borderLeftColor).toBe(ui.color.border)
     expect(assigneeValue.style.background).toBe('')
     expect(issueRail).toHaveTextContent('Taylor')
     expect(issueRail).toHaveTextContent('ParentAPP-2')
@@ -874,7 +938,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     const comment = screen.getAllByText('Can you take a look?')[1]
-    const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = screen.getByRole('textbox', { name: /Reply to ticket/ })
     const history = screen.getByRole('region', { name: 'Comment history' })
     const composer = screen.getByRole('region', { name: 'Reply composer' })
     expect(history).toContainElement(comment)
@@ -935,7 +999,7 @@ describe('JiraMentions composer', () => {
     render(<JiraMentions />)
 
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.click(screen.getByRole('button', { name: 'Snooze' }))
     const menu = screen.getByRole('dialog', { name: 'Snooze duration' })
     await userEventInstance.clear(within(menu).getByRole('spinbutton', { name: 'Snooze duration' }))
@@ -1064,7 +1128,7 @@ describe('JiraMentions composer', () => {
 
     expect(screen.getAllByText('Attachment preview unavailable')).toHaveLength(2)
     expect(ipc.invoke).not.toHaveBeenCalledWith('jira-mentions:get-attachment-preview', issue.issueId, expect.any(String))
-    expect(screen.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
+    expect(screen.getByRole('textbox', { name: /Reply to ticket/ })).toBeVisible()
   })
 
   it('loads image attachments inside comments and opens them in a zoom viewer', async () => {
@@ -1309,7 +1373,7 @@ describe('JiraMentions composer', () => {
       expect(createObjectUrl).not.toHaveBeenCalled()
       expect(screen.queryByRole('button', { name: 'Zoom image slow.png' })).not.toBeInTheDocument()
       expect(screen.getByRole('heading', { name: 'Second issue' })).toBeInTheDocument()
-      expect(screen.getByRole('textbox', { name: /Reply to selected mention/ })).toBeVisible()
+      expect(screen.getByRole('textbox', { name: /Reply to ticket/ })).toBeVisible()
     } finally {
       vi.unstubAllGlobals()
       if (createObjectUrlDescriptor) Object.defineProperty(URL, 'createObjectURL', createObjectUrlDescriptor)
@@ -1356,7 +1420,7 @@ describe('JiraMentions composer', () => {
       render(<JiraMentions />)
       expect(await screen.findByText(message)).toBeVisible()
       expect(screen.queryByRole('button', { name: 'Zoom image fallback.png' })).not.toBeInTheDocument()
-      const editor = screen.getByRole('textbox', { name: /Reply to selected mention/ })
+      const editor = screen.getByRole('textbox', { name: /Reply to ticket/ })
       await userEvent.setup().type(editor, 'Reply remains editable')
       expect(editor).toHaveValue('Reply remains editable')
     } finally {
@@ -1373,7 +1437,7 @@ describe('JiraMentions composer', () => {
     })
     render(<JiraMentions />)
 
-    expect(screen.getByRole('status')).toHaveTextContent('Jira rejected the reply. Check its text and selected mentions, then try again.')
+    expect(screen.getByRole('status')).toHaveTextContent('Jira rejected the reply content or format. Edit the reply and try again.')
     expect(screen.queryByText(/validation/)).not.toBeInTheDocument()
   })
 
@@ -1384,12 +1448,12 @@ describe('JiraMentions composer', () => {
     const userEventInstance = userEvent.setup()
     const first = render(<JiraMentions />)
     await userEventInstance.click(screen.getByRole('button', { name: /Requester/ }))
-    const editor = await screen.findByRole('textbox', { name: /Reply to selected mention/ })
+    const editor = await screen.findByRole('textbox', { name: /Reply to ticket/ })
     await userEventInstance.type(editor, 'Draft for later')
     first.unmount()
 
     render(<JiraMentions />)
-    expect(await screen.findByRole('textbox', { name: /Reply to selected mention/ })).toHaveValue('Draft for later')
+    expect(await screen.findByRole('textbox', { name: /Reply to ticket/ })).toHaveValue('Draft for later')
     useJiraMentionsStore.getState().receiveProjection({ ...projection, identityVerified: false, enabled: false, items: [] })
     expect(useJiraMentionsStore.getState().drafts).toEqual({})
   })

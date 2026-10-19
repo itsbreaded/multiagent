@@ -60,8 +60,14 @@ describe('UpdateBanner — available state', () => {
   it('shows the version and a Download button when auto-update is off', () => {
     setStatus({ state: 'available', version: '1.2.3' })
     render(<UpdateBanner />)
-    expect(screen.getByText(/Update v1\.2\.3 available/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
+    const message = screen.getByText(/Update v1\.2\.3 available/)
+    expect(message).toBeInTheDocument()
+    const banner = message.parentElement!
+    expect(banner.style.backgroundColor).toBe('var(--ui-color-panel)')
+    expect(banner.style.color).toBe('var(--ui-color-text-chrome-secondary)')
+    const download = screen.getByRole('button', { name: 'Download' })
+    expect(download).toBeInTheDocument()
+    expect(download.style.color).toBe('var(--ui-color-accent)')
   })
 
   it('hides the Download button when auto-update is enabled', () => {

@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { isE2ERun } from '../e2eIsolation'
 import type { OverlayKind, OverlayRequest } from '../../shared/types'
 import { OverlayCoordinator } from './OverlayCoordinator'
 
@@ -531,6 +532,7 @@ export class WindowManager {
         sandbox: false,
         contextIsolation: true,
         nodeIntegration: false,
+        offscreen: isE2ERun,
         // Keep the detached renderer painting while it's covered by another window, so resizing
         // a window over it doesn't leave the exposed terminal strip compositing a stale frame
         // (corrupted/duplicated text until a resize forces a repaint). See index.ts for the
@@ -539,7 +541,7 @@ export class WindowManager {
       },
     })
 
-    win.once('ready-to-show', () => win.show())
+    win.once('ready-to-show', () => { if (!isE2ERun) win.show() })
 
     this.register(win)
     this.detachedWindowIds.add(win.id)

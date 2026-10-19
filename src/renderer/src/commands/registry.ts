@@ -30,8 +30,8 @@ export interface CommandContext {
   openJiraMentions: () => void
   refreshJiraMentions: (mode: JiraMentionsRefreshMode) => Promise<void>
   clearJiraMentionsCache: () => Promise<void>
-  selectedJiraMention: { issueId: string; commentId: string; state: 'unanswered' | 'answered' | 'unknown'; disposition: 'dismissed' | 'snoozed' | null } | null
-  setJiraMentionAction: (input: { issueId: string; incomingCommentId: string; action: 'dismissed' | 'snoozed' | 'restored'; snoozeUntil?: number }) => Promise<void>
+  selectedJiraMention: { issueId: string; commentId: string; state: 'unanswered' | 'answered' | 'unknown'; disposition: 'active' | 'dismissed' | 'snoozed' | null } | null
+  setJiraMentionAction: (input: { issueId: string; incomingCommentId: string; action: 'activated' | 'dismissed' | 'snoozed' | 'restored'; snoozeUntil?: number }) => Promise<void>
   setPaneCustomName: (paneId: string, name: string) => void
   setPendingRenamePaneId: (id: string | null) => void
   setPendingRenameTabId: (id: string | null) => void
@@ -150,7 +150,8 @@ const COMMANDS: Command[] = [
     title: 'Restore Selected Jira Mention',
     category: 'View',
     keywords: ['inbox', 'jira', 'comment', 'unsnooze'],
-    enabled: (ctx) => ctx.jiraMentionsEnabled && ctx.selectedJiraMention?.state === 'unanswered' && Boolean(ctx.selectedJiraMention.disposition),
+    enabled: (ctx) => ctx.jiraMentionsEnabled && ctx.selectedJiraMention?.state === 'unanswered'
+      && (ctx.selectedJiraMention.disposition === 'dismissed' || ctx.selectedJiraMention.disposition === 'snoozed'),
     run: (ctx) => {
       const selected = ctx.selectedJiraMention
       if (selected) void ctx.setJiraMentionAction({ issueId: selected.issueId, incomingCommentId: selected.commentId, action: 'restored' })

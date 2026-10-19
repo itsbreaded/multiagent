@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import React, { useState, useEffect, useRef } from 'react'
 
 interface DirPickerProps {
@@ -39,7 +40,6 @@ export function DirPicker({
   const nameRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const comboboxRef = useRef<HTMLDivElement>(null)
-  const borderRef = useRef<HTMLDivElement>(null)
   const mouseDownOnOverlay = useRef(false)
   const dropdownOpenRef = useRef(false)
 
@@ -194,7 +194,7 @@ export function DirPicker({
         position: 'fixed',
         inset: 0,
         zIndex: 300,
-        backgroundColor: 'rgba(0,0,0,0.7)',
+        backgroundColor: ui.color.chromeBackdrop,
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'center',
@@ -208,26 +208,26 @@ export function DirPicker({
         style={{
           width: '100%',
           maxWidth: 520,
-          backgroundColor: '#1a1b1e',
-          border: '1px solid #2a2b2e',
+          backgroundColor: ui.color.panel,
+          border: `1px solid ${ui.color.border}`,
           borderRadius: 10,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+          boxShadow: ui.shadow.overlay,
         }}
       >
         {/* Header */}
-        <div style={{ padding: '16px 18px 12px', borderBottom: '1px solid #2a2b2e' }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#d4d4d4', marginBottom: description ? 4 : 0 }}>
+        <div style={{ padding: '16px 18px 12px', borderBottom: `1px solid ${ui.color.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: ui.color.textSubtle, marginBottom: description ? 4 : 0 }}>
             {title}
           </div>
           {description && (
-            <div style={{ fontSize: 12, color: '#6b7280' }}>{description}</div>
+            <div style={{ fontSize: 12, color: ui.color.textMuted }}>{description}</div>
           )}
         </div>
 
         {/* Tab name input row (optional) */}
         {nameField && (
           <div style={{ padding: '14px 18px 0' }}>
-            <input
+            <input className="ui-control"
               ref={nameRef}
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -238,17 +238,16 @@ export function DirPicker({
               style={{
                 width: '100%',
                 boxSizing: 'border-box',
-                background: '#141517',
-                border: '1px solid #2a2b2e',
+                background: ui.color.input,
+                border: `1px solid ${ui.color.border}`,
                 borderRadius: 5,
-                color: '#d4d4d4',
+                color: ui.color.textSubtle,
                 fontSize: 13,
                 padding: '7px 10px',
-                outline: 'none',
-                caretColor: '#4ade80',
+                  caretColor: ui.color.accent,
               }}
-              onFocus={(e) => { (e.currentTarget as HTMLInputElement).style.borderColor = '#4ade80' }}
-              onBlur={(e) => { (e.currentTarget as HTMLInputElement).style.borderColor = '#2a2b2e' }}
+              onFocus={(e) => { (e.currentTarget as HTMLInputElement).style.borderColor = ui.color.accent }}
+              onBlur={(e) => { (e.currentTarget as HTMLInputElement).style.borderColor = ui.color.border }}
             />
           </div>
         )}
@@ -259,39 +258,34 @@ export function DirPicker({
           <div ref={comboboxRef} style={{ flex: 1, position: 'relative' }}>
             {/* Single border container — focus ring applied here so it wraps input + chevron */}
             <div
-              ref={borderRef}
+              className="ui-control-group"
               style={{
                 display: 'flex',
-                border: '1px solid #2a2b2e',
+                border: `1px solid ${ui.color.border}`,
                 borderRadius: 5,
                 overflow: 'hidden',
                 transition: 'border-color 0.1s',
               }}
             >
-              <input
+              <input className="ui-control"
                 ref={inputRef}
                 value={value}
                 onChange={(e) => { setValue(e.target.value); setValidationError(null); setFilterQuery(e.target.value); if (recentDirs.length > 0) openDropdown() }}
                 onFocus={() => {
-                  if (borderRef.current) borderRef.current.style.borderColor = '#4ade80'
                   setFilterQuery(null)
                   if (recentDirs.length > 0) openDropdown()
-                }}
-                onBlur={() => {
-                  if (borderRef.current) borderRef.current.style.borderColor = '#2a2b2e'
                 }}
                 onKeyDown={handleInputKeyDown}
                 placeholder="e.g. C:\Users\you\projects\myapp"
                 style={{
                   flex: 1,
-                  background: '#141517',
+                  background: ui.color.input,
                   border: 'none',
-                  color: '#d4d4d4',
+                  color: ui.color.textSubtle,
                   fontSize: 13,
                   padding: '7px 10px',
-                  outline: 'none',
-                  fontFamily: 'monospace',
-                  caretColor: '#4ade80',
+                      fontFamily: 'monospace',
+                  caretColor: ui.color.accent,
                   minWidth: 0,
                 }}
               />
@@ -302,18 +296,18 @@ export function DirPicker({
                 onClick={() => { if (dropdownOpen) closeDropdown(); else if (recentDirs.length > 0) openDropdown() }}
                 style={{
                   padding: '0 8px',
-                  background: '#141517',
+                  background: ui.color.input,
                   border: 'none',
-                  borderLeft: '1px solid #2a2b2e',
-                  color: '#6b7280',
+                  borderLeft: `1px solid ${ui.color.border}`,
+                  color: ui.color.textMuted,
                   cursor: recentDirs.length > 0 ? 'pointer' : 'default',
                   display: 'flex',
                   alignItems: 'center',
                   flexShrink: 0,
                   transition: 'color 0.1s',
                 }}
-                onMouseEnter={(e) => { if (recentDirs.length > 0) (e.currentTarget as HTMLButtonElement).style.color = '#c9cdd1' }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
+                onMouseEnter={(e) => { if (recentDirs.length > 0) (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textMuted }}
               >
                 <svg
                   width="10"
@@ -339,10 +333,10 @@ export function DirPicker({
                   margin: 0,
                   padding: '4px 0',
                   listStyle: 'none',
-                  background: '#1c1d20',
-                  border: '1px solid #2a2b2e',
+                  background: ui.color.surfaceRaisedAlt,
+                  border: `1px solid ${ui.color.border}`,
                   borderRadius: 6,
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                  boxShadow: ui.shadow.dropdown,
                   maxHeight: 220,
                   overflowY: 'auto',
                 }}
@@ -358,8 +352,8 @@ export function DirPicker({
                         padding: '6px 12px',
                         fontSize: 12,
                         fontFamily: 'monospace',
-                        color: highlightedIndex === i ? '#d4d4d4' : '#9ca3af',
-                        background: highlightedIndex === i ? '#2a2b2e' : 'transparent',
+                        color: highlightedIndex === i ? ui.color.textSubtle : ui.color.textMutedStrong,
+                        background: highlightedIndex === i ? ui.color.border : 'transparent',
                         cursor: 'pointer',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
@@ -375,7 +369,7 @@ export function DirPicker({
                     style={{
                       padding: '6px 12px',
                       fontSize: 12,
-                      color: '#4b5563',
+                      color: ui.color.borderMuted,
                       userSelect: 'none',
                     }}
                   >
@@ -391,23 +385,23 @@ export function DirPicker({
             style={{
               padding: '7px 12px',
               background: 'none',
-              border: '1px solid #2a2b2e',
+              border: `1px solid ${ui.color.border}`,
               borderRadius: 5,
-              color: '#c9cdd1',
+              color: ui.color.text,
               fontSize: 12,
               cursor: 'pointer',
               whiteSpace: 'nowrap',
               flexShrink: 0,
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = '#4a4b4e' }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = '#2a2b2e' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = ui.color.textDim }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = ui.color.border }}
           >
             Browse...
           </button>
         </div>
 
         {(validationError ?? error) && (
-          <div style={{ padding: '0 18px 12px', color: '#f87171', fontSize: 12 }}>
+          <div style={{ padding: '0 18px 12px', color: ui.color.danger, fontSize: 12 }}>
             {validationError ?? error}
           </div>
         )}
@@ -426,14 +420,14 @@ export function DirPicker({
             style={{
               padding: '6px 14px',
               background: 'none',
-              border: '1px solid #2a2b2e',
+              border: `1px solid ${ui.color.border}`,
               borderRadius: 5,
-              color: '#6b7280',
+              color: ui.color.textMuted,
               fontSize: 12,
               cursor: 'pointer',
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#c9cdd1' }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.text }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textMuted }}
           >
             {skipLabel}
           </button>
@@ -443,9 +437,9 @@ export function DirPicker({
             style={{
               padding: '6px 16px',
               background: 'none',
-              border: `1px solid ${canConfirm ? '#4ade80' : '#2a2b2e'}`,
+              border: `1px solid ${canConfirm ? ui.color.accent : ui.color.border}`,
               borderRadius: 5,
-              color: canConfirm ? '#4ade80' : '#3a3b3e',
+              color: canConfirm ? ui.color.accent : ui.color.textFaint,
               fontSize: 12,
               cursor: canConfirm ? 'pointer' : 'default',
               fontWeight: 600,

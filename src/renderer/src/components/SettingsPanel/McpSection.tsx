@@ -212,8 +212,8 @@ export function McpSection(): JSX.Element {
         <div style={{
           margin: '0 0 8px',
           padding: '5px 12px',
-          background: '#0f2a15',
-          border: '1px solid #1a4a25',
+          background: ui.color.mcpEnabledSurface,
+          border: `1px solid ${ui.color.mcpEnabledBorder}`,
           borderRadius: 5,
           color: ui.color.accent,
           fontSize: 12,
@@ -229,9 +229,9 @@ export function McpSection(): JSX.Element {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <StatusDot running={!statusLoading && !statusError && (status?.running ?? false)} />
-              <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>multiagent-browser</span>
+              <span style={{ color: ui.color.textSubtle, fontSize: 13, fontWeight: 500 }}>multiagent-browser</span>
               <TypeBadge type="http" />
-              <span style={{ color: ui.color.textDim, fontSize: 10, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>built-in</span>
+              <span style={{ color: ui.color.textDim, fontSize: 10, background: ui.color.surfaceInset, border: border.default, borderRadius: 3, padding: '1px 5px' }}>built-in</span>
             </div>
             <div style={{ color: ui.color.textMuted, fontSize: 11, lineHeight: 1.5 }}>
               {statusLoading ? (
@@ -241,7 +241,7 @@ export function McpSection(): JSX.Element {
               ) : status?.running ? (
                 <>
                   Port{' '}
-                  <code style={{ color: '#a0a4a8', background: '#1e1f22', padding: '0 4px', borderRadius: 3 }}>
+                  <code style={{ color: ui.color.textSecondary, background: ui.color.surfaceInset, padding: '0 4px', borderRadius: 3 }}>
                     {status.port}
                   </code>
                   {' · '}
@@ -275,9 +275,9 @@ export function McpSection(): JSX.Element {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <StatusDot running={!statusLoading && !statusError && (status?.uiAutomation.running ?? false)} />
-              <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>multiagent-ui</span>
+              <span style={{ color: ui.color.textSubtle, fontSize: 13, fontWeight: 500 }}>multiagent-ui</span>
               <TypeBadge type="http" />
-              <span style={{ color: ui.color.textDim, fontSize: 10, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>built-in</span>
+              <span style={{ color: ui.color.textDim, fontSize: 10, background: ui.color.surfaceInset, border: border.default, borderRadius: 3, padding: '1px 5px' }}>built-in</span>
             </div>
             <div style={{ color: ui.color.textMuted, fontSize: 11, lineHeight: 1.5 }}>
               {status?.uiAutomation.error ? status.uiAutomation.error : status?.uiAutomation.running ? `http://127.0.0.1:${status.uiAutomation.port}/mcp · available to new sessions and local clients` : 'Disabled'}
@@ -319,7 +319,7 @@ export function McpSection(): JSX.Element {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <span style={{ color: '#d4d4d4', fontSize: 13, fontWeight: 500 }}>{entry.name}</span>
+                    <span style={{ color: ui.color.textSubtle, fontSize: 13, fontWeight: 500 }}>{entry.name}</span>
                     <TypeBadge type={entry.type} />
                     {!entry.enabled && <DisabledBadge />}
                   </div>
@@ -395,7 +395,7 @@ export function McpSection(): JSX.Element {
                     background: 'none',
                     border: 'none',
                     borderBottom: previewTab === tab ? `2px solid ${ui.color.accent}` : '2px solid transparent',
-                    color: previewTab === tab ? '#d4d4d4' : ui.color.textDim,
+                    color: previewTab === tab ? ui.color.textSubtle : ui.color.textDim,
                     fontSize: 11,
                     cursor: 'pointer',
                     padding: '5px 14px',
@@ -409,11 +409,11 @@ export function McpSection(): JSX.Element {
             <pre style={{
               margin: 0,
               padding: 12,
-              background: '#0e0f11',
+              background: ui.color.surfaceDeep,
               border: border.default,
               borderTop: 'none',
               borderRadius: '0 0 6px 6px',
-              color: '#a0a4a8',
+              color: ui.color.textSecondary,
               fontSize: 11,
               fontFamily: 'monospace',
               overflow: 'auto',
@@ -448,14 +448,14 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
 
   return (
     <div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d4', marginBottom: 6 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: ui.color.textSubtle, marginBottom: 6 }}>
         Import from JSON
       </div>
       <div style={{ color: ui.color.textMuted, fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
-        Paste a standard <code style={{ color: '#a0a4a8' }}>mcpServers</code> config object. Servers with
+        Paste a standard <code style={{ color: ui.color.textSecondary }}>mcpServers</code> config object. Servers with
         duplicate names will be skipped.
       </div>
-      <textarea
+      <textarea className="ui-control"
         autoFocus
         value={text}
         onChange={(e) => { setText(e.target.value); parse(e.target.value) }}
@@ -463,15 +463,14 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
         rows={7}
         style={{
           width: '100%',
-          background: '#0e0f11',
-          border: `1px solid ${error ? '#5a2020' : ui.color.border}`,
+          background: ui.color.surfaceDeep,
+          border: `1px solid ${error ? ui.color.dangerBorder : ui.color.border}`,
           borderRadius: 4,
-          color: '#d4d4d4',
+          color: ui.color.textSubtle,
           fontSize: 11,
           fontFamily: 'monospace',
           padding: '6px 8px',
           resize: 'vertical',
-          outline: 'none',
           boxSizing: 'border-box',
         }}
       />
@@ -487,7 +486,7 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
           disabled={preview.length === 0}
           style={{
             background: preview.length > 0 ? ui.color.accentBg : ui.color.input,
-            border: `1px solid ${preview.length > 0 ? '#2a5a2a' : ui.color.border}`,
+            border: `1px solid ${preview.length > 0 ? ui.color.mcpSuccessBorder : ui.color.border}`,
             borderRadius: 4,
             color: preview.length > 0 ? ui.color.accent : ui.color.textDim,
             fontSize: 12,
@@ -499,7 +498,7 @@ function ImportForm({ onImport, onCancel }: { onImport: (servers: McpServerEntry
         </button>
         <button
           onClick={onCancel}
-          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: ui.color.textMuted, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+          style={{ background: 'none', border: `1px solid ${ui.color.textFaint}`, borderRadius: 4, color: ui.color.textMuted, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           Cancel
         </button>
@@ -586,12 +585,12 @@ function ServerForm({
 
   return (
     <div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d4', marginBottom: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: ui.color.textSubtle, marginBottom: 10 }}>
         {isEdit ? 'Edit server' : 'Add MCP server'}
       </div>
 
       {error && (
-        <div style={{ color: ui.color.danger, fontSize: 11, background: '#2a1a1a', border: '1px solid #5a2020', borderRadius: 4, padding: '5px 8px', marginBottom: 8 }}>
+        <div style={{ color: ui.color.danger, fontSize: 11, background: ui.color.dangerSurface, border: `1px solid ${ui.color.dangerBorder}`, borderRadius: 4, padding: '5px 8px', marginBottom: 8 }}>
           {error}
         </div>
       )}
@@ -613,8 +612,8 @@ function ServerForm({
               key={t}
               onClick={() => update({ type: t })}
               style={{
-                background: data.type === t ? ui.color.accentBg : '#1e1f22',
-                border: `1px solid ${data.type === t ? ui.color.accent : '#3a3b3e'}`,
+                background: data.type === t ? ui.color.accentBg : ui.color.surfaceInset,
+                border: `1px solid ${data.type === t ? ui.color.accent : ui.color.textFaint}`,
                 borderRadius: 4,
                 color: data.type === t ? ui.color.accent : ui.color.textMuted,
                 fontSize: 11,
@@ -674,23 +673,22 @@ function ServerForm({
             <FieldHint>Space-separated arguments</FieldHint>
           </FormRow>
           <FormRow label="Env vars">
-            <textarea
+            <textarea className="ui-control"
               value={envText}
               onChange={(e) => handleEnvChange(e.target.value)}
               placeholder={'KEY=value\nANOTHER_KEY=value'}
               rows={3}
               style={{
                 width: '100%',
-                background: '#0e0f11',
-                border: `1px solid ${envError ? '#5a2020' : ui.color.border}`,
+                background: ui.color.surfaceDeep,
+                border: `1px solid ${envError ? ui.color.dangerBorder : ui.color.border}`,
                 borderRadius: 4,
-                color: '#d4d4d4',
+                color: ui.color.textSubtle,
                 fontSize: 11,
                 fontFamily: 'monospace',
                 padding: '4px 8px',
                 resize: 'vertical',
-                outline: 'none',
-                boxSizing: 'border-box',
+                  boxSizing: 'border-box',
               }}
             />
             {envError && <div style={{ color: ui.color.danger, fontSize: 10, marginTop: 2 }}>{envError}</div>}
@@ -714,13 +712,13 @@ function ServerForm({
       <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
         <button
           onClick={onSubmit}
-          style={{ background: ui.color.accentBg, border: '1px solid #2a5a2a', borderRadius: 4, color: ui.color.accent, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+          style={{ background: ui.color.accentBg, border: `1px solid ${ui.color.mcpSuccessBorder}`, borderRadius: 4, color: ui.color.accent, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           {isEdit ? 'Save changes' : 'Add server'}
         </button>
         <button
           onClick={onCancel}
-          style={{ background: 'none', border: '1px solid #3a3b3e', borderRadius: 4, color: ui.color.textMuted, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
+          style={{ background: 'none', border: `1px solid ${ui.color.textFaint}`, borderRadius: 4, color: ui.color.textMuted, fontSize: 12, cursor: 'pointer', padding: '5px 14px' }}
         >
           Cancel
         </button>
@@ -747,7 +745,7 @@ function ToolsCollapse({ tools, emptyLabel }: { tools: string[]; emptyLabel?: st
       {open && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
           {tools.map((t) => (
-            <span key={t} style={{ fontSize: 10, fontFamily: 'monospace', color: ui.color.textMuted, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>
+            <span key={t} style={{ fontSize: 10, fontFamily: 'monospace', color: ui.color.textMuted, background: ui.color.surfaceInset, border: border.default, borderRadius: 3, padding: '1px 5px' }}>
               {t}
             </span>
           ))}
@@ -791,7 +789,7 @@ function ProbeButton({ state, onClick }: { state: ProbeState['status']; onClick:
 
 function TestButton({ state, onClick }: { state: TestState; onClick: () => void }): JSX.Element {
   const label = state === 'testing' ? '…' : state === 'ok' ? '✓' : state === 'unreachable' ? '✗' : state === 'error' ? '!' : 'Test'
-  const color = state === 'ok' ? ui.color.accent : state === 'unreachable' ? ui.color.danger : state === 'error' ? '#facc15' : ui.color.textMuted
+  const color = state === 'ok' ? ui.color.accent : state === 'unreachable' ? ui.color.danger : state === 'error' ? ui.color.warningStrong : ui.color.textMuted
   return (
     <button
       onClick={onClick}
@@ -823,9 +821,9 @@ function StatusDot({ running }: { running: boolean }): JSX.Element {
 
 function TypeBadge({ type }: { type: McpServerType | 'http' }): JSX.Element {
   const colors: Record<string, { bg: string; border: string; text: string }> = {
-    http:  { bg: '#0d1f2d', border: '#1a3a5a', text: '#60a0d0' },
-    sse:   { bg: '#1f1a0d', border: '#5a3a1a', text: '#d09060' },
-    stdio: { bg: '#1a0d1f', border: '#3a1a5a', text: '#a060d0' },
+    http:  { bg: ui.color.transportBlueSurface, border: ui.color.transportBlueBorder, text: ui.color.transportBlueText },
+    sse:   { bg: ui.color.transportOrangeSurface, border: ui.color.transportOrangeBorder, text: ui.color.transportOrangeText },
+    stdio: { bg: ui.color.transportPurpleSurface, border: ui.color.transportPurpleBorder, text: ui.color.transportPurpleText },
   }
   const c = colors[type] ?? colors.http
   return (
@@ -837,7 +835,7 @@ function TypeBadge({ type }: { type: McpServerType | 'http' }): JSX.Element {
 
 function DisabledBadge(): JSX.Element {
   return (
-    <span style={{ color: ui.color.textDim, fontSize: 10, background: '#1e1f22', border: border.default, borderRadius: 3, padding: '1px 5px' }}>
+    <span style={{ color: ui.color.textDim, fontSize: 10, background: ui.color.surfaceInset, border: border.default, borderRadius: 3, padding: '1px 5px' }}>
       disabled
     </span>
   )
@@ -850,9 +848,9 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
         onClick={() => onChange(!checked)}
         style={{ width: 30, height: 16, borderRadius: 8, background: checked ? ui.color.accent : ui.color.border, position: 'relative', cursor: 'pointer', transition: 'background 0.15s', flexShrink: 0 }}
       >
-        <div style={{ position: 'absolute', top: 2, left: checked ? 16 : 2, width: 12, height: 12, borderRadius: '50%', background: checked ? '#0a1f0a' : ui.color.textDim, transition: 'left 0.15s' }} />
+        <div style={{ position: 'absolute', top: 2, left: checked ? 16 : 2, width: 12, height: 12, borderRadius: '50%', background: checked ? ui.color.mcpDisabledSurface : ui.color.textDim, transition: 'left 0.15s' }} />
       </div>
-      {label && <span style={{ color: checked ? '#d4d4d4' : ui.color.textMuted, fontSize: 12 }}>{label}</span>}
+      {label && <span style={{ color: checked ? ui.color.textSubtle : ui.color.textMuted, fontSize: 12 }}>{label}</span>}
     </label>
   )
 }
@@ -868,9 +866,9 @@ function IconButton({ children, onClick, title, danger }: { children: React.Reac
       style={{
         background: 'none',
         border: '1px solid',
-        borderColor: hovered ? (danger ? '#5a2020' : ui.color.textDim) : ui.color.border,
+        borderColor: hovered ? (danger ? ui.color.dangerBorder : ui.color.textDim) : ui.color.border,
         borderRadius: 4,
-        color: hovered ? (danger ? ui.color.danger : '#d4d4d4') : ui.color.textDim,
+        color: hovered ? (danger ? ui.color.danger : ui.color.textSubtle) : ui.color.textDim,
         fontSize: 13,
         cursor: 'pointer',
         padding: '1px 6px',
@@ -889,7 +887,7 @@ function ActionButton({ children, onClick, accent }: { children: React.ReactNode
       onClick={onClick}
       style={{
         background: 'none',
-        border: `1px solid ${accent ? '#2a5a2a' : '#3a3b3e'}`,
+        border: `1px solid ${accent ? ui.color.mcpSuccessBorder : ui.color.textFaint}`,
         borderRadius: 4,
         color: accent ? ui.color.accent : ui.color.textMuted,
         fontSize: 11,
@@ -931,21 +929,20 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 
 function FormInput({ value, placeholder, onChange, monospace }: { value: string; placeholder?: string; onChange: (v: string) => void; monospace?: boolean }): JSX.Element {
   return (
-    <input
+    <input className="ui-control"
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       style={{
         width: '100%',
-        background: '#0e0f11',
+        background: ui.color.surfaceDeep,
         border: border.default,
         borderRadius: 4,
-        color: '#d4d4d4',
+        color: ui.color.textSubtle,
         fontSize: 12,
         fontFamily: monospace ? 'monospace' : 'inherit',
         padding: '4px 8px',
-        outline: 'none',
-        boxSizing: 'border-box',
+              boxSizing: 'border-box',
       }}
     />
   )

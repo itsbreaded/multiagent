@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import React, { useState } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
@@ -79,11 +80,11 @@ export function PaneGrid(): JSX.Element {
           style={{
             position: 'absolute',
             inset: 0,
-            backgroundColor: '#0e1011',
+            backgroundColor: ui.color.appBg,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#4a4b4e',
+            color: ui.color.textDim,
             fontSize: 12,
           }}
         >
@@ -211,18 +212,18 @@ function EmptyWorkspaceQuickStart({
       style={{
         position: 'absolute',
         inset: 0,
-        backgroundColor: emptyDropActive ? '#111815' : '#0e1011',
+        backgroundColor: emptyDropActive ? ui.color.paneActiveSurface : ui.color.appBg,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        outline: emptyDropActive ? '2px solid #4ade80' : 'none',
+        outline: emptyDropActive ? `2px solid ${ui.color.accent}` : 'none',
         outlineOffset: -2,
       }}
     >
       <div style={{ textAlign: 'center', userSelect: 'none' }}>
         <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.2 }}>[]</div>
-        <div style={{ fontSize: 14, color: '#4a4b4e', marginBottom: 16 }}>No sessions open</div>
+        <div style={{ fontSize: 14, color: ui.color.textDim, marginBottom: 16 }}>No sessions open</div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 8, width: 300 }}>
           {offeredKinds.flatMap((kind) => [
@@ -233,9 +234,9 @@ function EmptyWorkspaceQuickStart({
                 flex: 1,
                 padding: '7px 14px',
                 backgroundColor: 'transparent',
-                border: '1px solid #2a2b2e',
+                border: `1px solid ${ui.color.border}`,
                 borderRadius: 6,
-                color: '#6b7280',
+                color: ui.color.textMuted,
                 fontSize: 12,
                 cursor: 'pointer',
                 textAlign: 'left',
@@ -250,9 +251,9 @@ function EmptyWorkspaceQuickStart({
                 flex: 1,
                 padding: '7px 14px',
                 backgroundColor: 'transparent',
-                border: '1px solid #2a2b2e',
+                border: `1px solid ${ui.color.border}`,
                 borderRadius: 6,
-                color: '#6b7280',
+                color: ui.color.textMuted,
                 fontSize: 12,
                 cursor: 'pointer',
                 textAlign: 'left',
@@ -271,9 +272,9 @@ function EmptyWorkspaceQuickStart({
               flex: 1,
               padding: '8px 20px',
               backgroundColor: 'transparent',
-              border: '1px solid #2a2b2e',
+              border: `1px solid ${ui.color.border}`,
               borderRadius: 6,
-              color: '#6b7280',
+              color: ui.color.textMuted,
               fontSize: 13,
               cursor: 'pointer',
               display: 'flex',
@@ -291,14 +292,14 @@ function EmptyWorkspaceQuickStart({
             style={{
               padding: '8px 10px',
               backgroundColor: 'transparent',
-              border: '1px solid #2a2b2e',
+              border: `1px solid ${ui.color.border}`,
               borderRadius: 6,
-              color: '#4a4b4e',
+              color: ui.color.textDim,
               fontSize: 12,
               cursor: 'pointer',
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6b7280' }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4a4b4e' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textMuted }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = ui.color.textDim }}
           >
             <ShellIcon size={16} />
           </button>
@@ -306,7 +307,7 @@ function EmptyWorkspaceQuickStart({
 
         {/* Optional hint when tab has a default dir */}
         {activeTab?.defaultCwd && (
-          <div style={{ marginTop: 10, fontSize: 11, color: '#3a3b3e' }}>
+          <div style={{ marginTop: 10, fontSize: 11, color: ui.color.textFaint }}>
             default: {activeTab.defaultCwd}
           </div>
         )}

@@ -1,3 +1,4 @@
+import { ui } from '../../styles/theme'
 import React, { useEffect, useState } from 'react'
 import { useUpdaterStore } from '../../store/updater'
 import { useSettingsStore, type SettingsSection } from '../../store/settings'
@@ -71,10 +72,10 @@ export function SearchResults({
           <SectionLabel>Keyboard Shortcuts</SectionLabel>
           {conflictLabel && (
             <div style={{
-              background: '#2a1a1a',
-              border: '1px solid #5a2020',
+              background: ui.color.dangerSurface,
+              border: `1px solid ${ui.color.dangerBorder}`,
               borderRadius: 5,
-              color: '#f87171',
+              color: ui.color.danger,
               fontSize: 12,
               padding: '6px 10px',
               marginBottom: 8,
@@ -84,10 +85,10 @@ export function SearchResults({
           )}
           {recording && (
             <div style={{
-              background: '#1a2a1a',
-              border: '1px solid #205a20',
+              background: ui.color.successSurface,
+              border: `1px solid ${ui.color.successBorder}`,
               borderRadius: 5,
-              color: '#4ade80',
+              color: ui.color.accent,
               fontSize: 12,
               padding: '6px 10px',
               marginBottom: 8,
@@ -164,9 +165,9 @@ function SettingNavCard({ title, description, onNavigate }: {
       style={{
         padding: '10px 12px',
         marginBottom: 4,
-        border: '1px solid #2a2b2e',
+        border: `1px solid ${ui.color.border}`,
         borderRadius: 6,
-        backgroundColor: '#141517',
+        backgroundColor: ui.color.input,
         display: 'grid',
         gridTemplateColumns: 'minmax(220px, 1fr) minmax(160px, auto)',
         gap: 24,
@@ -174,8 +175,8 @@ function SettingNavCard({ title, description, onNavigate }: {
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ color: '#d4d4d4', fontSize: 13, marginBottom: 4 }}>{title}</div>
-        <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.4 }}>{description}</div>
+        <div style={{ color: ui.color.textSubtle, fontSize: 13, marginBottom: 4 }}>{title}</div>
+        <div style={{ color: ui.color.textMuted, fontSize: 11, lineHeight: 1.4 }}>{description}</div>
       </div>
       <div>
         <button
@@ -183,9 +184,9 @@ function SettingNavCard({ title, description, onNavigate }: {
           style={{
             padding: '4px 12px',
             background: 'none',
-            border: '1px solid #3a3b3e',
+            border: `1px solid ${ui.color.textFaint}`,
             borderRadius: 4,
-            color: '#6b7280',
+            color: ui.color.textMuted,
             fontSize: 12,
             cursor: 'pointer',
           }}
@@ -222,21 +223,21 @@ export function HotkeyRow({
         justifyContent: 'space-between',
         padding: '7px 12px',
         marginBottom: 2,
-        border: `1px solid ${isRecording ? '#2a4a2a' : '#2a2b2e'}`,
+        border: `1px solid ${isRecording ? ui.color.providerCardBorder : ui.color.border}`,
         borderRadius: 5,
-        backgroundColor: isRecording ? '#141e14' : '#141517',
+        backgroundColor: isRecording ? ui.color.providerCardSurface : ui.color.input,
         gap: 12,
       }}
     >
-      <span style={{ color: '#c9cdd1', fontSize: 12, flex: 1 }}>{label}</span>
+      <span style={{ color: ui.color.text, fontSize: 12, flex: 1 }}>{label}</span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {terminalClashLabel && (
           <span style={{
             display: 'inline-block',
-            background: '#2a2410',
-            border: '1px solid #5a4810',
+            background: ui.color.warningSurface,
+            border: `1px solid ${ui.color.warningBorder}`,
             borderRadius: 4,
-            color: '#fbbf24',
+            color: ui.color.statusWaiting,
             fontSize: 10,
             padding: '2px 6px',
             maxWidth: 220,
@@ -268,7 +269,7 @@ export function HotkeyRow({
             style={{
               background: 'none',
               border: 'none',
-              color: '#4a4b4e',
+              color: ui.color.textDim,
               fontSize: 13,
               cursor: 'pointer',
               padding: '0 2px',
@@ -288,10 +289,10 @@ function KeyBadge({ children, active, muted }: { children: React.ReactNode; acti
     <span
       style={{
         display: 'inline-block',
-        background: active ? '#1a3a1a' : '#1e1f22',
-        border: `1px solid ${active ? '#4ade80' : muted ? '#222326' : '#3a3b3e'}`,
+        background: active ? ui.color.accentBg : ui.color.surfaceInset,
+        border: `1px solid ${active ? ui.color.accent : muted ? ui.color.borderSubtle : ui.color.textFaint}`,
         borderRadius: 4,
-        color: active ? '#4ade80' : muted ? '#4a4b4e' : '#a0a4a8',
+        color: active ? ui.color.accent : muted ? ui.color.textDim : ui.color.textSecondary,
         fontSize: 11,
         fontFamily: 'monospace',
         padding: '2px 7px',
@@ -305,7 +306,7 @@ function KeyBadge({ children, active, muted }: { children: React.ReactNode; acti
 
 export function EmptyMessage({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ color: '#4a4b4e', fontSize: 12, padding: '14px' }}>{children}</div>
+    <div style={{ color: ui.color.textDim, fontSize: 12, padding: '14px' }}>{children}</div>
   )
 }
 
@@ -369,20 +370,20 @@ export function UpdatesSection(): JSX.Element {
       <div style={{
         padding: '10px 12px',
         marginBottom: 4,
-        border: '1px solid #2a2b2e',
+        border: `1px solid ${ui.color.border}`,
         borderRadius: 6,
-        backgroundColor: '#141517',
+        backgroundColor: ui.color.input,
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <div style={{ color: '#d4d4d4', fontSize: 13 }}>Current version</div>
-            <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>
+            <div style={{ color: ui.color.textSubtle, fontSize: 13 }}>Current version</div>
+            <div style={{ color: ui.color.textMuted, fontSize: 11, marginTop: 2 }}>
               {version ? `v${version}` : '—'}
               {label && (
-                <span style={{ marginLeft: 10, color: isAvailable ? '#4ade80' : '#6b7280' }}>
+                <span style={{ marginLeft: 10, color: isAvailable ? ui.color.accent : ui.color.textMuted }}>
                   {label}
                 </span>
               )}
@@ -395,9 +396,9 @@ export function UpdatesSection(): JSX.Element {
             style={{
               padding: '4px 12px',
               background: 'none',
-              border: '1px solid #3a3b3e',
+              border: `1px solid ${ui.color.textFaint}`,
               borderRadius: 4,
-              color: buttonDisabled ? '#4a4b4e' : '#6b7280',
+              color: buttonDisabled ? ui.color.textDim : ui.color.textMuted,
               fontSize: 12,
               cursor: buttonDisabled ? 'default' : 'pointer',
             }}
@@ -406,7 +407,7 @@ export function UpdatesSection(): JSX.Element {
           </button>
         </div>
         {updaterEnabled === false && (
-          <div style={{ color: '#4a4b4e', fontSize: 11 }}>
+          <div style={{ color: ui.color.textDim, fontSize: 11 }}>
             Update check unavailable in this build.
           </div>
         )}
@@ -435,8 +436,8 @@ export function UpdatesSection(): JSX.Element {
         title="Auto-update"
         description="Automatically download updates in the background. When disabled, you will be notified and can download manually."
       >
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#c9cdd1', fontSize: 12 }}>
-          <input
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: ui.color.text, fontSize: 12 }}>
+          <input className="ui-control ui-control-checkbox"
             type="checkbox"
             checked={autoUpdateEnabled}
             onChange={(e) => setAutoUpdateEnabled(e.target.checked)}
@@ -451,9 +452,9 @@ export function UpdatesSection(): JSX.Element {
 const updateActionStyle: React.CSSProperties = {
   padding: '4px 12px',
   backgroundColor: 'transparent',
-  border: '1px solid #4ade80',
+  border: `1px solid ${ui.color.accent}`,
   borderRadius: 4,
-  color: '#4ade80',
+  color: ui.color.accent,
   fontSize: 12,
   cursor: 'pointer',
 }
@@ -472,9 +473,9 @@ function SettingRow({
       style={{
         padding: '10px 12px',
         marginBottom: 4,
-        border: '1px solid #2a2b2e',
+        border: `1px solid ${ui.color.border}`,
         borderRadius: 6,
-        backgroundColor: '#141517',
+        backgroundColor: ui.color.input,
         display: 'grid',
         gridTemplateColumns: 'minmax(220px, 1fr) minmax(160px, auto)',
         gap: 24,
@@ -482,8 +483,8 @@ function SettingRow({
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ color: '#d4d4d4', fontSize: 13, marginBottom: 4 }}>{title}</div>
-        <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.4 }}>{description}</div>
+        <div style={{ color: ui.color.textSubtle, fontSize: 13, marginBottom: 4 }}>{title}</div>
+        <div style={{ color: ui.color.textMuted, fontSize: 11, lineHeight: 1.4 }}>{description}</div>
       </div>
       <div>{children}</div>
     </section>

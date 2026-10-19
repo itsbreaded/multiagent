@@ -413,8 +413,7 @@ export class JiraMentionsClient {
       try {
         serviceDeskAudiences = await this.getServiceDeskCommentAudiences(settings, detail?.issue.issueKey ?? searchIssue.issueKey, signal)
       } catch {
-        // Keep readable Jira comments visible when JSM audience metadata is
-        // unavailable, but leave their reply audience explicitly unsupported.
+        // Keep readable comments visible when Service Desk audience metadata is unavailable.
         serviceDeskAudiences = new Map()
       }
     }
@@ -452,7 +451,6 @@ export class JiraMentionsClient {
     issueKey?: string,
     signal?: AbortSignal,
   ): Promise<JiraCommentRecord> {
-    if (visibility?.type === 'unsupported') throw new JiraApiError('validation')
     const body: Record<string, unknown> = { body: adfBody }
     if (visibility?.type === 'group' || visibility?.type === 'role') body.visibility = visibility
     if (visibility?.type === 'service_desk') {

@@ -175,11 +175,11 @@ export function CommandPalette(): JSX.Element {
             display: 'flex',
             alignItems: 'center',
             padding: '10px 14px',
-            borderBottom: '1px solid #2a2b2e',
+            borderBottom: `1px solid ${ui.color.border}`,
           }}
         >
-          <span style={{ color: '#6b7280', fontSize: 14, marginRight: 8 }}>{'>'}</span>
-          <input
+          <span style={{ color: ui.color.textMuted, fontSize: 14, marginRight: 8 }}>{'>'}</span>
+          <input className="ui-control"
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -188,10 +188,9 @@ export function CommandPalette(): JSX.Element {
               flex: 1,
               background: 'none',
               border: 'none',
-              outline: 'none',
-              color: '#d4d4d4',
+              color: ui.color.textSubtle,
               fontSize: 14,
-              caretColor: '#4ade80',
+              caretColor: ui.color.accent,
             }}
           />
         </div>
@@ -217,7 +216,7 @@ export function CommandPalette(): JSX.Element {
                         <span
                           style={{
                             fontSize: 12,
-                            color: '#6b7280',
+                            color: ui.color.textMuted,
                             fontFamily: 'monospace',
                             width: 16,
                             height: 16,
@@ -232,14 +231,14 @@ export function CommandPalette(): JSX.Element {
                               ? <ShellIcon size={16} />
                               : '›'}
                         </span>
-                        <span style={{ fontSize: 13, color: '#d4d4d4', flex: 1 }}>{cmd.title}</span>
+                        <span style={{ fontSize: 13, color: ui.color.textSubtle, flex: 1 }}>{cmd.title}</span>
                         {shortcut && (
                           <span
                             style={{
                               fontSize: 10,
-                              color: '#4a4b4e',
-                              backgroundColor: '#141517',
-                              border: '1px solid #2a2b2e',
+                              color: ui.color.textDim,
+                              backgroundColor: ui.color.input,
+                              border: `1px solid ${ui.color.border}`,
                               borderRadius: 3,
                               padding: '1px 5px',
                             }}
@@ -256,7 +255,7 @@ export function CommandPalette(): JSX.Element {
           })}
 
           {totalEntries === 0 && (
-            <div style={{ padding: '24px 16px', textAlign: 'center', color: '#4a4b4e', fontSize: 12 }}>
+            <div style={{ padding: '24px 16px', textAlign: 'center', color: ui.color.textDim, fontSize: 12 }}>
               No results
             </div>
           )}
@@ -287,8 +286,8 @@ function EntryRow({
       style={{
         padding: '7px 14px',
         cursor: 'pointer',
-        backgroundColor: isSelected ? '#242528' : 'transparent',
-        borderLeft: isSelected ? '2px solid #4ade80' : '2px solid transparent',
+        backgroundColor: isSelected ? ui.color.control : 'transparent',
+        borderLeft: isSelected ? `2px solid ${ui.color.accent}` : '2px solid transparent',
       }}
     >
       {children}

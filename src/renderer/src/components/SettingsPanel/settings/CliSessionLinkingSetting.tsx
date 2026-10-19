@@ -25,7 +25,7 @@ export function CliSessionLinkingSetting(): JSX.Element {
       description="Links agent sessions to their pane and resumes them on restart, and shows a live status badge per agent pane (working/waiting/idle/error), by installing managed hooks (SessionStart + lifecycle events) in ~/.claude/settings.json and ~/.codex/hooks.json (plus the [features] hook flag in ~/.codex/config.toml). On by default; uninstallable from this same toggle; preserves all unrelated settings/hooks. Claude links + badges automatically; Codex links + badges after you trust the hook once via codex /hooks (app-launched and CLI-launched alike). Codex has no error badge (no StopFailure hook)."
     >
       <label style={checkStyle}>
-        <input type="checkbox" checked={value} onChange={(e) => setValue(e.target.checked)} />
+        <input className="ui-control ui-control-checkbox" type="checkbox" checked={value} onChange={(e) => setValue(e.target.checked)} />
         Enabled
       </label>
     </SettingControlRow>

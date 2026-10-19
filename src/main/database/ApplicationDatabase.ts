@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 
-export const APPLICATION_DATABASE_VERSION = 3
+export const APPLICATION_DATABASE_VERSION = 4
 
 export type ApplicationDatabaseErrorCode = 'unsupported_schema' | 'migration_failed' | 'database_unavailable'
 
@@ -94,6 +94,11 @@ function migrate(database: Database.Database, initialVersion: number): void {
     if (version < 3) {
       migrateJiraTrackingAnchorSchema(database)
       database.pragma('user_version = 3')
+      version = 3
+    }
+    if (version < 4) {
+      migrateJiraMentionActivationSchema(database)
+      database.pragma('user_version = 4')
     }
   }).immediate()
 }
@@ -104,6 +109,28 @@ function migrateJiraTrackingAnchorSchema(database: Database.Database): void {
   // Existing contexts already have a history boundary. Preserve it across upgrade;
   // only contexts created by the current version start uninitialized.
   database.exec(`ALTER TABLE jira_cache_contexts ADD COLUMN initial_scan_started INTEGER NOT NULL DEFAULT 1 CHECK(initial_scan_started IN (0,1))`)
+}
+
+function migrateJiraMentionActivationSchema(database: Database.Database): void {
+  const existing = database.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='jira_mention_actions'`)
+    .get() as { sql: string } | undefined
+  if (!existing || existing.sql.includes("'active'")) return
+  database.exec(`
+    ALTER TABLE jira_mention_actions RENAME TO jira_mention_actions_old;
+    CREATE TABLE jira_mention_actions (
+      context_id TEXT NOT NULL, issue_id TEXT NOT NULL, incoming_comment_id TEXT NOT NULL,
+      disposition TEXT NOT NULL CHECK(disposition IN ('active','dismissed','snoozed')), snooze_until INTEGER,
+      updated_at INTEGER NOT NULL, PRIMARY KEY(context_id, issue_id, incoming_comment_id),
+      FOREIGN KEY(context_id) REFERENCES jira_cache_contexts(context_id) ON DELETE CASCADE,
+      CHECK((disposition='dismissed' AND snooze_until IS NULL)
+        OR (disposition='snoozed' AND snooze_until IS NOT NULL)
+        OR (disposition='active' AND snooze_until IS NULL))
+    );
+    INSERT INTO jira_mention_actions(context_id,issue_id,incoming_comment_id,disposition,snooze_until,updated_at)
+      SELECT context_id,issue_id,incoming_comment_id,disposition,snooze_until,updated_at FROM jira_mention_actions_old;
+    DROP TABLE jira_mention_actions_old;
+    CREATE INDEX IF NOT EXISTS jira_actions_expiry ON jira_mention_actions(context_id, disposition, snooze_until);
+  `)
 }
 
 function migrateSessionSchema(database: Database.Database): void {
@@ -234,10 +261,12 @@ function migrateJiraMentionsSchema(database: Database.Database): void {
     );
     CREATE TABLE IF NOT EXISTS jira_mention_actions (
       context_id TEXT NOT NULL, issue_id TEXT NOT NULL, incoming_comment_id TEXT NOT NULL,
-      disposition TEXT NOT NULL CHECK(disposition IN ('dismissed','snoozed')), snooze_until INTEGER,
+      disposition TEXT NOT NULL CHECK(disposition IN ('active','dismissed','snoozed')), snooze_until INTEGER,
       updated_at INTEGER NOT NULL, PRIMARY KEY(context_id, issue_id, incoming_comment_id),
       FOREIGN KEY(context_id) REFERENCES jira_cache_contexts(context_id) ON DELETE CASCADE,
-      CHECK((disposition='dismissed' AND snooze_until IS NULL) OR (disposition='snoozed' AND snooze_until IS NOT NULL))
+      CHECK((disposition='dismissed' AND snooze_until IS NULL)
+        OR (disposition='snoozed' AND snooze_until IS NOT NULL)
+        OR (disposition='active' AND snooze_until IS NULL))
     );
     CREATE TABLE IF NOT EXISTS jira_sync_runs (
       context_id TEXT NOT NULL, run_id TEXT NOT NULL, kind TEXT NOT NULL, lower_bound INTEGER NOT NULL,

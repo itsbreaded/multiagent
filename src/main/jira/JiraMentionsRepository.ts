@@ -6,6 +6,7 @@ import {
   extractAdfPlainText,
   extractMentionAccountIds,
   extractStructuredMentionUsers,
+  isJiraMentionActive,
   type ClassifiedJiraMention,
   type JiraCommentRecord,
   type JiraIssueMetadata,
@@ -156,7 +157,7 @@ function asContext(row: ContextRow): JiraCacheContext {
   }
 }
 
-function asAction(row: { issue_id: string; incoming_comment_id: string; disposition: 'dismissed' | 'snoozed'; snooze_until: number | null; updated_at: number }): JiraMentionAction {
+function asAction(row: { issue_id: string; incoming_comment_id: string; disposition: 'active' | 'dismissed' | 'snoozed'; snooze_until: number | null; updated_at: number }): JiraMentionAction {
   return {
     issueId: row.issue_id,
     incomingCommentId: row.incoming_comment_id,
@@ -470,7 +471,7 @@ export class JiraMentionsRepository {
     })()
   }
 
-  setMentionAction(contextId: string, issueId: string, commentId: string, action: 'dismissed' | 'snoozed' | 'restored', snoozeUntil: number | null, now: number): void {
+  setMentionAction(contextId: string, issueId: string, commentId: string, action: 'activated' | 'dismissed' | 'snoozed' | 'restored', snoozeUntil: number | null, now: number): void {
     if (!this.getContext(contextId)) throw repositoryError('missing_context')
     if (action === 'restored') {
       this.db.prepare(`DELETE FROM jira_mention_actions WHERE context_id=? AND issue_id=? AND incoming_comment_id=?`)
@@ -480,13 +481,14 @@ export class JiraMentionsRepository {
     if (action === 'snoozed' && (!Number.isFinite(snoozeUntil) || (snoozeUntil as number) <= now)) {
       throw new Error('Invalid snooze time.')
     }
-    const exists = this.db.prepare(`SELECT 1 FROM jira_mention_state WHERE context_id=? AND issue_id=? AND incoming_comment_id=? AND state='unanswered'`)
+    const exists = this.db.prepare(`SELECT 1 FROM jira_mention_state WHERE context_id=? AND issue_id=? AND incoming_comment_id=?`)
       .get(contextId, issueId, commentId)
     if (!exists) throw repositoryError('missing_issue')
+    const disposition = action === 'activated' ? 'active' : action
     this.db.prepare(`INSERT INTO jira_mention_actions(context_id,issue_id,incoming_comment_id,disposition,snooze_until,updated_at)
       VALUES(?,?,?,?,?,?) ON CONFLICT(context_id,issue_id,incoming_comment_id) DO UPDATE SET
         disposition=excluded.disposition,snooze_until=excluded.snooze_until,updated_at=excluded.updated_at`)
-      .run(contextId, issueId, commentId, action, action === 'snoozed' ? snoozeUntil : null, now)
+      .run(contextId, issueId, commentId, disposition, action === 'snoozed' ? snoozeUntil : null, now)
   }
 
   clearFetchedCache(contextId: string): void {
@@ -790,7 +792,7 @@ export class JiraMentionsRepository {
       const action = typeof row.disposition === 'string' ? asAction({
         issue_id: issueId,
         incoming_comment_id: String(row.incoming_comment_id),
-        disposition: row.disposition as 'dismissed' | 'snoozed',
+        disposition: row.disposition as 'active' | 'dismissed' | 'snoozed',
         snooze_until: row.snooze_until === null ? null : Number(row.snooze_until),
         updated_at: Number(row.action_updated_at),
       }) : null
@@ -814,9 +816,7 @@ export class JiraMentionsRepository {
 }
 
 export function isActive(item: JiraMentionProjectionItem, now: number): boolean {
-  if (item.state.state !== 'unanswered') return false
-  if (item.action?.disposition === 'dismissed') return false
-  return !(item.action?.disposition === 'snoozed' && item.action.snoozeUntil !== null && item.action.snoozeUntil > now)
+  return isJiraMentionActive(item, now)
 }
 
 function validateSnapshot(snapshot: JiraIssueSnapshot): void {
